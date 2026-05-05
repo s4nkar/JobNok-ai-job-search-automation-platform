@@ -1,0 +1,63 @@
+# Development overlay — apply on top of docker-compose.yml:
+#   docker compose -f docker-compose.yml -f docker-compose.dev.yml up --build -d
+#
+# Changes from production:
+#   - FastAPI:  source mounted, uvicorn --reload, port 8000 exposed directly
+#   - Celery:   source mounted
+#   - Next.js:  source mounted, npm run dev, port 3000 exposed directly
+#   - nginx:    disabled (dev hits services directly on their native ports)
+#
+# Volume notes:
+#   - backend_packages: named volume isolates container's pip-installed packages
+#     from the host's ./backend directory. Prevents case-insensitive filesystem
+#     conflicts (Windows) and accidental host .venv shadowing site-packages.
+#   - /app/node_modules: anonymous volume prevents the host ./frontend mount
+#     from clobbering the container-installed node_modules.
+#
+# APP_URL override: the base docker-compose.yml reads APP_URL from backend/.env.
+# The environment: block below takes precedence for dev, setting it to localhost:3000
+# so FastAPI's CORS allows the browser origin. If you customise APP_URL in .env,
+# update the value below to match.
+
+services:
+  nginx:
+    profiles: ["disabled"]
+
+  fastapi:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile.dev
+    volumes:
+      - ./backend:/app
+      # Isolate pip packages from the host directory (see note above)
+      - backend_packages:/usr/local/lib/python3.12/site-packages
+    ports:
+      - "8000:8000"
+    environment:
+      - APP_URL=http://localhost:3000
+
+  celery:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile.dev
+    volumes:
+      - ./backend:/app
+      - backend_packages:/usr/local/lib/python3.12/site-packages
+
+  nextjs:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile.dev
+    volumes:
+      - ./frontend:/app
+      - /app/node_modules
+    ports:
+      - "3000:3000"
+    environment:
+      - NEXT_PUBLIC_APP_URL=http://localhost:3000
+      # Server-side only — used by Next.js rewrites to reach FastAPI inside Docker.
+      # Never exposed to the browser (no NEXT_PUBLIC_ prefix).
+      - BACKEND_URL=http://fastapi:8000
+
+volumes:
+  backend_packages:
