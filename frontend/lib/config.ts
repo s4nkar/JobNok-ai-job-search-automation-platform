@@ -18,6 +18,7 @@ export const config = {
     coverLetterPerDay:     parseInt(process.env.NEXT_PUBLIC_RATE_LIMIT_COVER_LETTER || '5', 10),
     interviewPrepPerDay:   parseInt(process.env.NEXT_PUBLIC_RATE_LIMIT_INTERVIEW || '10', 10),
     salaryResearchPerDay:  parseInt(process.env.NEXT_PUBLIC_RATE_LIMIT_SALARY || '5', 10),
+    jobSearchPerDay:       parseInt(process.env.NEXT_PUBLIC_RATE_LIMIT_JOB_SEARCH || '10', 10),
     bulkEmailPerCampaign:  parseInt(process.env.NEXT_PUBLIC_RATE_LIMIT_BULK_CAMPAIGN || '500', 10),
     bulkEmailPerMonth:     parseInt(process.env.NEXT_PUBLIC_RATE_LIMIT_BULK_MONTH || '3000', 10),
   },

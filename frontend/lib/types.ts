@@ -130,3 +130,62 @@ export interface SalaryResearchResult {
   negotiation_points: string[]
   data_sources: string[]
 }
+
+export type JobSearchApplicationStatus = 'saved' | 'applied' | 'skipped'
+
+export interface JobCitation {
+  source_name: string
+  canonical_url: string
+  job_url: string
+  posted_at: string | null
+  evidence: string[]
+  extraction_note: string
+}
+
+export interface JobSearchResult {
+  source_name: string
+  provider_type: string
+  external_job_id: string | null
+  company: string
+  role: string
+  location: string
+  job_url: string
+  job_url_canonical: string
+  posted_at: string | null
+  applied: boolean
+  application_status: JobSearchApplicationStatus | null
+  tracked_application_id: string | null
+  citation: JobCitation
+}
+
+export interface JobSearchResponse {
+  results: JobSearchResult[]
+  parsed_preferences: {
+    keywords: string[]
+    languages: string[]
+    company_stage: string | null
+    notes: string[]
+  }
+  configured_source_count: number
+}
+
+export interface JobSearchApplication {
+  id: string
+  user_id: string
+  job_url: string
+  job_url_canonical: string
+  source_name: string
+  external_job_id: string | null
+  company: string
+  role: string
+  location: string
+  posted_at: string | null
+  discovered_at: string
+  applied_at: string | null
+  application_status: JobSearchApplicationStatus
+  tracker_application_id: string | null
+  citation_payload: JobCitation
+  search_context: Record<string, unknown>
+  created_at: string
+  updated_at: string
+}

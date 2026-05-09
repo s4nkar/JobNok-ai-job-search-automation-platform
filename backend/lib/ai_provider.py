@@ -55,31 +55,66 @@ def _format_hf_prompt(prompt: str, system: str) -> str:
 
 async def _huggingface_generate(prompt: str, system: str, max_tokens: int) -> str:
     from huggingface_hub import InferenceClient
+
     token = settings.huggingface_api_key or None
-    client = InferenceClient(model=settings.huggingface_model, token=token)
-    formatted = _format_hf_prompt(prompt, system)
-    output = client.text_generation(
-        formatted,
-        max_new_tokens=max_tokens,
-        do_sample=True,
+
+    client = InferenceClient(
+        provider="auto",
+        api_key=token,
+    )
+
+    messages = []
+    if system:
+        messages.append({"role": "system", "content": system})
+    messages.append({"role": "user", "content": prompt})
+
+    response = client.chat.completions.create(
+        model=settings.huggingface_model,
+        messages=messages,
+        max_tokens=max_tokens,
         temperature=0.7,
     )
-    return output
+
+    return response.choices[0].message.content or ""
 
 
 async def _huggingface_stream(prompt: str, system: str, max_tokens: int) -> AsyncGenerator[str, None]:
     from huggingface_hub import InferenceClient
+    from huggingface_hub.utils import HfHubHTTPError
+
     token = settings.huggingface_api_key or None
-    client = InferenceClient(model=settings.huggingface_model, token=token)
-    formatted = _format_hf_prompt(prompt, system)
-    for token_text in client.text_generation(
-        formatted,
-        max_new_tokens=max_tokens,
-        do_sample=True,
-        temperature=0.7,
-        stream=True,
-    ):
-        yield token_text
+
+    client = InferenceClient(
+        provider="auto",
+        api_key=token,
+    )
+
+    messages = []
+    if system:
+        messages.append({"role": "system", "content": system})
+    messages.append({"role": "user", "content": prompt})
+
+    try:
+        stream = client.chat.completions.create(
+            model=settings.huggingface_model,
+            messages=messages,
+            max_tokens=max_tokens,
+            temperature=0.7,
+            stream=True,
+        )
+
+        for chunk in stream:
+            delta = chunk.choices[0].delta.content
+            if delta:
+                yield delta
+
+    except HfHubHTTPError as exc:
+        yield (
+            "\n\nAI provider error: Hugging Face could not serve this model. "
+            "Check HUGGINGFACE_MODEL, provider availability, and HUGGINGFACE_API_KEY."
+        )
+    except Exception as exc:
+        yield f"\n\nAI provider error: {type(exc).__name__}: {exc}"
 
 
 # ── Public Interface ─────────────────────────────────────────────

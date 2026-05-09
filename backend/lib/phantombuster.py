@@ -16,7 +16,7 @@ async def scrape_linkedin_profile(profile_url: str) -> dict | None:
 
     Returns normalized profile dict or None on failure.
     """
-    if not settings.phantombuster_api_key:
+    if not settings.phantombuster_api_key or not settings.phantombuster_agent_id or not settings.linkedin_session_cookie:
         return None
 
     headers = {"X-Phantombuster-Key": settings.phantombuster_api_key}
@@ -28,8 +28,11 @@ async def scrape_linkedin_profile(profile_url: str) -> dict | None:
                 f"{PHANTOMBUSTER_API}/agents/launch",
                 headers=headers,
                 json={
-                    "id": "your-phantombuster-agent-id",  # Configure in PhantomBuster dashboard
-                    "argument": {"sessionCookie": "", "profileUrl": profile_url},
+                    "id": settings.phantombuster_agent_id,
+                    "argument": {
+                        "sessionCookie": settings.linkedin_session_cookie,
+                        "profileUrl": profile_url,
+                    },
                 },
             )
             if launch_res.status_code != 200:

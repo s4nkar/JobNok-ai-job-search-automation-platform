@@ -13,6 +13,7 @@ import {
   Briefcase,
   DollarSign,
   Mail,
+  Search,
   LogOut,
   Zap,
 } from 'lucide-react'
@@ -26,6 +27,7 @@ const navItems = [
   { href: '/cover-letter',   label: 'Cover Letter',       icon: PenLine,      description: 'AI-generated cover letters' },
   { href: '/interview-prep', label: 'Interview Prep',     icon: MessageSquare, description: '10 STAR Q&As from JD' },
   { href: '/tracker',        label: 'Follow-Up Tracker',  icon: Briefcase,    description: 'Track every application' },
+  { href: '/recent-job-search', label: 'Recent Job Search', icon: Search,     description: 'Find fresh ATS job postings' },
   { href: '/salary',         label: 'Salary Research',    icon: DollarSign,   description: 'Market rate breakdown' },
   { href: '/bulk-email',     label: 'Bulk Email',         icon: Mail,         description: 'Campaign sender with delays' },
 ]

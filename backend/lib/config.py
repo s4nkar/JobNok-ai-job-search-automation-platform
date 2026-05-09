@@ -35,6 +35,7 @@ class Settings(BaseSettings):
     rate_limit_cover_letter_per_day: int = 5
     rate_limit_interview_per_day: int = 10
     rate_limit_salary_per_day: int = 5
+    rate_limit_job_search_per_day: int = 10
     rate_limit_bulk_email_per_campaign: int = 500
     rate_limit_bulk_email_per_month: int = 3000
 
@@ -44,8 +45,16 @@ class Settings(BaseSettings):
     rapidapi_linkedin_host: str = "linkedin-api8.p.rapidapi.com"
     # Fallback scraper — PHANTOMBUSTER_API_KEY from PhantomBuster dashboard
     phantombuster_api_key: str = ""
+    phantombuster_agent_id: str = ""
+    linkedin_session_cookie: str = ""
     # Shared LinkedIn profile cache TTL (days)
-    linkedin_cache_ttl_days: int = 7
+    linkedin_cache_ttl_days: int = 7 
+
+    # ── Job Search ──────────────────────────────────────────────────────────
+    # JSON array of ATS sources to search, e.g.
+    # [{"type":"greenhouse","name":"Acme","slug":"acme","company":"Acme","metadata":{"stage":"seed","languages":["english"]}}]
+    job_search_sources_json: str = "[]"
+    job_search_timeout_seconds: int = 12
 
     # ── Bulk Email ───────────────────────────────────────────────────────────
     # Minimum delay between individual emails to avoid spam flags (seconds)

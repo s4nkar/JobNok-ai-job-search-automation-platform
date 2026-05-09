@@ -7,7 +7,7 @@ pydantic-settings==2.4.0
 
 # AI Providers
 anthropic==0.32.0
-huggingface-hub==0.24.5
+huggingface-hub>=0.31.0
 
 # Background Tasks
 celery==5.4.0
