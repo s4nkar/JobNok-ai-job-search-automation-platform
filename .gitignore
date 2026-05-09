@@ -59,4 +59,6 @@ dist/
 
 # claude
 .claude
+.codex
 claude.md
+agents.md
