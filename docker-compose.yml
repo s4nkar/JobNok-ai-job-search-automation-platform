@@ -16,8 +16,10 @@ services:
     restart: unless-stopped
 
   fastapi:
-    build: ./backend
-    env_file: ./backend/.env
+    build:
+      context: ./backend
+    env_file:
+      - ./backend/.env
     expose:
       - "8000"
     depends_on:
@@ -26,7 +28,7 @@ services:
     networks:
       - backend-net
     healthcheck:
-      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/api/health')"]
+      test: [ "CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/api/health')" ]
       interval: 10s
       timeout: 5s
       retries: 3
@@ -39,9 +41,11 @@ services:
     restart: unless-stopped
 
   celery:
-    build: ./backend
+    build:
+      context: ./backend
     command: celery -A worker worker --loglevel=info
-    env_file: ./backend/.env
+    env_file:
+      - ./backend/.env
     depends_on:
       redis:
         condition: service_healthy
@@ -55,18 +59,38 @@ services:
     restart: unless-stopped
 
   nextjs:
-    build: ./frontend
-    env_file: ./frontend/.env.local
+    build:
+      context: ./frontend
+      args:
+        NEXT_PUBLIC_SUPABASE_URL: ${NEXT_PUBLIC_SUPABASE_URL}
+        NEXT_PUBLIC_SUPABASE_ANON_KEY: ${NEXT_PUBLIC_SUPABASE_ANON_KEY}
+        NEXT_PUBLIC_APP_URL: ${NEXT_PUBLIC_APP_URL}
+        NEXT_PUBLIC_RATE_LIMIT_LINKEDIN: ${NEXT_PUBLIC_RATE_LIMIT_LINKEDIN}
+        NEXT_PUBLIC_RATE_LIMIT_RESUME: ${NEXT_PUBLIC_RATE_LIMIT_RESUME}
+        NEXT_PUBLIC_RATE_LIMIT_COVER_LETTER: ${NEXT_PUBLIC_RATE_LIMIT_COVER_LETTER}
+        NEXT_PUBLIC_RATE_LIMIT_INTERVIEW: ${NEXT_PUBLIC_RATE_LIMIT_INTERVIEW}
+        NEXT_PUBLIC_RATE_LIMIT_SALARY: ${NEXT_PUBLIC_RATE_LIMIT_SALARY}
+        NEXT_PUBLIC_RATE_LIMIT_JOB_SEARCH: ${NEXT_PUBLIC_RATE_LIMIT_JOB_SEARCH}
+        NEXT_PUBLIC_RATE_LIMIT_BULK_CAMPAIGN: ${NEXT_PUBLIC_RATE_LIMIT_BULK_CAMPAIGN}
+        NEXT_PUBLIC_RATE_LIMIT_BULK_MONTH: ${NEXT_PUBLIC_RATE_LIMIT_BULK_MONTH}
+        NEXT_PUBLIC_BULK_EMAIL_MIN_DELAY: ${NEXT_PUBLIC_BULK_EMAIL_MIN_DELAY}
+        NEXT_PUBLIC_BULK_EMAIL_DEFAULT_DELAY: ${NEXT_PUBLIC_BULK_EMAIL_DEFAULT_DELAY}
+        NEXT_PUBLIC_LINKEDIN_CACHE_TTL_DAYS: ${NEXT_PUBLIC_LINKEDIN_CACHE_TTL_DAYS}
+    env_file:
+      - ./frontend/.env.local
+    environment:
+      BACKEND_URL: http://fastapi:8000
     expose:
       - "3000"
     networks:
       - frontend-net
+      - backend-net
     healthcheck:
-      test: ["CMD", "wget", "-q", "--spider", "http://localhost:3000"]
+      test: [ "CMD-SHELL", "node -e \"fetch('http://localhost:3000/api/health').then(r => process.exit(r.ok ? 0 : 1)).catch(() => process.exit(1))\"" ]
       interval: 10s
       timeout: 5s
-      retries: 3
-      start_period: 30s
+      retries: 5
+      start_period: 40s
     deploy:
       resources:
         limits:
@@ -84,7 +108,7 @@ services:
     networks:
       - backend-net
     healthcheck:
-      test: ["CMD", "redis-cli", "-a", "${REDIS_PASSWORD}", "ping"]
+      test: [ "CMD", "redis-cli", "-a", "${REDIS_PASSWORD}", "ping" ]
       interval: 5s
       timeout: 3s
       retries: 5
