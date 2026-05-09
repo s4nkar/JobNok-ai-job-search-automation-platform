@@ -220,6 +220,63 @@ create trigger job_applications_updated_at
   for each row execute procedure public.set_updated_at();
 
 -- ============================================================
+-- JOB SEARCH APPLICATIONS
+-- ============================================================
+create table if not exists public.job_search_applications (
+  id                     uuid primary key default uuid_generate_v4(),
+  user_id                uuid not null references public.profiles(id) on delete cascade,
+  job_url                text not null,
+  job_url_canonical      text not null,
+  source_name            text not null,
+  external_job_id        text,
+  company                text not null,
+  role                   text not null,
+  location               text not null,
+  posted_at              timestamptz,
+  discovered_at          timestamptz not null default now(),
+  applied_at             timestamptz,
+  application_status     text not null default 'saved',
+  tracker_application_id uuid references public.job_applications(id) on delete set null,
+  citation_payload       jsonb not null default '{}',
+  search_context         jsonb not null default '{}',
+  created_at             timestamptz not null default now(),
+  updated_at             timestamptz not null default now(),
+  constraint job_search_applications_status_check
+    check (application_status in ('saved', 'applied', 'skipped'))
+);
+
+alter table public.job_search_applications enable row level security;
+
+create policy "Users can view own job search applications"
+  on public.job_search_applications for select
+  using (auth.uid() = user_id);
+
+create policy "Users can insert own job search applications"
+  on public.job_search_applications for insert
+  with check (auth.uid() = user_id);
+
+create policy "Users can update own job search applications"
+  on public.job_search_applications for update
+  using (auth.uid() = user_id);
+
+create policy "Users can delete own job search applications"
+  on public.job_search_applications for delete
+  using (auth.uid() = user_id);
+
+create unique index if not exists job_search_applications_user_job_url_key
+  on public.job_search_applications(user_id, job_url_canonical);
+create index if not exists job_search_applications_status_idx
+  on public.job_search_applications(application_status);
+create index if not exists job_search_applications_tracker_idx
+  on public.job_search_applications(tracker_application_id);
+create index if not exists job_search_applications_posted_idx
+  on public.job_search_applications(posted_at desc);
+
+create trigger job_search_applications_updated_at
+  before update on public.job_search_applications
+  for each row execute procedure public.set_updated_at();
+
+-- ============================================================
 -- LINKEDIN CACHE
 -- Shared cache — no RLS (profile data is public on LinkedIn)
 -- ============================================================
