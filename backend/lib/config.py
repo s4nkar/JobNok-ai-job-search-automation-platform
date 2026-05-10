@@ -36,6 +36,7 @@ class Settings(BaseSettings):
     rate_limit_interview_per_day: int = 10
     rate_limit_salary_per_day: int = 5
     rate_limit_job_search_per_day: int = 10
+    rate_limit_startup_hunt_per_day: int = 8
     rate_limit_bulk_email_per_campaign: int = 500
     rate_limit_bulk_email_per_month: int = 3000
 
@@ -55,6 +56,21 @@ class Settings(BaseSettings):
     # [{"type":"greenhouse","name":"Acme","slug":"acme","company":"Acme","metadata":{"stage":"seed","languages":["english"]}}]
     job_search_sources_json: str = "[]"
     job_search_timeout_seconds: int = 12
+
+    # Startup Hunt v2 sources support ATS feeds plus startup/company lead sources.
+    # Example:
+    # [{"type":"startup_company","name":"Acme","company":"Acme","url":"https://acme.com","metadata":{"country":"germany","city":"berlin","stage":"seed","careers_url":"https://acme.com/careers","contacts":[{"name":"Jane Doe","title":"Founder","email":"jane@acme.com"}]}}]
+    startup_hunt_sources_json: str = "[]"
+    startup_hunt_timeout_seconds: int = 15
+    google_cse_api_key: str = ""
+    google_cse_cx: str = ""
+    apify_api_token: str = ""
+    apify_base_url: str = "https://api.apify.com/v2"
+    apify_startup_hunt_actor_id: str = ""
+    apify_indeed_actor_id: str = ""
+    startup_hunt_contact_enrichment_provider: str = ""
+    apollo_api_key: str = ""
+    people_data_labs_api_key: str = ""
 
     # ── Bulk Email ───────────────────────────────────────────────────────────
     # Minimum delay between individual emails to avoid spam flags (seconds)
