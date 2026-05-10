@@ -189,3 +189,87 @@ export interface JobSearchApplication {
   created_at: string
   updated_at: string
 }
+
+export type StartupHuntOpportunityStatus = 'saved' | 'applied' | 'contacted' | 'skipped'
+export type StartupHuntOpportunityKind = 'job' | 'outreach_lead'
+
+export interface StartupHuntContact {
+  name: string
+  title: string
+  contact_type: string
+  email: string | null
+  email_confidence: string
+  linkedin_url: string | null
+  source: string
+  provider_chain?: string[]
+}
+
+export interface StartupHuntCompanyProfile {
+  stage: string | null
+  company_size: string | null
+  country: string | null
+  city: string | null
+  english_friendly: boolean
+  ai_relevance: string | null
+  relocation_support: string | null
+  company_website_url: string | null
+  company_careers_url: string | null
+  source_tags: string[]
+}
+
+export interface StartupHuntResult {
+  company_name: string
+  company_domain: string | null
+  company_website_url: string | null
+  company_careers_url: string | null
+  role_title: string
+  location: string
+  country: string | null
+  source_name: string
+  source_type: string
+  direct_apply_url: string | null
+  canonical_job_url: string | null
+  portal_job_url: string | null
+  posted_at: string | null
+  opportunity_kind: StartupHuntOpportunityKind
+  score_total: number
+  score_labels: string[]
+  score_reasons: string[]
+  citation: JobCitation
+  company: StartupHuntCompanyProfile
+  contacts: StartupHuntContact[]
+  saved: boolean
+  saved_status: StartupHuntOpportunityStatus | null
+  saved_opportunity_id: string | null
+  source_bucket?: string
+}
+
+export interface StartupHuntResponse {
+  results: StartupHuntResult[]
+  parsed_strategy: {
+    keywords: string[]
+    languages: string[]
+    company_stage: string | null
+    preferred_cities: string[]
+    hidden_gem_signals: string[]
+    contact_focus: string[]
+  }
+  configured_source_count: number
+  source_result_counts: Record<string, number>
+  source_diagnostics: Record<string, {
+    bucket: string
+    requested_limit: number
+    configured: boolean
+    active_sources: number
+    raw_count: number
+    accepted_count: number
+    status: 'inactive' | 'ok' | 'filtered' | 'empty' | 'error'
+    message: string
+    sources: Array<{
+      name: string
+      type: string
+      error: string | null
+      raw_count: number
+    }>
+  }>
+}

@@ -10,7 +10,6 @@ import { createClient } from '@/lib/supabase/client'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
-import { Card, CardContent, CardDescription, CardFooter, CardHeader, CardTitle } from '@/components/ui/card'
 import { Github, Chrome, Loader2 } from 'lucide-react'
 import { useToast } from '@/components/ui/use-toast'
 
@@ -59,63 +58,89 @@ export default function SignupPage() {
   }
 
   return (
-    <Card>
-      <CardHeader>
-        <CardTitle>Create your account</CardTitle>
-        <CardDescription>Free forever — no credit card required</CardDescription>
-      </CardHeader>
+    <div className="bg-white/5 backdrop-blur-sm border border-white/10 rounded-2xl p-8 shadow-2xl">
+      <div className="mb-6">
+        <h2 className="text-xl font-bold text-white">Create your account</h2>
+        <p className="text-slate-400 text-sm mt-1">Free forever — no credit card required</p>
+      </div>
 
-      <CardContent className="space-y-4">
-        <div className="grid grid-cols-2 gap-3">
-          <Button variant="outline" onClick={() => signUpWithOAuth('google')} disabled={!!oauthLoading}>
-            {oauthLoading === 'google' ? <Loader2 className="h-4 w-4 animate-spin" /> : <Chrome className="h-4 w-4 mr-2" />}
-            Google
-          </Button>
-          <Button variant="outline" onClick={() => signUpWithOAuth('github')} disabled={!!oauthLoading}>
-            {oauthLoading === 'github' ? <Loader2 className="h-4 w-4 animate-spin" /> : <Github className="h-4 w-4 mr-2" />}
-            GitHub
-          </Button>
+      {/* OAuth buttons */}
+      <div className="grid grid-cols-2 gap-3 mb-6">
+        <button
+          onClick={() => signUpWithOAuth('google')}
+          disabled={!!oauthLoading}
+          className="flex items-center justify-center gap-2 px-4 py-2.5 rounded-xl border border-white/10 bg-white/5 text-slate-300 text-sm font-medium hover:bg-white/10 hover:text-white transition-all duration-150 disabled:opacity-50"
+        >
+          {oauthLoading === 'google' ? <Loader2 className="h-4 w-4 animate-spin" /> : <Chrome className="h-4 w-4" />}
+          Google
+        </button>
+        <button
+          onClick={() => signUpWithOAuth('github')}
+          disabled={!!oauthLoading}
+          className="flex items-center justify-center gap-2 px-4 py-2.5 rounded-xl border border-white/10 bg-white/5 text-slate-300 text-sm font-medium hover:bg-white/10 hover:text-white transition-all duration-150 disabled:opacity-50"
+        >
+          {oauthLoading === 'github' ? <Loader2 className="h-4 w-4 animate-spin" /> : <Github className="h-4 w-4" />}
+          GitHub
+        </button>
+      </div>
+
+      {/* Divider */}
+      <div className="relative flex items-center mb-6">
+        <div className="flex-1 border-t border-white/10" />
+        <span className="px-3 text-xs text-slate-500 uppercase tracking-wider">or</span>
+        <div className="flex-1 border-t border-white/10" />
+      </div>
+
+      {/* Email form */}
+      <form onSubmit={handleSubmit(onSubmit)} className="space-y-4">
+        <div className="space-y-1.5">
+          <Label className="text-slate-300 text-sm">Full name</Label>
+          <Input
+            placeholder="Jane Smith"
+            className="bg-white/5 border-white/10 text-white placeholder:text-slate-500 focus:border-indigo-500 focus:ring-indigo-500/20 rounded-xl h-11"
+            {...register('full_name')}
+          />
+          {errors.full_name && <p className="text-xs text-red-400">{errors.full_name.message}</p>}
         </div>
 
-        <div className="relative">
-          <div className="absolute inset-0 flex items-center"><span className="w-full border-t" /></div>
-          <div className="relative flex justify-center text-xs uppercase">
-            <span className="bg-card px-2 text-muted-foreground">Or with email</span>
-          </div>
+        <div className="space-y-1.5">
+          <Label className="text-slate-300 text-sm">Email</Label>
+          <Input
+            type="email"
+            placeholder="you@example.com"
+            className="bg-white/5 border-white/10 text-white placeholder:text-slate-500 focus:border-indigo-500 focus:ring-indigo-500/20 rounded-xl h-11"
+            {...register('email')}
+          />
+          {errors.email && <p className="text-xs text-red-400">{errors.email.message}</p>}
         </div>
 
-        <form onSubmit={handleSubmit(onSubmit)} className="space-y-4">
-          <div className="space-y-1">
-            <Label htmlFor="full_name">Full name</Label>
-            <Input id="full_name" placeholder="Jane Smith" {...register('full_name')} />
-            {errors.full_name && <p className="text-xs text-destructive">{errors.full_name.message}</p>}
-          </div>
+        <div className="space-y-1.5">
+          <Label className="text-slate-300 text-sm">Password</Label>
+          <Input
+            type="password"
+            placeholder="Min. 8 characters"
+            className="bg-white/5 border-white/10 text-white placeholder:text-slate-500 focus:border-indigo-500 focus:ring-indigo-500/20 rounded-xl h-11"
+            {...register('password')}
+          />
+          {errors.password && <p className="text-xs text-red-400">{errors.password.message}</p>}
+        </div>
 
-          <div className="space-y-1">
-            <Label htmlFor="email">Email</Label>
-            <Input id="email" type="email" placeholder="you@example.com" {...register('email')} />
-            {errors.email && <p className="text-xs text-destructive">{errors.email.message}</p>}
-          </div>
+        <Button
+          type="submit"
+          className="w-full h-11 gradient-brand text-white font-semibold rounded-xl shadow-brand hover:opacity-90 transition-opacity border-0"
+          disabled={loading}
+        >
+          {loading && <Loader2 className="h-4 w-4 mr-2 animate-spin" />}
+          Create account
+        </Button>
+      </form>
 
-          <div className="space-y-1">
-            <Label htmlFor="password">Password</Label>
-            <Input id="password" type="password" placeholder="Min. 8 characters" {...register('password')} />
-            {errors.password && <p className="text-xs text-destructive">{errors.password.message}</p>}
-          </div>
-
-          <Button type="submit" className="w-full" disabled={loading}>
-            {loading && <Loader2 className="h-4 w-4 mr-2 animate-spin" />}
-            Create account
-          </Button>
-        </form>
-      </CardContent>
-
-      <CardFooter className="justify-center">
-        <p className="text-sm text-muted-foreground">
-          Already have an account?{' '}
-          <Link href="/login" className="text-primary font-medium hover:underline">Sign in</Link>
-        </p>
-      </CardFooter>
-    </Card>
+      <p className="text-center text-sm text-slate-500 mt-6">
+        Already have an account?{' '}
+        <Link href="/login" className="text-indigo-400 font-medium hover:text-indigo-300 transition-colors">
+          Sign in
+        </Link>
+      </p>
+    </div>
   )
 }

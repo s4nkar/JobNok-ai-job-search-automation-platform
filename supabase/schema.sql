@@ -277,6 +277,164 @@ create trigger job_search_applications_updated_at
   for each row execute procedure public.set_updated_at();
 
 -- ============================================================
+-- STARTUP HUNT COMPANIES
+-- ============================================================
+create table if not exists public.startup_hunt_companies (
+  id                  uuid primary key default uuid_generate_v4(),
+  user_id             uuid not null references public.profiles(id) on delete cascade,
+  company_name        text not null,
+  company_domain      text,
+  company_website_url text,
+  company_careers_url text,
+  country             text,
+  city                text,
+  stage               text,
+  company_size        text,
+  ai_relevance        text,
+  english_friendly    boolean not null default false,
+  relocation_support  text,
+  source_payload      jsonb not null default '{}',
+  created_at          timestamptz not null default now(),
+  updated_at          timestamptz not null default now()
+);
+
+alter table public.startup_hunt_companies enable row level security;
+
+create policy "Users can view own startup hunt companies"
+  on public.startup_hunt_companies for select
+  using (auth.uid() = user_id);
+
+create policy "Users can insert own startup hunt companies"
+  on public.startup_hunt_companies for insert
+  with check (auth.uid() = user_id);
+
+create policy "Users can update own startup hunt companies"
+  on public.startup_hunt_companies for update
+  using (auth.uid() = user_id);
+
+create policy "Users can delete own startup hunt companies"
+  on public.startup_hunt_companies for delete
+  using (auth.uid() = user_id);
+
+create index if not exists startup_hunt_companies_user_idx
+  on public.startup_hunt_companies(user_id);
+create index if not exists startup_hunt_companies_name_idx
+  on public.startup_hunt_companies(company_name);
+
+create trigger startup_hunt_companies_updated_at
+  before update on public.startup_hunt_companies
+  for each row execute procedure public.set_updated_at();
+
+-- ============================================================
+-- STARTUP HUNT OPPORTUNITIES
+-- ============================================================
+create table if not exists public.startup_hunt_opportunities (
+  id                  uuid primary key default uuid_generate_v4(),
+  user_id             uuid not null references public.profiles(id) on delete cascade,
+  company_id          uuid references public.startup_hunt_companies(id) on delete set null,
+  tracker_application_id uuid references public.job_applications(id) on delete set null,
+  company_name        text not null,
+  company_domain      text,
+  company_website_url text,
+  company_careers_url text,
+  role_title          text not null,
+  location            text not null,
+  country             text,
+  source_name         text not null,
+  source_type         text not null,
+  direct_apply_url    text,
+  canonical_job_url   text,
+  portal_job_url      text,
+  posted_at           timestamptz,
+  discovered_at       timestamptz not null default now(),
+  opportunity_kind    text not null default 'job',
+  opportunity_status  text not null default 'saved',
+  score_total         numeric not null default 0,
+  score_labels        text[] not null default '{}',
+  score_reasons       text[] not null default '{}',
+  citation_payload    jsonb not null default '{}',
+  company_payload     jsonb not null default '{}',
+  search_context      jsonb not null default '{}',
+  created_at          timestamptz not null default now(),
+  updated_at          timestamptz not null default now(),
+  constraint startup_hunt_opportunity_kind_check
+    check (opportunity_kind in ('job', 'outreach_lead')),
+  constraint startup_hunt_opportunity_status_check
+    check (opportunity_status in ('saved', 'applied', 'contacted', 'skipped'))
+);
+
+alter table public.startup_hunt_opportunities enable row level security;
+
+create policy "Users can view own startup hunt opportunities"
+  on public.startup_hunt_opportunities for select
+  using (auth.uid() = user_id);
+
+create policy "Users can insert own startup hunt opportunities"
+  on public.startup_hunt_opportunities for insert
+  with check (auth.uid() = user_id);
+
+create policy "Users can update own startup hunt opportunities"
+  on public.startup_hunt_opportunities for update
+  using (auth.uid() = user_id);
+
+create policy "Users can delete own startup hunt opportunities"
+  on public.startup_hunt_opportunities for delete
+  using (auth.uid() = user_id);
+
+create index if not exists startup_hunt_opportunities_user_idx
+  on public.startup_hunt_opportunities(user_id);
+create index if not exists startup_hunt_opportunities_status_idx
+  on public.startup_hunt_opportunities(opportunity_status);
+create index if not exists startup_hunt_opportunities_company_idx
+  on public.startup_hunt_opportunities(company_name);
+
+create trigger startup_hunt_opportunities_updated_at
+  before update on public.startup_hunt_opportunities
+  for each row execute procedure public.set_updated_at();
+
+-- ============================================================
+-- STARTUP HUNT CONTACTS
+-- ============================================================
+create table if not exists public.startup_hunt_contacts (
+  id               uuid primary key default uuid_generate_v4(),
+  user_id          uuid not null references public.profiles(id) on delete cascade,
+  company_id       uuid references public.startup_hunt_companies(id) on delete set null,
+  opportunity_id   uuid references public.startup_hunt_opportunities(id) on delete cascade,
+  name             text,
+  title            text,
+  contact_type     text,
+  email            text,
+  email_confidence text,
+  linkedin_url     text,
+  source           text,
+  provider_chain   text[] not null default '{}',
+  created_at       timestamptz not null default now()
+);
+
+alter table public.startup_hunt_contacts enable row level security;
+
+create policy "Users can view own startup hunt contacts"
+  on public.startup_hunt_contacts for select
+  using (auth.uid() = user_id);
+
+create policy "Users can insert own startup hunt contacts"
+  on public.startup_hunt_contacts for insert
+  with check (auth.uid() = user_id);
+
+create policy "Users can update own startup hunt contacts"
+  on public.startup_hunt_contacts for update
+  using (auth.uid() = user_id);
+
+create policy "Users can delete own startup hunt contacts"
+  on public.startup_hunt_contacts for delete
+  using (auth.uid() = user_id);
+
+create index if not exists startup_hunt_contacts_user_idx
+  on public.startup_hunt_contacts(user_id);
+create index if not exists startup_hunt_contacts_opportunity_idx
+  on public.startup_hunt_contacts(opportunity_id);
+
+-- ============================================================
 -- LINKEDIN CACHE
 -- Shared cache — no RLS (profile data is public on LinkedIn)
 -- ============================================================

@@ -9,8 +9,6 @@ import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Textarea } from '@/components/ui/textarea'
 import { Label } from '@/components/ui/label'
-import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
-import { Alert, AlertDescription } from '@/components/ui/alert'
 import { useToast } from '@/components/ui/use-toast'
 import { PenLine, Loader2, Copy, Check, Info } from 'lucide-react'
 import { apiFetch } from '@/lib/api'
@@ -77,62 +75,72 @@ export default function CoverLetterPage() {
   }
 
   return (
-    <div>
-      <div className="mb-6">
-        <h1 className="text-2xl font-bold text-slate-900">Cover Letter Generator</h1>
-        <p className="text-slate-500 text-sm mt-1">AI writes a tailored cover letter — edit inline before sending</p>
+    <div className="animate-fade-in">
+      {/* Page Header */}
+      <div className="flex items-center gap-4 mb-6">
+        <div className="page-header-icon bg-pink-100">
+          <PenLine className="h-5 w-5 text-pink-600" />
+        </div>
+        <div>
+          <h1 className="text-2xl font-bold text-slate-900 tracking-tight">Cover Letter Generator</h1>
+          <p className="text-slate-500 text-sm mt-0.5">AI writes a tailored cover letter — edit inline before sending</p>
+        </div>
       </div>
 
-      <Alert className="mb-6">
-        <Info className="h-4 w-4" />
-        <AlertDescription>
-          <strong>{config.rateLimits.coverLetterPerDay} letters/day</strong> on the free tier.
-        </AlertDescription>
-      </Alert>
+      {/* Rate limit notice */}
+      <div className="flex items-center gap-2.5 bg-indigo-50 border border-indigo-100 text-indigo-700 rounded-xl px-4 py-3 mb-6 text-sm">
+        <Info className="h-4 w-4 flex-shrink-0 text-indigo-500" />
+        <span><strong>{config.rateLimits.coverLetterPerDay} letters/day</strong> on the free tier.</span>
+      </div>
 
       <div className="grid grid-cols-2 gap-6">
         {/* Input Form */}
         <div>
           <form onSubmit={handleSubmit(onSubmit)} className="space-y-4">
-            <Card>
-              <CardContent className="pt-4 space-y-4">
-                <div className="grid grid-cols-2 gap-4">
-                  <div className="space-y-1">
-                    <Label>Company name</Label>
-                    <Input placeholder="Acme Corp" {...register('company')} />
-                    {errors.company && <p className="text-xs text-destructive">{errors.company.message}</p>}
-                  </div>
-                  <div className="space-y-1">
-                    <Label>Role / position</Label>
-                    <Input placeholder="Senior Software Engineer" {...register('role')} />
-                    {errors.role && <p className="text-xs text-destructive">{errors.role.message}</p>}
-                  </div>
+            <div className="bg-white rounded-2xl border border-slate-100 shadow-card p-5 space-y-4">
+              <div className="grid grid-cols-2 gap-4">
+                <div className="space-y-1.5">
+                  <Label className="text-sm font-medium">Company name</Label>
+                  <Input placeholder="Acme Corp" className="rounded-xl border-slate-200" {...register('company')} />
+                  {errors.company && <p className="text-xs text-destructive">{errors.company.message}</p>}
                 </div>
-
-                <div className="space-y-1">
-                  <Label>Your key selling points</Label>
-                  <p className="text-xs text-slate-500">What makes you the right fit? Be specific.</p>
-                  <Textarea
-                    {...register('selling_points')}
-                    rows={5}
-                    placeholder="5 years building React apps, led a team of 4 engineers, shipped 3 major product launches, strong background in TypeScript and performance optimization..."
-                  />
-                  {errors.selling_points && <p className="text-xs text-destructive">{errors.selling_points.message}</p>}
+                <div className="space-y-1.5">
+                  <Label className="text-sm font-medium">Role / position</Label>
+                  <Input placeholder="Senior Software Engineer" className="rounded-xl border-slate-200" {...register('role')} />
+                  {errors.role && <p className="text-xs text-destructive">{errors.role.message}</p>}
                 </div>
+              </div>
 
-                <div className="space-y-1">
-                  <Label>Resume text <span className="text-slate-400">(optional)</span></Label>
-                  <Textarea
-                    {...register('resume_text')}
-                    rows={4}
-                    placeholder="Paste resume text to help AI tailor the letter more precisely..."
-                    className="text-sm"
-                  />
-                </div>
-              </CardContent>
-            </Card>
+              <div className="space-y-1.5">
+                <Label className="text-sm font-medium">Your key selling points</Label>
+                <p className="text-xs text-slate-500">What makes you the right fit? Be specific.</p>
+                <Textarea
+                  {...register('selling_points')}
+                  rows={5}
+                  placeholder="5 years building React apps, led a team of 4 engineers, shipped 3 major product launches..."
+                  className="rounded-xl border-slate-200 resize-none"
+                />
+                {errors.selling_points && <p className="text-xs text-destructive">{errors.selling_points.message}</p>}
+              </div>
 
-            <Button type="submit" className="w-full" disabled={loading}>
+              <div className="space-y-1.5">
+                <Label className="text-sm font-medium">
+                  Resume text <span className="text-slate-400 font-normal">(optional)</span>
+                </Label>
+                <Textarea
+                  {...register('resume_text')}
+                  rows={4}
+                  placeholder="Paste resume text to help AI tailor the letter more precisely..."
+                  className="text-sm rounded-xl border-slate-200 resize-none"
+                />
+              </div>
+            </div>
+
+            <Button
+              type="submit"
+              className="w-full h-11 gradient-brand text-white border-0 shadow-brand-sm hover:opacity-90 transition-opacity rounded-xl font-semibold"
+              disabled={loading}
+            >
               {loading
                 ? <><Loader2 className="h-4 w-4 mr-2 animate-spin" /> Generating…</>
                 : <><PenLine className="h-4 w-4 mr-2" /> Generate Cover Letter</>
@@ -143,47 +151,56 @@ export default function CoverLetterPage() {
 
         {/* Output */}
         <div>
-          {!output && !loading && (
-            <Card className="min-h-[400px] flex items-center justify-center">
-              <CardContent className="text-center text-slate-400 pt-6">
-                <PenLine className="h-12 w-12 mx-auto mb-3 opacity-20" />
-                <p>Your cover letter will appear here</p>
-                <p className="text-sm mt-1">Streams in real-time as it&apos;s generated</p>
-              </CardContent>
-            </Card>
+          {error && (
+            <div className="bg-red-50 border border-red-100 text-red-700 rounded-xl px-4 py-3 text-sm mb-4">
+              {error}
+            </div>
           )}
 
-          {error && <Alert variant="destructive"><AlertDescription>{error}</AlertDescription></Alert>}
+          {!output && !loading && (
+            <div className="bg-white rounded-2xl border border-slate-100 shadow-card min-h-[400px] flex items-center justify-center p-8">
+              <div className="text-center space-y-2">
+                <div className="w-14 h-14 rounded-2xl bg-pink-50 flex items-center justify-center mx-auto">
+                  <PenLine className="h-7 w-7 text-pink-200" />
+                </div>
+                <p className="font-semibold text-slate-500">Your cover letter will appear here</p>
+                <p className="text-sm text-slate-400">Streams in real-time as it&apos;s generated</p>
+              </div>
+            </div>
+          )}
 
           {(output || loading) && (
-            <Card>
-              <CardHeader className="pb-2">
-                <div className="flex items-center justify-between">
-                  <CardTitle className="text-base">Cover Letter</CardTitle>
-                  {output && (
-                    <Button size="sm" variant="outline" onClick={copy}>
-                      {copied ? <Check className="h-3.5 w-3.5 mr-1" /> : <Copy className="h-3.5 w-3.5 mr-1" />}
-                      {copied ? 'Copied!' : 'Copy'}
-                    </Button>
-                  )}
-                </div>
-              </CardHeader>
-              <CardContent>
-                <Textarea
-                  value={output}
-                  onChange={(e) => setOutput(e.target.value)}
-                  rows={20}
-                  className="text-sm leading-relaxed font-sans"
-                  placeholder={loading ? 'Generating…' : ''}
-                />
-                {loading && (
-                  <div className="flex items-center gap-2 mt-2 text-sm text-slate-500">
-                    <Loader2 className="h-3 w-3 animate-spin" />
-                    Writing…
-                  </div>
+            <div className="bg-white rounded-2xl border border-slate-100 shadow-card p-5">
+              <div className="flex items-center justify-between mb-3">
+                <p className="text-sm font-semibold text-slate-700">Cover Letter</p>
+                {output && (
+                  <button
+                    onClick={copy}
+                    className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold transition-all ${
+                      copied
+                        ? 'bg-emerald-500 text-white'
+                        : 'bg-indigo-50 text-indigo-600 hover:bg-indigo-100'
+                    }`}
+                  >
+                    {copied ? <Check className="h-3.5 w-3.5" /> : <Copy className="h-3.5 w-3.5" />}
+                    {copied ? 'Copied!' : 'Copy'}
+                  </button>
                 )}
-              </CardContent>
-            </Card>
+              </div>
+              <Textarea
+                value={output}
+                onChange={(e) => setOutput(e.target.value)}
+                rows={20}
+                className="text-sm leading-relaxed font-sans rounded-xl border-slate-200 resize-none"
+                placeholder={loading ? 'Generating…' : ''}
+              />
+              {loading && (
+                <div className="flex items-center gap-2 mt-2 text-sm text-slate-400">
+                  <Loader2 className="h-3 w-3 animate-spin" />
+                  Writing…
+                </div>
+              )}
+            </div>
           )}
         </div>
       </div>

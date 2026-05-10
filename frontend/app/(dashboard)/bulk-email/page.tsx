@@ -9,13 +9,10 @@ import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Textarea } from '@/components/ui/textarea'
 import { Label } from '@/components/ui/label'
-import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card'
 import { Badge } from '@/components/ui/badge'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
-import { Alert, AlertDescription } from '@/components/ui/alert'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
 import { useToast } from '@/components/ui/use-toast'
-import { Progress } from '@/components/ui/progress'
 import {
   Mail, Plus, Upload, Play, Pause, Loader2, CheckCircle, XCircle,
   Clock, Send, RefreshCw, Info
@@ -147,130 +144,141 @@ export default function BulkEmailPage() {
   const progress = total ? Math.round((sent / total) * 100) : 0
 
   return (
-    <div>
-      <div className="mb-6">
-        <h1 className="text-2xl font-bold text-slate-900">Bulk Email Sender</h1>
-        <p className="text-slate-500 text-sm mt-1">
-          Send personalized campaigns with rate control — {config.rateLimits.bulkEmailPerMonth.toLocaleString()} emails/month free
-        </p>
+    <div className="animate-fade-in">
+      {/* Page Header */}
+      <div className="flex items-center gap-4 mb-6">
+        <div className="page-header-icon bg-violet-100">
+          <Mail className="h-5 w-5 text-violet-600" />
+        </div>
+        <div>
+          <h1 className="text-2xl font-bold text-slate-900 tracking-tight">Bulk Email Sender</h1>
+          <p className="text-slate-500 text-sm mt-0.5">
+            Send personalized campaigns with rate control — {config.rateLimits.bulkEmailPerMonth.toLocaleString()} emails/month free
+          </p>
+        </div>
       </div>
 
-      <Alert className="mb-6">
-        <Info className="h-4 w-4" />
-        <AlertDescription>
+      {/* Rate limit notice */}
+      <div className="flex items-start gap-2.5 bg-indigo-50 border border-indigo-100 text-indigo-700 rounded-xl px-4 py-3 mb-6 text-sm">
+        <Info className="h-4 w-4 flex-shrink-0 text-indigo-500 mt-0.5" />
+        <span>
           <strong>Max {config.rateLimits.bulkEmailPerCampaign} recipients/campaign.</strong>{' '}
           Minimum {config.bulkEmail.minDelaySeconds}s delay between sends to avoid spam filters.
           An unsubscribe link is auto-appended to every email.
-        </AlertDescription>
-      </Alert>
+        </span>
+      </div>
 
       <Tabs defaultValue="builder">
-        <TabsList className="mb-6">
-          <TabsTrigger value="builder"><Plus className="h-3.5 w-3.5 mr-1.5" />New Campaign</TabsTrigger>
-          <TabsTrigger value="campaigns"><Mail className="h-3.5 w-3.5 mr-1.5" />My Campaigns</TabsTrigger>
+        <TabsList className="mb-6 bg-slate-100 rounded-xl p-1">
+          <TabsTrigger value="builder" className="rounded-lg"><Plus className="h-3.5 w-3.5 mr-1.5" />New Campaign</TabsTrigger>
+          <TabsTrigger value="campaigns" className="rounded-lg"><Mail className="h-3.5 w-3.5 mr-1.5" />My Campaigns</TabsTrigger>
         </TabsList>
 
         {/* Campaign Builder */}
         <TabsContent value="builder">
           <div className="grid grid-cols-2 gap-6">
             <div className="space-y-4">
-              <Card>
-                <CardHeader className="pb-3">
-                  <CardTitle className="text-base">Campaign Setup</CardTitle>
-                </CardHeader>
-                <CardContent className="space-y-4">
-                  <div className="space-y-1">
-                    <Label>Campaign name</Label>
-                    <Input placeholder="Q1 Recruiter Outreach" value={name} onChange={(e) => setName(e.target.value)} />
-                  </div>
-                  <div className="space-y-1">
-                    <Label>Email subject</Label>
-                    <Input placeholder="{{name}}, exploring {{role}} opportunities" value={subject} onChange={(e) => setSubject(e.target.value)} />
-                  </div>
-                  <div className="space-y-1">
-                    <Label>Email body</Label>
-                    <p className="text-xs text-slate-500">Use <code className="bg-slate-100 px-1 rounded">{'{{placeholder}}'}</code> for personalization</p>
-                    <Textarea
-                      value={body}
-                      onChange={(e) => setBody(e.target.value)}
-                      rows={10}
-                      placeholder={`Hi {{name}},\n\nI'm reaching out about...`}
-                      className="text-sm font-mono"
-                    />
-                    {body && extractPlaceholders(body).length > 0 && (
-                      <div className="flex flex-wrap gap-1 mt-1">
-                        {extractPlaceholders(body).map((ph) => (
-                          <Badge key={ph} variant="secondary" className="text-xs">{'{{' + ph + '}}'}</Badge>
-                        ))}
-                      </div>
-                    )}
-                  </div>
+              <div className="bg-white rounded-2xl border border-slate-100 shadow-card p-5 space-y-4">
+                <p className="text-sm font-semibold text-slate-700">Campaign Setup</p>
+                <div className="space-y-1.5">
+                  <Label className="text-sm font-medium">Campaign name</Label>
+                  <Input placeholder="Q1 Recruiter Outreach" className="rounded-xl border-slate-200" value={name} onChange={(e) => setName(e.target.value)} />
+                </div>
+                <div className="space-y-1.5">
+                  <Label className="text-sm font-medium">Email subject</Label>
+                  <Input placeholder="{{name}}, exploring {{role}} opportunities" className="rounded-xl border-slate-200" value={subject} onChange={(e) => setSubject(e.target.value)} />
+                </div>
+                <div className="space-y-1.5">
+                  <Label className="text-sm font-medium">Email body</Label>
+                  <p className="text-xs text-slate-500">Use <code className="bg-slate-100 px-1.5 py-0.5 rounded-md font-mono">{'{{placeholder}}'}</code> for personalization</p>
+                  <Textarea
+                    value={body}
+                    onChange={(e) => setBody(e.target.value)}
+                    rows={10}
+                    placeholder={`Hi {{name}},\n\nI'm reaching out about...`}
+                    className="text-sm font-mono rounded-xl border-slate-200 resize-none"
+                  />
+                  {body && extractPlaceholders(body).length > 0 && (
+                    <div className="flex flex-wrap gap-1.5 mt-2 p-3 bg-indigo-50 rounded-xl">
+                      <span className="text-xs text-indigo-600 font-medium">Placeholders:</span>
+                      {extractPlaceholders(body).map((ph) => (
+                        <span key={ph} className="inline-flex items-center px-2 py-0.5 rounded-md text-xs font-medium bg-indigo-100 text-indigo-700 border border-indigo-200">
+                          {'{{' + ph + '}}'}
+                        </span>
+                      ))}
+                    </div>
+                  )}
+                </div>
 
-                  <div className="space-y-1">
-                    <Label>Delay between sends (seconds)</Label>
-                    <Input
-                      type="number"
-                      min={config.bulkEmail.minDelaySeconds}
-                      value={delay}
-                      onChange={(e) => setDelay(Number(e.target.value))}
-                    />
-                    <p className="text-xs text-slate-400">
-                      Min {config.bulkEmail.minDelaySeconds}s · Recommended 30–60s to avoid spam
-                    </p>
-                  </div>
-                </CardContent>
-              </Card>
+                <div className="space-y-1.5">
+                  <Label className="text-sm font-medium">Delay between sends (seconds)</Label>
+                  <Input
+                    type="number"
+                    min={config.bulkEmail.minDelaySeconds}
+                    className="rounded-xl border-slate-200"
+                    value={delay}
+                    onChange={(e) => setDelay(Number(e.target.value))}
+                  />
+                  <p className="text-xs text-slate-400">
+                    Min {config.bulkEmail.minDelaySeconds}s · Recommended 30–60s to avoid spam
+                  </p>
+                </div>
+              </div>
             </div>
 
             <div className="space-y-4">
-              <Card>
-                <CardHeader className="pb-3">
-                  <CardTitle className="text-base">Recipients</CardTitle>
-                  <CardDescription>Upload a CSV with columns: email, name, and any custom variables</CardDescription>
-                </CardHeader>
-                <CardContent>
-                  <div
-                    onClick={() => fileRef.current?.click()}
-                    className="border-2 border-dashed rounded-lg p-6 text-center cursor-pointer hover:border-slate-300 hover:bg-slate-50 transition-colors"
-                  >
-                    <Upload className="h-8 w-8 mx-auto text-slate-300 mb-2" />
-                    <p className="text-sm text-slate-500">Click to upload CSV</p>
-                    <p className="text-xs text-slate-400 mt-1">Required columns: email, name</p>
+              <div className="bg-white rounded-2xl border border-slate-100 shadow-card p-5">
+                <p className="text-sm font-semibold text-slate-700 mb-1">Recipients</p>
+                <p className="text-xs text-slate-500 mb-4">Upload a CSV with columns: email, name, and any custom variables</p>
+                <div
+                  onClick={() => fileRef.current?.click()}
+                  className="border-2 border-dashed border-slate-200 rounded-xl p-8 text-center cursor-pointer hover:border-indigo-300 hover:bg-indigo-50/30 transition-all"
+                >
+                  <div className="w-10 h-10 rounded-xl bg-slate-100 flex items-center justify-center mx-auto mb-3">
+                    <Upload className="h-5 w-5 text-slate-400" />
                   </div>
-                  <input ref={fileRef} type="file" accept=".csv" className="hidden" onChange={handleCsvUpload} />
+                  <p className="text-sm font-medium text-slate-600">Click to upload CSV</p>
+                  <p className="text-xs text-slate-400 mt-1">Required columns: email, name</p>
+                </div>
+                <input ref={fileRef} type="file" accept=".csv" className="hidden" onChange={handleCsvUpload} />
 
-                  {csvRows.length > 0 && (
-                    <div className="mt-4">
-                      <div className="flex items-center justify-between mb-2">
-                        <p className="text-sm font-medium text-green-600">
-                          <CheckCircle className="h-4 w-4 inline mr-1" />
-                          {csvRows.length} recipients loaded
-                        </p>
-                        <Badge variant="outline">{Object.keys(csvRows[0] || {}).join(', ')}</Badge>
-                      </div>
-                      <div className="max-h-40 overflow-y-auto text-xs">
-                        <Table>
-                          <TableHeader>
-                            <TableRow>
-                              {Object.keys(csvRows[0] || {}).slice(0, 4).map((k) => <TableHead key={k}>{k}</TableHead>)}
-                            </TableRow>
-                          </TableHeader>
-                          <TableBody>
-                            {csvRows.slice(0, 5).map((row, i) => (
-                              <TableRow key={i}>
-                                {Object.values(row).slice(0, 4).map((v, j) => <TableCell key={j}>{v}</TableCell>)}
-                              </TableRow>
-                            ))}
-                          </TableBody>
-                        </Table>
-                        {csvRows.length > 5 && <p className="text-slate-400 text-center py-1">+{csvRows.length - 5} more</p>}
-                      </div>
+                {csvRows.length > 0 && (
+                  <div className="mt-4">
+                    <div className="flex items-center justify-between mb-2">
+                      <p className="text-sm font-semibold text-emerald-600 flex items-center gap-1.5">
+                        <CheckCircle className="h-4 w-4" />
+                        {csvRows.length} recipients loaded
+                      </p>
+                      <span className="text-xs text-slate-500 bg-slate-100 px-2 py-1 rounded-md">
+                        {Object.keys(csvRows[0] || {}).join(', ')}
+                      </span>
                     </div>
-                  )}
-                </CardContent>
-              </Card>
+                    <div className="max-h-40 overflow-y-auto rounded-xl border border-slate-100 text-xs">
+                      <Table>
+                        <TableHeader>
+                          <TableRow className="bg-slate-50">
+                            {Object.keys(csvRows[0] || {}).slice(0, 4).map((k) => <TableHead key={k}>{k}</TableHead>)}
+                          </TableRow>
+                        </TableHeader>
+                        <TableBody>
+                          {csvRows.slice(0, 5).map((row, i) => (
+                            <TableRow key={i}>
+                              {Object.values(row).slice(0, 4).map((v, j) => <TableCell key={j}>{v}</TableCell>)}
+                            </TableRow>
+                          ))}
+                        </TableBody>
+                      </Table>
+                      {csvRows.length > 5 && <p className="text-slate-400 text-center py-1.5">+{csvRows.length - 5} more</p>}
+                    </div>
+                  </div>
+                )}
+              </div>
 
-              <Button className="w-full" onClick={createCampaign} disabled={creating}>
+              <Button
+                className="w-full h-11 gradient-brand text-white border-0 shadow-brand-sm hover:opacity-90 transition-opacity rounded-xl font-semibold"
+                onClick={createCampaign}
+                disabled={creating}
+              >
                 {creating
                   ? <><Loader2 className="h-4 w-4 mr-2 animate-spin" /> Launching campaign…</>
                   : <><Send className="h-4 w-4 mr-2" /> Launch Campaign</>
@@ -283,10 +291,12 @@ export default function BulkEmailPage() {
         {/* Campaign List */}
         <TabsContent value="campaigns">
           <div className="grid grid-cols-3 gap-6">
-            <div className="col-span-1 space-y-2">
+            <div className="col-span-1 space-y-1.5">
               {campaigns.length === 0 && (
                 <div className="text-center py-12 text-slate-400">
-                  <Mail className="h-10 w-10 mx-auto mb-2 opacity-30" />
+                  <div className="w-12 h-12 rounded-2xl bg-slate-100 flex items-center justify-center mx-auto mb-3">
+                    <Mail className="h-6 w-6 text-slate-300" />
+                  </div>
                   <p className="text-sm">No campaigns yet</p>
                 </div>
               )}
@@ -294,12 +304,14 @@ export default function BulkEmailPage() {
                 <button
                   key={c.id}
                   onClick={() => openCampaign(c)}
-                  className={`w-full text-left p-3 rounded-lg border text-sm transition-colors ${
-                    activeCampaign?.id === c.id ? 'bg-primary text-primary-foreground border-primary' : 'bg-white hover:bg-slate-50 border-slate-200'
+                  className={`w-full text-left p-3.5 rounded-xl border text-sm transition-all ${
+                    activeCampaign?.id === c.id
+                      ? 'bg-indigo-600 text-white border-indigo-600 shadow-brand-sm'
+                      : 'bg-white hover:bg-slate-50 border-slate-100 shadow-card'
                   }`}
                 >
-                  <p className="font-medium truncate">{c.name}</p>
-                  <div className="flex items-center gap-2 mt-1">
+                  <p className="font-semibold truncate text-[13px]">{c.name}</p>
+                  <div className="flex items-center gap-2 mt-1.5">
                     {STATUS_BADGE[c.status]}
                   </div>
                 </button>
@@ -308,63 +320,65 @@ export default function BulkEmailPage() {
 
             <div className="col-span-2">
               {!activeCampaign ? (
-                <Card className="min-h-[300px] flex items-center justify-center">
-                  <CardContent className="text-center text-slate-400 pt-6">
-                    <Mail className="h-10 w-10 mx-auto mb-2 opacity-20" />
-                    <p>Select a campaign to see details</p>
-                  </CardContent>
-                </Card>
+                <div className="bg-white rounded-2xl border border-slate-100 shadow-card min-h-[300px] flex items-center justify-center p-8">
+                  <div className="text-center space-y-2">
+                    <div className="w-12 h-12 rounded-2xl bg-violet-50 flex items-center justify-center mx-auto">
+                      <Mail className="h-6 w-6 text-violet-200" />
+                    </div>
+                    <p className="font-semibold text-slate-500">Select a campaign to see details</p>
+                  </div>
+                </div>
               ) : (
                 <div className="space-y-4">
-                  <Card>
-                    <CardContent className="pt-4">
-                      <div className="flex items-center justify-between mb-3">
-                        <div>
-                          <h3 className="font-semibold">{activeCampaign.name}</h3>
-                          <p className="text-sm text-slate-500">{activeCampaign.subject}</p>
+                  <div className="bg-white rounded-2xl border border-slate-100 shadow-card p-5">
+                    <div className="flex items-center justify-between mb-4">
+                      <div>
+                        <h3 className="font-bold text-slate-800">{activeCampaign.name}</h3>
+                        <p className="text-sm text-slate-500 mt-0.5">{activeCampaign.subject}</p>
+                      </div>
+                      <div className="flex gap-2 items-center">
+                        {STATUS_BADGE[activeCampaign.status]}
+                        {activeCampaign.status === 'sending' && (
+                          <Button size="sm" variant="outline" onClick={() => pauseCampaign(activeCampaign.id)} className="rounded-xl h-8">
+                            <Pause className="h-3.5 w-3.5 mr-1" />Pause
+                          </Button>
+                        )}
+                        {polling && (
+                          <Button size="sm" variant="ghost" onClick={() => fetchRecipients(activeCampaign.id)} className="rounded-xl h-8">
+                            <RefreshCw className="h-3.5 w-3.5" />
+                          </Button>
+                        )}
+                      </div>
+                    </div>
+
+                    {total > 0 && (
+                      <div>
+                        <div className="flex justify-between text-xs text-slate-500 mb-2">
+                          <span className="font-medium">{sent} / {total} sent</span>
+                          <span>{progress}%</span>
                         </div>
-                        <div className="flex gap-2">
-                          {STATUS_BADGE[activeCampaign.status]}
-                          {activeCampaign.status === 'sending' && (
-                            <Button size="sm" variant="outline" onClick={() => pauseCampaign(activeCampaign.id)}>
-                              <Pause className="h-3.5 w-3.5 mr-1" />Pause
-                            </Button>
-                          )}
-                          {polling && (
-                            <Button size="sm" variant="ghost" onClick={() => fetchRecipients(activeCampaign.id)}>
-                              <RefreshCw className="h-3.5 w-3.5" />
-                            </Button>
-                          )}
+                        <div className="h-2 bg-slate-100 rounded-full overflow-hidden">
+                          <div className="h-full gradient-brand rounded-full transition-all duration-500" style={{ width: `${progress}%` }} />
                         </div>
                       </div>
+                    )}
+                  </div>
 
-                      {total > 0 && (
-                        <div>
-                          <div className="flex justify-between text-xs text-slate-500 mb-1">
-                            <span>{sent} / {total} sent</span>
-                            <span>{progress}%</span>
-                          </div>
-                          <Progress value={progress} className="h-2" />
-                        </div>
-                      )}
-                    </CardContent>
-                  </Card>
-
-                  <Card>
-                    <CardContent className="p-0 max-h-96 overflow-y-auto">
+                  <div className="bg-white rounded-2xl border border-slate-100 shadow-card overflow-hidden">
+                    <div className="max-h-96 overflow-y-auto scrollbar-thin">
                       <Table>
                         <TableHeader>
-                          <TableRow>
-                            <TableHead>Recipient</TableHead>
-                            <TableHead>Email</TableHead>
-                            <TableHead>Status</TableHead>
-                            <TableHead>Sent at</TableHead>
+                          <TableRow className="bg-slate-50/50">
+                            <TableHead className="text-xs font-semibold text-slate-500 uppercase tracking-wider">Recipient</TableHead>
+                            <TableHead className="text-xs font-semibold text-slate-500 uppercase tracking-wider">Email</TableHead>
+                            <TableHead className="text-xs font-semibold text-slate-500 uppercase tracking-wider">Status</TableHead>
+                            <TableHead className="text-xs font-semibold text-slate-500 uppercase tracking-wider">Sent at</TableHead>
                           </TableRow>
                         </TableHeader>
                         <TableBody>
                           {recipients.map((r) => (
-                            <TableRow key={r.id}>
-                              <TableCell className="font-medium">{r.name}</TableCell>
+                            <TableRow key={r.id} className="border-b border-slate-50">
+                              <TableCell className="font-semibold text-slate-800">{r.name}</TableCell>
                               <TableCell className="text-slate-500 text-sm">{r.email}</TableCell>
                               <TableCell>{STATUS_BADGE[r.status] || r.status}</TableCell>
                               <TableCell className="text-sm text-slate-400">
@@ -374,8 +388,8 @@ export default function BulkEmailPage() {
                           ))}
                         </TableBody>
                       </Table>
-                    </CardContent>
-                  </Card>
+                    </div>
+                  </div>
                 </div>
               )}
             </div>

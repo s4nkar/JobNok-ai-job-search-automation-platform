@@ -9,9 +9,6 @@ import { LinkedInProfile } from '@/lib/types'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
-import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card'
-import { Badge } from '@/components/ui/badge'
-import { Alert, AlertDescription } from '@/components/ui/alert'
 import { useToast } from '@/components/ui/use-toast'
 import { Linkedin, Loader2, RefreshCw, Info, Clock } from 'lucide-react'
 import { apiFetch } from '@/lib/api'
@@ -74,118 +71,136 @@ export default function LinkedInFillPage() {
   ]
 
   return (
-    <div>
-      <div className="mb-6">
-        <h1 className="text-2xl font-bold text-slate-900">LinkedIn Auto-Fill</h1>
-        <p className="text-slate-500 text-sm mt-1">
-          Paste a LinkedIn profile URL to extract data and auto-fill your templates
-        </p>
+    <div className="animate-fade-in">
+      {/* Page Header */}
+      <div className="flex items-center gap-4 mb-6">
+        <div className="page-header-icon bg-blue-100">
+          <Linkedin className="h-5 w-5 text-blue-600" />
+        </div>
+        <div>
+          <h1 className="text-2xl font-bold text-slate-900 tracking-tight">LinkedIn Auto-Fill</h1>
+          <p className="text-slate-500 text-sm mt-0.5">Paste a LinkedIn profile URL to extract data and auto-fill your templates</p>
+        </div>
       </div>
 
-      <Alert className="mb-6">
-        <Info className="h-4 w-4" />
-        <AlertDescription>
+      {/* Rate limit notice */}
+      <div className="flex items-center gap-2.5 bg-indigo-50 border border-indigo-100 text-indigo-700 rounded-xl px-4 py-3 mb-6 text-sm">
+        <Info className="h-4 w-4 flex-shrink-0 text-indigo-500" />
+        <span>
           <strong>{config.rateLimits.linkedinScrapesPerDay} scrapes/day</strong> on the free tier.
           Profiles are cached for {config.linkedin.cacheTtlDays} days — same URL doesn&apos;t count twice.
-        </AlertDescription>
-      </Alert>
+        </span>
+      </div>
 
       <div className="grid grid-cols-5 gap-6">
         {/* Input */}
-        <div className="col-span-2">
-          <Card>
-            <CardHeader>
-              <CardTitle className="text-base flex items-center gap-2">
-                <Linkedin className="h-4 w-4 text-blue-600" />
-                LinkedIn Profile URL
-              </CardTitle>
-              <CardDescription>
-                Paste any public LinkedIn profile URL
-              </CardDescription>
-            </CardHeader>
-            <CardContent>
-              <form onSubmit={handleSubmit(onSubmit)} className="space-y-4">
-                <div className="space-y-1">
-                  <Label>Profile URL</Label>
-                  <Input
-                    placeholder="https://linkedin.com/in/username"
-                    {...register('linkedin_url')}
-                  />
-                  {errors.linkedin_url && (
-                    <p className="text-xs text-destructive">{errors.linkedin_url.message}</p>
-                  )}
-                </div>
+        <div className="col-span-2 space-y-4">
+          <div className="bg-white rounded-2xl border border-slate-100 shadow-card p-5">
+            <div className="flex items-center gap-2.5 mb-4">
+              <div className="w-7 h-7 rounded-lg bg-blue-100 flex items-center justify-center">
+                <Linkedin className="h-3.5 w-3.5 text-blue-600" />
+              </div>
+              <div>
+                <p className="text-sm font-semibold text-slate-800">LinkedIn Profile URL</p>
+                <p className="text-xs text-slate-500">Paste any public LinkedIn profile URL</p>
+              </div>
+            </div>
+            <form onSubmit={handleSubmit(onSubmit)} className="space-y-4">
+              <div className="space-y-1.5">
+                <Label className="text-sm font-medium">Profile URL</Label>
+                <Input
+                  placeholder="https://linkedin.com/in/username"
+                  className="rounded-xl border-slate-200"
+                  {...register('linkedin_url')}
+                />
+                {errors.linkedin_url && (
+                  <p className="text-xs text-destructive">{errors.linkedin_url.message}</p>
+                )}
+              </div>
 
-                <Button type="submit" className="w-full" disabled={loading}>
-                  {loading
-                    ? <><Loader2 className="h-4 w-4 mr-2 animate-spin" /> Scraping…</>
-                    : <><RefreshCw className="h-4 w-4 mr-2" /> Scrape Profile</>
-                  }
-                </Button>
-              </form>
-            </CardContent>
-          </Card>
+              <Button
+                type="submit"
+                className="w-full h-11 gradient-brand text-white border-0 shadow-brand-sm hover:opacity-90 transition-opacity rounded-xl font-semibold"
+                disabled={loading}
+              >
+                {loading
+                  ? <><Loader2 className="h-4 w-4 mr-2 animate-spin" /> Scraping…</>
+                  : <><RefreshCw className="h-4 w-4 mr-2" /> Scrape Profile</>
+                }
+              </Button>
+            </form>
+          </div>
 
-          <Card className="mt-4">
-            <CardContent className="pt-4">
-              <p className="text-xs font-medium text-slate-500 uppercase tracking-wide mb-2">How it works</p>
-              <ol className="text-sm text-slate-600 space-y-2">
-                <li className="flex gap-2"><span className="text-slate-400 font-mono">1.</span> Paste the profile URL</li>
-                <li className="flex gap-2"><span className="text-slate-400 font-mono">2.</span> We scrape name, role, company, headline</li>
-                <li className="flex gap-2"><span className="text-slate-400 font-mono">3.</span> AI enriches open-ended fields</li>
-                <li className="flex gap-2"><span className="text-slate-400 font-mono">4.</span> Copy data to fill your templates</li>
-              </ol>
-            </CardContent>
-          </Card>
+          <div className="bg-white rounded-2xl border border-slate-100 shadow-card p-5">
+            <p className="text-xs font-semibold text-slate-500 uppercase tracking-widest mb-4">How it works</p>
+            <ol className="space-y-3">
+              {[
+                'Paste the profile URL',
+                'We scrape name, role, company, headline',
+                'AI enriches open-ended fields',
+                'Copy data to fill your templates',
+              ].map((step, i) => (
+                <li key={i} className="flex items-start gap-3 text-sm text-slate-600">
+                  <span className="w-5 h-5 rounded-full bg-indigo-100 text-indigo-600 text-xs font-bold flex items-center justify-center flex-shrink-0 mt-0.5">
+                    {i + 1}
+                  </span>
+                  {step}
+                </li>
+              ))}
+            </ol>
+          </div>
         </div>
 
         {/* Results */}
         <div className="col-span-3">
           {error && (
-            <Alert variant="destructive" className="mb-4">
-              <AlertDescription>{error}</AlertDescription>
-            </Alert>
+            <div className="bg-red-50 border border-red-100 text-red-700 rounded-xl px-4 py-3 text-sm mb-4">
+              {error}
+            </div>
           )}
 
           {!profile && !error && !loading && (
-            <Card className="min-h-[400px] flex items-center justify-center">
-              <CardContent className="text-center text-slate-400 pt-6">
-                <Linkedin className="h-12 w-12 mx-auto mb-3 opacity-20" />
-                <p>Profile data will appear here</p>
-              </CardContent>
-            </Card>
+            <div className="bg-white rounded-2xl border border-slate-100 shadow-card min-h-[400px] flex items-center justify-center p-8">
+              <div className="text-center space-y-2">
+                <div className="w-14 h-14 rounded-2xl bg-blue-50 flex items-center justify-center mx-auto">
+                  <Linkedin className="h-7 w-7 text-blue-200" />
+                </div>
+                <p className="font-semibold text-slate-500">Profile data will appear here</p>
+                <p className="text-sm text-slate-400">Paste a LinkedIn URL to get started</p>
+              </div>
+            </div>
           )}
 
           {loading && (
-            <Card className="min-h-[400px] flex items-center justify-center">
-              <CardContent className="text-center pt-6">
-                <Loader2 className="h-10 w-10 animate-spin mx-auto mb-3 text-blue-500" />
-                <p className="text-slate-600 font-medium">Scraping profile…</p>
-                <p className="text-slate-400 text-sm mt-1">This can take up to 8 seconds</p>
-              </CardContent>
-            </Card>
+            <div className="bg-white rounded-2xl border border-slate-100 shadow-card min-h-[400px] flex items-center justify-center p-8">
+              <div className="text-center space-y-3">
+                <Loader2 className="h-10 w-10 animate-spin mx-auto text-blue-500" />
+                <div>
+                  <p className="font-semibold text-slate-700">Scraping profile…</p>
+                  <p className="text-slate-400 text-sm mt-1">This can take up to 8 seconds</p>
+                </div>
+              </div>
+            </div>
           )}
 
           {profile && (
-            <Card>
-              <CardHeader className="pb-3">
-                <div className="flex items-center justify-between">
-                  <CardTitle className="text-base">Scraped Profile</CardTitle>
-                  {cached && (
-                    <Badge variant="secondary" className="flex items-center gap-1">
-                      <Clock className="h-3 w-3" />
-                      From cache
-                    </Badge>
-                  )}
-                </div>
-              </CardHeader>
-              <CardContent className="space-y-3">
+            <div className="bg-white rounded-2xl border border-slate-100 shadow-card p-5">
+              <div className="flex items-center justify-between mb-4">
+                <p className="text-sm font-semibold text-slate-700">Scraped Profile</p>
+                {cached && (
+                  <span className="flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-slate-100 text-slate-600 text-xs font-medium">
+                    <Clock className="h-3 w-3" />
+                    From cache
+                  </span>
+                )}
+              </div>
+              <div className="space-y-0 divide-y divide-slate-50">
                 {fieldMap.map(({ key, label }) => {
                   const value = profile[key]
                   if (!value || (Array.isArray(value) && value.length === 0)) return null
                   return (
-                    <div key={key} className="grid grid-cols-3 gap-2 py-2 border-b border-slate-100 last:border-0">
-                      <span className="text-xs font-medium text-slate-500 uppercase tracking-wide">{label}</span>
+                    <div key={key} className="grid grid-cols-3 gap-3 py-3">
+                      <span className="text-xs font-semibold text-slate-400 uppercase tracking-wider pt-0.5">{label}</span>
                       <div className="col-span-2 text-sm text-slate-800">
                         {Array.isArray(value) ? value.join(', ') : String(value)}
                       </div>
@@ -194,17 +209,19 @@ export default function LinkedInFillPage() {
                 })}
 
                 {profile.skills && profile.skills.length > 0 && (
-                  <div className="grid grid-cols-3 gap-2 py-2">
-                    <span className="text-xs font-medium text-slate-500 uppercase tracking-wide">Skills</span>
-                    <div className="col-span-2 flex flex-wrap gap-1">
+                  <div className="grid grid-cols-3 gap-3 py-3">
+                    <span className="text-xs font-semibold text-slate-400 uppercase tracking-wider pt-0.5">Skills</span>
+                    <div className="col-span-2 flex flex-wrap gap-1.5">
                       {profile.skills.slice(0, 12).map((s) => (
-                        <Badge key={s} variant="outline" className="text-xs">{s}</Badge>
+                        <span key={s} className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-blue-50 text-blue-700 border border-blue-100">
+                          {s}
+                        </span>
                       ))}
                     </div>
                   </div>
                 )}
-              </CardContent>
-            </Card>
+              </div>
+            </div>
           )}
         </div>
       </div>
