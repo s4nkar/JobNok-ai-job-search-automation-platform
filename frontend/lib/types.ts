@@ -246,6 +246,14 @@ export interface StartupHuntResult {
 
 export interface StartupHuntResponse {
   results: StartupHuntResult[]
+  overflow_results: StartupHuntResult[]
+  filtered_out: Array<{
+    company_name: string
+    role_title: string
+    source_name: string
+    source_bucket: string
+    reason: string
+  }>
   parsed_strategy: {
     keywords: string[]
     languages: string[]
@@ -259,6 +267,8 @@ export interface StartupHuntResponse {
   source_diagnostics: Record<string, {
     bucket: string
     requested_limit: number
+    enabled: boolean
+    available: boolean
     configured: boolean
     active_sources: number
     raw_count: number

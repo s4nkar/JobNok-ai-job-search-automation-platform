@@ -25,7 +25,7 @@ class StartupHuntSourceConfig:
     metadata: dict[str, Any] = field(default_factory=dict)
 
 
-SOURCE_BUCKETS = ("crawler", "startupmap", "web", "indeed", "apify", "ats")
+SOURCE_BUCKETS = ("crawler", "startupmap", "web", "indeed", "theirstack", "apify", "ats")
 APIFY_TERMINAL_STATUSES = {"SUCCEEDED", "FAILED", "ABORTED", "TIMED-OUT"}
 INFRASTRUCTURE_HOST_MARKERS = (
     "supabase.co",
@@ -35,6 +35,27 @@ INFRASTRUCTURE_HOST_MARKERS = (
     "herokuapp.com",
     "render.com",
     "railway.app",
+)
+SHORTENER_OR_PROXY_HOSTS = (
+    "bit.ly",
+    "grnh.se",
+    "lnkd.in",
+    "t.co",
+    "tinyurl.com",
+)
+ATS_HOST_MARKERS = (
+    "ashbyhq.com",
+    "greenhouse.io",
+    "lever.co",
+    "join.com",
+    "workable.com",
+    "smartrecruiters.com",
+    "myworkdayjobs.com",
+    "wd3.myworkdayjobs.com",
+    "kenjo.io",
+    "teamtailor.com",
+    "personio.de",
+    "jobs.personio.de",
 )
 
 
@@ -98,8 +119,129 @@ def normalize_text(value: str) -> str:
     return re.sub(r"\s+", " ", value.strip().lower())
 
 
+_COUNTRY_NAME_TO_CODE = dict(COUNTRY_CODE_OVERRIDES)
+_COUNTRY_CODE_TO_NAMES: dict[str, set[str]] = {}
+for _name, _code in COUNTRY_CODE_OVERRIDES.items():
+    _COUNTRY_CODE_TO_NAMES.setdefault(_code, set()).add(_name)
+
+
+def _country_aliases(value: str) -> set[str]:
+    text = normalize_text(value)
+    if not text:
+        return set()
+    aliases = {text}
+    code = _COUNTRY_NAME_TO_CODE.get(text)
+    if len(text) == 2:
+        code = text
+    if code:
+        aliases.add(code)
+        aliases.update(_COUNTRY_CODE_TO_NAMES.get(code, set()))
+    return aliases
+
+
+def _location_matches(
+    location_target: str,
+    country_target: str,
+    location_text: str,
+    company_payload: dict[str, Any],
+    is_remote: bool,
+) -> bool:
+    if not location_target and not country_target:
+        return True
+    if location_target and location_target in location_text:
+        return True
+    target_country_aliases = _country_aliases(country_target) if country_target else set()
+    if target_country_aliases:
+        if any(alias and alias in location_text for alias in target_country_aliases):
+            return True
+        company_country_aliases = _country_aliases(str(company_payload.get("country", "") or ""))
+        if target_country_aliases & company_country_aliases:
+            return True
+        # Remote/EU postings: accept when targeting an EU country and the role is remote or EU-tagged.
+        eu_codes = {"de", "fr", "es", "it", "nl", "be", "at", "ch", "pl", "pt", "ie", "uk"}
+        if target_country_aliases & eu_codes:
+            if is_remote and any(token in location_text for token in ("europe", "eu", "emea", "remote")):
+                return True
+    if not country_target and is_remote:
+        return True
+    return False
+
+
 def tokenize(value: str) -> list[str]:
     return [token for token in re.findall(r"[a-z0-9]+", value.lower()) if len(token) > 1]
+
+
+def _normalize_role_query_aliases(value: str) -> str:
+    text = normalize_text(value)
+    replacements = {
+        " ai/ml ": " ai ml ",
+        " common ai/ml engineer ": " ai ml engineer ",
+        " common ai ml engineer ": " ai ml engineer ",
+        " ai/ml engineer ": " ai ml engineer ",
+        " ai eng ": " ai engineer ",
+        " ml eng ": " ml engineer ",
+        " llm eng ": " llm engineer ",
+        " applied ai eng ": " applied ai engineer ",
+        " ml ops ": " mlops ",
+        " eng ": " engineer ",
+        " sw eng ": " software engineer ",
+        " jobs ": " job ",
+    }
+    padded = f" {text} "
+    for source, target in replacements.items():
+        padded = padded.replace(source, target)
+    return normalize_text(padded)
+
+
+def _ai_engineer_family_variants(query: str) -> list[str]:
+    normalized = _normalize_role_query_aliases(query)
+    variants: list[str] = []
+
+    if (
+        "ai engineer" in normalized
+        or "applied ai engineer" in normalized
+        or "ml engineer" in normalized
+        or "machine learning engineer" in normalized
+        or "llm engineer" in normalized
+        or "nlp engineer" in normalized
+        or "mlops engineer" in normalized
+        or "ai platform engineer" in normalized
+        or "ml research engineer" in normalized
+        or "research engineer" in normalized
+        or ("ai" in normalized and "engineer" in normalized)
+    ):
+        variants.extend(
+            [
+                "AI Engineer",
+                "Applied AI Engineer",
+                "ML Engineer",
+                "Machine Learning Engineer",
+                "LLM Engineer",
+                "MLOps Engineer",
+                "NLP Engineer",
+                "AI Platform Engineer",
+                "Research Engineer",
+                "Applied Research Engineer",
+                "ML Research Engineer",
+            ]
+        )
+
+    if "data scientist" in normalized:
+        variants.extend(["Data Scientist", "Applied Scientist", "Machine Learning Scientist"])
+
+    compact_query = query.strip()
+    if compact_query:
+        variants.insert(0, compact_query)
+
+    deduped: list[str] = []
+    seen: set[str] = set()
+    for variant in variants:
+        key = normalize_text(variant)
+        if not key or key in seen:
+            continue
+        seen.add(key)
+        deduped.append(variant)
+    return deduped[:8] or [compact_query or "AI Engineer"]
 
 
 def extract_domain(url: str | None) -> str | None:
@@ -119,7 +261,7 @@ def load_startup_hunt_sources() -> list[StartupHuntSourceConfig]:
         return []
 
     sources: list[StartupHuntSourceConfig] = []
-    allowed_types = {"greenhouse", "lever", "ashby", "startup_company", "startup_directory", "google_web", "web_search", "ats_discovery", "apify_actor", "indeed_search"}
+    allowed_types = {"greenhouse", "lever", "ashby", "startup_company", "startup_directory", "google_web", "web_search", "ats_discovery", "apify_actor", "indeed_search", "theirstack_search"}
     for item in raw:
         if not isinstance(item, dict):
             continue
@@ -160,6 +302,7 @@ async def parse_strategy_prompt(prompt: str | None) -> dict[str, Any]:
             "preferred_cities": [],
             "hidden_gem_signals": [],
             "contact_focus": [],
+            "seniority_preference": None,
         }
 
     system = """Extract structured startup-hunt preferences from the user prompt.
@@ -170,7 +313,8 @@ Return JSON only:
   "company_stage": string | null,
   "preferred_cities": [string],
   "hidden_gem_signals": [string],
-  "contact_focus": [string]
+  "contact_focus": [string],
+  "seniority_preference": string | null
 }
 Normalize values into short lowercase phrases."""
 
@@ -187,6 +331,7 @@ Normalize values into short lowercase phrases."""
                 "preferred_cities": [str(v).strip().lower() for v in data.get("preferred_cities", []) if str(v).strip()],
                 "hidden_gem_signals": [str(v).strip().lower() for v in data.get("hidden_gem_signals", []) if str(v).strip()],
                 "contact_focus": [str(v).strip().lower() for v in data.get("contact_focus", []) if str(v).strip()],
+                "seniority_preference": _normalize_seniority_preference(str(data.get("seniority_preference"))) if data.get("seniority_preference") else None,
             }
     except Exception:
         pass
@@ -199,59 +344,94 @@ Normalize values into short lowercase phrases."""
         "preferred_cities": [city for city in ["berlin", "munich", "hamburg", "cologne", "germany"] if city in lowered],
         "hidden_gem_signals": [signal for signal in ["small startup", "early access", "founder-led", "hidden gems"] if signal.split()[0] in lowered],
         "contact_focus": [focus for focus in ["founder", "ceo", "hiring manager", "head of ai"] if focus in lowered],
+        "seniority_preference": _infer_seniority_preference_from_prompt(prompt),
     }
 
 
 async def search_startup_hunt(
     payload: dict[str, Any],
     existing_opportunities: dict[str, dict[str, Any]],
-) -> tuple[list[dict[str, Any]], dict[str, Any], int, dict[str, int], dict[str, dict[str, Any]]]:
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]], list[dict[str, Any]], dict[str, Any], int, dict[str, int], dict[str, dict[str, Any]]]:
     sources: list[StartupHuntSourceConfig] = []
-    if payload.get("include_seeded_sources"):
+    if payload.get("include_seeded_sources") and _bucket_enabled(payload, "crawler"):
         sources.extend(load_startup_hunt_sources())
     sources.extend(_auto_sources_from_integrations(payload))
     sources.extend(_auto_dynamic_sources(payload))
     strategy = await parse_strategy_prompt(payload.get("strategy_prompt"))
     if not sources:
-        return [], strategy, 0, {bucket: 0 for bucket in SOURCE_BUCKETS}, _build_source_diagnostics(payload, [], [])
+        return [], [], [], strategy, 0, {bucket: 0 for bucket in SOURCE_BUCKETS}, _build_source_diagnostics(payload, [], [])
 
+    total_budget = float(getattr(settings, "startup_hunt_total_budget_seconds", 150))
     async with httpx.AsyncClient(timeout=settings.startup_hunt_timeout_seconds, follow_redirects=True) as client:
         tasks = [_fetch_source_safe(client, source, payload, strategy) for source in sources]
-        raw_results = await _gather(tasks)
+        raw_results = await _gather_with_budget(tasks, total_budget)
 
     results: list[dict[str, Any]] = []
-    source_result_counts: dict[str, int] = {bucket: 0 for bucket in SOURCE_BUCKETS}
-    bucket_usage: dict[str, int] = {bucket: 0 for bucket in SOURCE_BUCKETS}
+    raw_bucket_counts: dict[str, int] = {bucket: 0 for bucket in SOURCE_BUCKETS}
     for source, report in zip(sources, raw_results):
         bucket = _source_bucket(source)
         items = report.get("items", [])
-        limit = _bucket_limit(payload, bucket)
-        remaining = max(0, limit - bucket_usage.get(bucket, 0))
-        limited = items[:remaining] if remaining > 0 else []
-        bucket_usage[bucket] = bucket_usage.get(bucket, 0) + len(limited)
-        source_result_counts[bucket] = source_result_counts.get(bucket, 0) + len(limited)
-        results.extend(limited)
-    source_diagnostics = _build_source_diagnostics(payload, sources, raw_results, source_result_counts)
+        raw_bucket_counts[bucket] = raw_bucket_counts.get(bucket, 0) + len(items)
+        results.extend(items)
 
     results = await _enrich_opportunities_contacts(results)
 
     scored: list[dict[str, Any]] = []
+    filtered_out: list[dict[str, Any]] = []
     for item in results:
-        scored_item = _score_opportunity(item, payload, strategy, existing_opportunities)
+        scored_item, filter_reason = _score_opportunity(item, payload, strategy, existing_opportunities)
         if scored_item is not None:
             scored.append(scored_item)
+        elif filter_reason:
+            filtered_out.append(
+                {
+                    "company_name": item.get("company_name"),
+                    "role_title": item.get("role_title"),
+                    "source_name": item.get("source_name"),
+                    "source_bucket": _result_source_bucket(item),
+                    "reason": filter_reason,
+                }
+            )
 
     deduped = _dedupe_opportunities(scored)
     if not deduped:
         relaxed_payload = _relax_search_payload(payload)
         relaxed_scored: list[dict[str, Any]] = []
         for item in results:
-            scored_item = _score_opportunity(item, relaxed_payload, strategy, existing_opportunities)
+            scored_item, _ = _score_opportunity(item, relaxed_payload, strategy, existing_opportunities)
             if scored_item is not None:
                 relaxed_scored.append(scored_item)
         deduped = _dedupe_opportunities(relaxed_scored)
     deduped.sort(key=lambda row: (-row["score_total"], row["rank_age_hours"], row["company_name"]))
-    return deduped[: _effective_result_limit(payload, sources)], strategy, len(sources), source_result_counts, source_diagnostics
+
+    capped, source_result_counts = _apply_bucket_caps(deduped, payload)
+    # Backfill counts for buckets that had raw items but were capped to zero accepted.
+    for bucket in SOURCE_BUCKETS:
+        source_result_counts.setdefault(bucket, 0)
+    source_diagnostics = _build_source_diagnostics(payload, sources, raw_results, source_result_counts)
+
+    effective_limit = _effective_result_limit(payload, sources)
+    primary_results = capped[:effective_limit]
+    overflow_results = capped[effective_limit:]
+    return primary_results, overflow_results, filtered_out[:50], strategy, len(sources), source_result_counts, source_diagnostics
+
+
+def _apply_bucket_caps(
+    scored_results: list[dict[str, Any]],
+    payload: dict[str, Any],
+) -> tuple[list[dict[str, Any]], dict[str, int]]:
+    bucket_usage: dict[str, int] = {bucket: 0 for bucket in SOURCE_BUCKETS}
+    accepted: list[dict[str, Any]] = []
+    for item in scored_results:
+        bucket = item.get("source_bucket") or _result_source_bucket(item)
+        limit = _bucket_limit(payload, bucket)
+        if limit <= 0:
+            continue
+        if bucket_usage.get(bucket, 0) >= limit:
+            continue
+        bucket_usage[bucket] = bucket_usage.get(bucket, 0) + 1
+        accepted.append(item)
+    return accepted, bucket_usage
 
 
 async def _gather(tasks: list[Any]) -> list[dict[str, Any]]:
@@ -264,6 +444,30 @@ async def _gather(tasks: list[Any]) -> list[dict[str, Any]]:
             output.append({"items": [], "error": f"{item.__class__.__name__}: {item}"})
         else:
             output.append(item)
+    return output
+
+
+async def _gather_with_budget(tasks: list[Any], budget_seconds: float) -> list[dict[str, Any]]:
+    import asyncio
+
+    futures = [asyncio.ensure_future(task) for task in tasks]
+    try:
+        await asyncio.wait(futures, timeout=max(5.0, budget_seconds))
+    except Exception:
+        pass
+
+    output: list[dict[str, Any]] = []
+    for future in futures:
+        if future.done():
+            try:
+                result = future.result()
+            except Exception as exc:
+                output.append({"items": [], "error": f"{exc.__class__.__name__}: {exc}"})
+            else:
+                output.append(result if isinstance(result, dict) else {"items": [], "error": "Invalid source response"})
+        else:
+            future.cancel()
+            output.append({"items": [], "error": "TimeoutError: source exceeded total search budget"})
     return output
 
 
@@ -306,12 +510,37 @@ async def _fetch_source(
         return await _fetch_apify_actor(client, source, payload, strategy)
     if source.type == "indeed_search":
         return await _fetch_indeed_search(client, source, payload, strategy)
+    if source.type == "theirstack_search":
+        return await _fetch_theirstack_search(client, source, payload, strategy)
     return []
+
+
+def _split_locations(payload: dict[str, Any]) -> list[str]:
+    raw = str(payload.get("location") or "").strip()
+    if not raw:
+        return []
+    parts = [part.strip() for part in re.split(r"[,;|/]+|\s+(?:and|or|und|oder)\s+", raw, flags=re.IGNORECASE) if part.strip()]
+    seen: set[str] = set()
+    locations: list[str] = []
+    for part in parts:
+        key = normalize_text(part)
+        if not key or key in seen:
+            continue
+        seen.add(key)
+        locations.append(part)
+    return locations or [raw]
+
+
+def _location_search_targets(payload: dict[str, Any], max_count: int = 6) -> list[str]:
+    locations = _split_locations(payload)
+    return locations[:max_count] if locations else [payload.get("location") or "Germany"]
 
 
 def _auto_sources_from_integrations(payload: dict[str, Any]) -> list[StartupHuntSourceConfig]:
     sources: list[StartupHuntSourceConfig] = []
-    if settings.google_cse_api_key and settings.google_cse_cx:
+    location_targets = _location_search_targets(payload)
+
+    if _bucket_enabled(payload, "web") and settings.google_cse_api_key and settings.google_cse_cx:
         sources.append(
             StartupHuntSourceConfig(
                 type="google_web",
@@ -320,21 +549,32 @@ def _auto_sources_from_integrations(payload: dict[str, Any]) -> list[StartupHunt
                 metadata={},
             )
         )
-    if payload.get("apify_limit", 0) > 0 and settings.apify_api_token and _is_supported_startup_actor(settings.apify_startup_hunt_actor_id):
-        sources.append(
-            StartupHuntSourceConfig(
-                type="apify_actor",
-                name="Apify Startup Discovery",
-                company="apify-startup",
-                metadata={},
+    if _bucket_enabled(payload, "apify") and payload.get("apify_limit", 0) > 0 and settings.apify_api_token and _is_supported_startup_actor(settings.apify_startup_hunt_actor_id):
+        for location in location_targets:
+            sources.append(
+                StartupHuntSourceConfig(
+                    type="apify_actor",
+                    name=f"Apify Startup Discovery ({location})",
+                    company="apify-startup",
+                    metadata={"location": location},
+                )
             )
-        )
-    if payload.get("indeed_limit", 0) > 0 and settings.apify_api_token and settings.apify_indeed_actor_id:
+    if _bucket_enabled(payload, "indeed") and payload.get("indeed_limit", 0) > 0 and settings.apify_api_token and settings.apify_indeed_actor_id:
+        for location in location_targets:
+            sources.append(
+                StartupHuntSourceConfig(
+                    type="indeed_search",
+                    name=f"Indeed Discovery ({location})",
+                    company="indeed",
+                    metadata={"location": location},
+                )
+            )
+    if _bucket_enabled(payload, "theirstack") and payload.get("theirstack_limit", 0) > 0 and settings.theirstack_api_key:
         sources.append(
             StartupHuntSourceConfig(
-                type="indeed_search",
-                name="Indeed Discovery",
-                company="indeed",
+                type="theirstack_search",
+                name="TheirStack Discovery",
+                company="theirstack",
                 metadata={},
             )
         )
@@ -344,7 +584,7 @@ def _auto_sources_from_integrations(payload: dict[str, Any]) -> list[StartupHunt
 def _auto_dynamic_sources(payload: dict[str, Any]) -> list[StartupHuntSourceConfig]:
     sources: list[StartupHuntSourceConfig] = []
     startupmap_url = _build_startupmap_url(payload.get("location"), payload.get("country"))
-    if payload.get("startupmap_limit", 0) > 0 and startupmap_url:
+    if _bucket_enabled(payload, "startupmap") and payload.get("startupmap_limit", 0) > 0 and startupmap_url:
         sources.append(
             StartupHuntSourceConfig(
                 type="startup_directory",
@@ -361,7 +601,7 @@ def _auto_dynamic_sources(payload: dict[str, Any]) -> list[StartupHuntSourceConf
                 },
             )
         )
-    if payload.get("web_limit", 0) > 0:
+    if _bucket_enabled(payload, "web") and payload.get("web_limit", 0) > 0:
         sources.append(
             StartupHuntSourceConfig(
                 type="web_search",
@@ -370,7 +610,7 @@ def _auto_dynamic_sources(payload: dict[str, Any]) -> list[StartupHuntSourceConf
                 metadata={"dynamic_provider": "web"},
             )
         )
-    if payload.get("ats_limit", 0) > 0:
+    if _bucket_enabled(payload, "ats") and payload.get("ats_limit", 0) > 0:
         sources.append(
             StartupHuntSourceConfig(
                 type="ats_discovery",
@@ -397,6 +637,8 @@ def _source_bucket(source: StartupHuntSourceConfig) -> str:
         return "ats"
     if source.type == "indeed_search":
         return "indeed"
+    if source.type == "theirstack_search":
+        return "theirstack"
     if source.type == "apify_actor":
         return "apify"
     if source.type in {"google_web", "web_search"}:
@@ -417,6 +659,8 @@ def _result_source_bucket(item: dict[str, Any]) -> str:
         return "ats"
     if source_type == "indeed_search":
         return "indeed"
+    if source_type == "theirstack_search":
+        return "theirstack"
     if source_type == "apify_actor":
         return "apify"
     if source_type in {"google_web", "web_search"}:
@@ -427,15 +671,49 @@ def _result_source_bucket(item: dict[str, Any]) -> str:
 
 
 def _bucket_limit(payload: dict[str, Any], bucket: str) -> int:
+    if not _bucket_enabled(payload, bucket):
+        return 0
     limits = {
         "crawler": int(payload.get("crawler_limit", 0)),
         "startupmap": int(payload.get("startupmap_limit", 0)),
         "web": int(payload.get("web_limit", 0)),
         "indeed": int(payload.get("indeed_limit", 0)),
+        "theirstack": int(payload.get("theirstack_limit", 0)),
         "apify": int(payload.get("apify_limit", 0)),
         "ats": int(payload.get("ats_limit", 0)),
     }
     return limits.get(bucket, 0)
+
+
+def _bucket_enabled(payload: dict[str, Any], bucket: str) -> bool:
+    flag_map = {
+        "crawler": bool(payload.get("crawler_enabled", True)),
+        "startupmap": bool(payload.get("startupmap_enabled", True)),
+        "web": bool(payload.get("web_enabled", True)),
+        "indeed": bool(payload.get("indeed_enabled", True)),
+        "theirstack": bool(payload.get("theirstack_enabled", True)),
+        "apify": bool(payload.get("apify_enabled", True)),
+        "ats": bool(payload.get("ats_enabled", True)),
+    }
+    return flag_map.get(bucket, True)
+
+
+def _bucket_available(payload: dict[str, Any], bucket: str) -> bool:
+    if bucket == "crawler":
+        return bool(payload.get("include_seeded_sources"))
+    if bucket == "startupmap":
+        return bool(_build_startupmap_url(payload.get("location"), payload.get("country")))
+    if bucket == "web":
+        return True
+    if bucket == "indeed":
+        return bool(settings.apify_api_token and settings.apify_indeed_actor_id)
+    if bucket == "theirstack":
+        return bool(settings.theirstack_api_key)
+    if bucket == "apify":
+        return bool(settings.apify_api_token and _is_supported_startup_actor(settings.apify_startup_hunt_actor_id))
+    if bucket == "ats":
+        return True
+    return True
 
 
 def _effective_result_limit(payload: dict[str, Any], sources: list[StartupHuntSourceConfig]) -> int:
@@ -467,6 +745,8 @@ def _build_source_diagnostics(
         bucket_sources = sources_by_bucket.get(bucket, [])
         bucket_reports = reports_by_bucket.get(bucket, [])
         configured = bool(bucket_sources)
+        enabled = _bucket_enabled(payload, bucket)
+        available = _bucket_available(payload, bucket)
         raw_count = sum(len(report.get("items", [])) for report in bucket_reports)
         accepted_count = int(source_result_counts.get(bucket, 0))
         errors = [str(report.get("error")) for report in bucket_reports if report.get("error")]
@@ -489,6 +769,8 @@ def _build_source_diagnostics(
         diagnostics[bucket] = {
             "bucket": bucket,
             "requested_limit": requested_limit,
+            "enabled": enabled,
+            "available": available,
             "configured": configured,
             "active_sources": len(bucket_sources),
             "raw_count": raw_count,
@@ -509,6 +791,8 @@ def _build_source_diagnostics(
 
 
 def _inactive_bucket_reason(payload: dict[str, Any], bucket: str) -> str:
+    if not _bucket_enabled(payload, bucket):
+        return "Provider is disabled for this hunt."
     if _bucket_limit(payload, bucket) <= 0:
         return "Requested limit is 0."
     if bucket == "crawler" and not payload.get("include_seeded_sources"):
@@ -519,6 +803,8 @@ def _inactive_bucket_reason(payload: dict[str, Any], bucket: str) -> str:
         return "Google CSE is not configured; runtime web search fallback will be used only when the source is added."
     if bucket == "indeed" and (not settings.apify_api_token or not settings.apify_indeed_actor_id):
         return "Indeed actor is not configured."
+    if bucket == "theirstack" and not settings.theirstack_api_key:
+        return "TheirStack API key is not configured."
     if bucket == "apify" and (not settings.apify_api_token or not _is_supported_startup_actor(settings.apify_startup_hunt_actor_id)):
         return "Startup Apify actor is not configured."
     if bucket == "ats":
@@ -539,8 +825,12 @@ def _is_supported_startup_actor(actor_id: str | None) -> bool:
     normalized = actor_id.strip().lower()
     if not normalized:
         return False
+    if "/" not in normalized and "~" not in normalized:
+        return False
     # Generic browsing actors do not return the structured contract Startup Hunt expects.
     if normalized in {"apify/rag-web-browser", "rag-web-browser"}:
+        return False
+    if "linkedin-jobs-scraper" in normalized:
         return False
     return True
 
@@ -643,11 +933,30 @@ async def _fetch_ashby(client: httpx.AsyncClient, source: StartupHuntSourceConfi
     if not board_name:
         return []
 
-    response = await client.get(
-        f"https://api.ashbyhq.com/posting-api/job-board/{board_name}",
-        params={"includeCompensation": "true"},
-    )
-    response.raise_for_status()
+    try:
+        response = await client.get(
+            f"https://api.ashbyhq.com/posting-api/job-board/{board_name}",
+            params={"includeCompensation": "true"},
+        )
+        response.raise_for_status()
+    except httpx.HTTPStatusError as exc:
+        if exc.response is not None and exc.response.status_code == 404:
+            fallback_url = (
+                str(source.metadata.get("careers_url") or "").strip()
+                or str(source.metadata.get("company_website_url") or "").strip()
+                or source.url
+            )
+            if fallback_url:
+                fallback_source = StartupHuntSourceConfig(
+                    type="startup_company",
+                    name=source.name,
+                    company=source.company,
+                    slug=source.slug,
+                    url=fallback_url,
+                    metadata=source.metadata,
+                )
+                return await _fetch_startup_company(client, fallback_source, {"query": source.metadata.get("target_role") or "AI/ML Engineer", **{"location": source.metadata.get("city") or "Germany", "country": source.metadata.get("country") or "Germany"}})
+        raise
     payload = response.json()
     opportunities: list[dict[str, Any]] = []
     company_payload = _base_company_payload(source)
@@ -721,6 +1030,7 @@ async def _fetch_startup_company(
     page_text = ""
     page_contacts: list[dict[str, Any]] = []
     careers_url = company_payload.get("company_careers_url")
+    exact_job_url: str | None = None
     page_url = source.url or careers_url or company_payload.get("company_website_url")
     if page_url:
         try:
@@ -730,6 +1040,7 @@ async def _fetch_startup_company(
             if not careers_url:
                 careers_url = _extract_careers_url(html, page_url)
                 company_payload["company_careers_url"] = careers_url
+            exact_job_url = _extract_matching_job_url(html, page_url, payload["query"])
             inferred = await _infer_company_metadata(page_text, source.company, payload["query"])
             company_payload = {**company_payload, **{k: v for k, v in inferred.items() if v is not None}}
         except Exception:
@@ -737,9 +1048,10 @@ async def _fetch_startup_company(
 
     contacts = _merge_contacts(_contacts_from_metadata(source.metadata, source.company), page_contacts)
     role = source.metadata.get("target_role") or payload["query"]
+    opportunity_kind = "job" if exact_job_url else "outreach_lead"
     return [
         {
-            "opportunity_kind": "outreach_lead",
+            "opportunity_kind": opportunity_kind,
             "company_name": source.company,
             "company_domain": extract_domain(company_payload.get("company_website_url")),
             "company_website_url": company_payload.get("company_website_url"),
@@ -749,9 +1061,9 @@ async def _fetch_startup_company(
             "country": company_payload.get("country"),
             "source_name": source.name,
             "source_type": source.type,
-            "direct_apply_url": careers_url,
-            "canonical_job_url": canonicalize_url(careers_url) if careers_url else None,
-            "portal_job_url": source.url,
+            "direct_apply_url": exact_job_url,
+            "canonical_job_url": canonicalize_url(exact_job_url) if exact_job_url else None,
+            "portal_job_url": source.url or careers_url,
             "posted_at": None,
             "company_payload": company_payload,
             "contacts": contacts,
@@ -776,7 +1088,10 @@ async def _fetch_startup_directory(
 ) -> list[dict[str, Any]]:
     if not source.url:
         return []
-    html = await _fetch_html_with_optional_scrapling(client, source.url)
+    if "startupmap.one" in _source_host(source):
+        html = await _fetch_startupmap_html(client, source.url, payload)
+    else:
+        html = await _fetch_html_with_optional_scrapling(client, source.url)
     directory_text = _html_to_text(html)
     if "startupmap.one" in _source_host(source):
         startup_entries = await _extract_startupmap_entries(html, source, payload, strategy)
@@ -798,14 +1113,16 @@ async def _fetch_startup_directory(
             "company_website_url": entry.get("company_website_url"),
             "company_careers_url": entry.get("company_careers_url"),
             "source_tags": entry.get("tags", []),
+            "dynamic_provider": source.metadata.get("dynamic_provider"),
         }
         contacts = _merge_contacts(
             entry.get("contacts", []),
             _contacts_from_page(entry.get("detail_html", ""), entry.get("detail_url") or source.url),
         )
+        opportunity_kind = "job" if company_payload.get("company_careers_url") else "outreach_lead"
         opportunities.append(
             {
-                "opportunity_kind": "outreach_lead",
+                "opportunity_kind": opportunity_kind,
                 "company_name": company_name,
                 "company_domain": extract_domain(company_payload.get("company_website_url")),
                 "company_website_url": company_payload.get("company_website_url"),
@@ -1067,21 +1384,37 @@ async def _fetch_google_web(
         return []
 
     query = _build_web_query(payload, strategy)
-    response = await client.get(
-        "https://www.googleapis.com/customsearch/v1",
-        params={
-            "key": settings.google_cse_api_key,
-            "cx": settings.google_cse_cx,
-            "q": query,
-            "num": min(max(payload.get("result_limit", 10), 1), 10),
-            "dateRestrict": _google_date_restrict(payload.get("posted_within_hours")),
-        },
-    )
-    response.raise_for_status()
-    data = response.json()
+    target = max(int(payload.get("web_limit", 0) or 0), int(payload.get("result_limit", 15) or 15))
+    target = max(1, min(target * 2, 50))
+
+    raw_items: list[dict[str, Any]] = []
+    start = 1
+    while len(raw_items) < target and start <= 91:
+        response = await client.get(
+            "https://www.googleapis.com/customsearch/v1",
+            params={
+                "key": settings.google_cse_api_key,
+                "cx": settings.google_cse_cx,
+                "q": query,
+                "num": min(10, target - len(raw_items)),
+                "start": start,
+                "dateRestrict": _google_date_restrict(payload.get("posted_within_hours")),
+            },
+        )
+        if response.status_code in (400, 429):
+            break
+        response.raise_for_status()
+        data = response.json()
+        page = data.get("items", []) or []
+        if not page:
+            break
+        raw_items.extend(page)
+        start += len(page)
+        if len(page) < 10:
+            break
 
     opportunities: list[dict[str, Any]] = []
-    for item in data.get("items", []) or []:
+    for item in raw_items:
         link = str(item.get("link", "")).strip()
         title = str(item.get("title", "")).strip()
         snippet = str(item.get("snippet", "")).strip()
@@ -1089,6 +1422,7 @@ async def _fetch_google_web(
             continue
 
         company_name = _infer_company_from_search_result(title, link)
+        role_title = _role_title_from_search_result(title, payload["query"])
         company_payload = {
             "stage": None,
             "company_size": None,
@@ -1098,7 +1432,7 @@ async def _fetch_google_web(
             "ai_relevance": snippet,
             "relocation_support": "relocation" if "relocation" in normalize_text(snippet) else None,
             "company_website_url": _root_url(link),
-            "company_careers_url": link if any(token in link.lower() for token in ["/careers", "/jobs", "greenhouse.io", "lever.co"]) else None,
+            "company_careers_url": link if any(token in link.lower() for token in ["/careers", "/jobs", "greenhouse.io", "lever.co", "ashbyhq.com", "workable.com", "smartrecruiters.com"]) else None,
             "source_tags": ["google-web"],
         }
         opportunities.append(
@@ -1108,7 +1442,7 @@ async def _fetch_google_web(
                 "company_domain": extract_domain(link),
                 "company_website_url": company_payload["company_website_url"],
                 "company_careers_url": company_payload["company_careers_url"],
-                "role_title": payload["query"],
+                "role_title": role_title,
                 "location": payload["location"],
                 "country": payload.get("country"),
                 "source_name": source.name,
@@ -1140,14 +1474,23 @@ async def _fetch_web_search(
     strategy: dict[str, Any],
 ) -> list[dict[str, Any]]:
     query = _build_web_query(payload, strategy)
-    html = await _search_html(client, query)
-    matches = _filter_search_matches(_parse_search_results(html), mode="web")
+    target = max(int(payload.get("web_limit", 0) or 0), int(payload.get("result_limit", 15) or 15))
+    cse_matches = await _google_cse_search_matches(client, query, target * 2)
+    if cse_matches:
+        matches = _filter_search_matches(cse_matches, mode="web")
+    else:
+        html = await _search_html(client, query)
+        matches = _filter_search_matches(_parse_search_results(html), mode="web")
+    if not matches:
+        return await _fallback_company_page_discovery(client, payload, strategy, mode="web")
     opportunities: list[dict[str, Any]] = []
-    for match in matches[: max(payload.get("web_limit", 0), payload.get("result_limit", 15))]:
+    raw_cap = max(payload.get("web_limit", 0), payload.get("result_limit", 15))
+    for match in matches[: max(raw_cap, raw_cap * 2)]:
         link = match["url"]
         title = match["title"]
         snippet = match["snippet"]
         company_name = _infer_company_from_search_result(title, link)
+        role_title = _role_title_from_search_result(title, payload["query"])
         company_payload = {
             "stage": None,
             "company_size": None,
@@ -1167,7 +1510,7 @@ async def _fetch_web_search(
                 "company_domain": extract_domain(link),
                 "company_website_url": company_payload["company_website_url"],
                 "company_careers_url": company_payload["company_careers_url"],
-                "role_title": payload["query"],
+                "role_title": role_title,
                 "location": payload["location"],
                 "country": payload.get("country"),
                 "source_name": source.name,
@@ -1199,14 +1542,23 @@ async def _fetch_ats_discovery(
     strategy: dict[str, Any],
 ) -> list[dict[str, Any]]:
     query = _build_ats_query(payload, strategy)
-    html = await _search_html(client, query)
-    matches = _filter_search_matches(_parse_search_results(html), mode="ats")
+    target = max(int(payload.get("ats_limit", 0) or 0), int(payload.get("result_limit", 15) or 15))
+    cse_matches = await _google_cse_search_matches(client, query, target * 2)
+    if cse_matches:
+        matches = _filter_search_matches(cse_matches, mode="ats")
+    else:
+        html = await _search_html(client, query)
+        matches = _filter_search_matches(_parse_search_results(html), mode="ats")
+    if not matches:
+        return await _fallback_company_page_discovery(client, payload, strategy, mode="ats")
     opportunities: list[dict[str, Any]] = []
-    for match in matches[: max(payload.get("ats_limit", 0), payload.get("result_limit", 15))]:
+    ats_cap = max(payload.get("ats_limit", 0), payload.get("result_limit", 15))
+    for match in matches[: max(ats_cap, ats_cap * 2)]:
         link = match["url"]
         title = match["title"]
         snippet = match["snippet"]
         company_name = _infer_company_from_search_result(title, link)
+        role_title = _role_title_from_search_result(title, payload["query"])
         company_payload = {
             "stage": None,
             "company_size": None,
@@ -1226,7 +1578,7 @@ async def _fetch_ats_discovery(
                 "company_domain": extract_domain(link),
                 "company_website_url": company_payload["company_website_url"],
                 "company_careers_url": company_payload["company_careers_url"],
-                "role_title": payload["query"],
+                "role_title": role_title,
                 "location": payload["location"],
                 "country": payload.get("country"),
                 "source_name": source.name,
@@ -1251,6 +1603,182 @@ async def _fetch_ats_discovery(
     return opportunities
 
 
+async def _fallback_company_page_discovery(
+    client: httpx.AsyncClient,
+    payload: dict[str, Any],
+    strategy: dict[str, Any],
+    mode: str,
+) -> list[dict[str, Any]]:
+    startupmap_url = _build_startupmap_url(payload.get("location"), payload.get("country"))
+    if not startupmap_url:
+        return []
+
+    source = StartupHuntSourceConfig(
+        type="startup_directory",
+        name="StartupMap Fallback",
+        company="startupmap-fallback",
+        url=startupmap_url,
+        metadata={
+            "country": normalize_text(str(payload.get("country") or "germany")),
+            "city": normalize_text(str(payload.get("location") or "")) or "germany",
+            "company_link_patterns": ["/startups/"],
+            "english_friendly": True,
+            "default_stage": payload.get("company_stage") or "seed",
+            "dynamic_provider": "startupmap",
+        },
+    )
+    try:
+        html = await _fetch_startupmap_html(client, startupmap_url, payload)
+        entries = await _extract_startupmap_entries(html, source, payload, strategy)
+    except Exception:
+        return []
+
+    opportunities: list[dict[str, Any]] = []
+    limit = max(1, int(payload.get(f"{mode}_limit", 0) or payload.get("result_limit", 15) or 15))
+    for raw_entry in entries[:limit * 2]:
+        entry = await _enrich_directory_entry_detail(client, dict(raw_entry), payload)
+        detail_url = entry.get("detail_url")
+        company_website_url = _safe_company_website_url(entry.get("company_website_url"))
+        company_careers_url = entry.get("company_careers_url")
+        emitted = False
+        page_urls = [url for url in [company_careers_url, company_website_url, detail_url] if url]
+        for page_url in page_urls:
+            try:
+                page_html = await _fetch_html_with_optional_scrapling(client, page_url)
+            except Exception:
+                continue
+            if not company_careers_url:
+                company_careers_url = _extract_careers_url(page_html, page_url)
+            if not company_website_url:
+                company_website_url = _safe_company_website_url(_extract_company_website_url(page_html, page_url))
+            if mode == "ats" and company_careers_url and _is_ats_url(company_careers_url):
+                opportunities.append(
+                    _build_runtime_discovery_opportunity(
+                        payload=payload,
+                        entry=entry,
+                        source_name="ATS Discovery",
+                        source_type="ats_discovery",
+                        company_website_url=company_website_url,
+                        company_careers_url=company_careers_url,
+                        portal_job_url=detail_url or company_careers_url,
+                        snippet=(entry.get("summary") or ""),
+                    )
+                )
+                emitted = True
+                break
+            if mode == "web":
+                opportunities.append(
+                    _build_runtime_discovery_opportunity(
+                        payload=payload,
+                        entry=entry,
+                        source_name="Web Discovery",
+                        source_type="web_search",
+                        company_website_url=company_website_url,
+                        company_careers_url=company_careers_url,
+                        portal_job_url=detail_url or company_website_url or company_careers_url,
+                        snippet=(entry.get("summary") or ""),
+                    )
+                )
+                emitted = True
+                break
+        if mode == "web" and not emitted and (detail_url or company_website_url or company_careers_url):
+            opportunities.append(
+                _build_runtime_discovery_opportunity(
+                    payload=payload,
+                    entry=entry,
+                    source_name="Web Discovery",
+                    source_type="web_search",
+                    company_website_url=company_website_url,
+                    company_careers_url=company_careers_url,
+                    portal_job_url=detail_url or company_website_url or company_careers_url,
+                    snippet=(entry.get("summary") or ""),
+                )
+            )
+        if len(opportunities) >= limit:
+            break
+    return opportunities[:limit]
+
+
+async def _fetch_startupmap_html(client: httpx.AsyncClient, startupmap_url: str, payload: dict[str, Any]) -> str:
+    import asyncio
+
+    candidate_urls = [startupmap_url]
+    root_url = "https://startupmap.one/startups"
+    country_url = _build_startupmap_url(None, payload.get("country"))
+    for candidate in [root_url, country_url]:
+        if candidate and candidate not in candidate_urls:
+            candidate_urls.append(candidate)
+
+    last_exc: Exception | None = None
+    for candidate_url in candidate_urls:
+        for _ in range(2):
+            try:
+                return await _fetch_html_with_optional_scrapling(client, candidate_url)
+            except httpx.HTTPStatusError as exc:
+                last_exc = exc
+                if exc.response.status_code not in {429, 500, 502, 503, 504}:
+                    raise
+                await asyncio.sleep(1.5)
+            except Exception as exc:
+                last_exc = exc
+                break
+    if last_exc:
+        raise last_exc
+    raise RuntimeError("StartupMap fetch failed without an explicit exception")
+
+
+def _build_runtime_discovery_opportunity(
+    payload: dict[str, Any],
+    entry: dict[str, Any],
+    source_name: str,
+    source_type: str,
+    company_website_url: str | None,
+    company_careers_url: str | None,
+    portal_job_url: str | None,
+    snippet: str,
+) -> dict[str, Any]:
+    company_payload = {
+        "stage": entry.get("stage"),
+        "company_size": entry.get("company_size"),
+        "country": entry.get("country") or payload.get("country"),
+        "city": entry.get("city") or payload.get("location"),
+        "english_friendly": bool(entry.get("english_friendly")),
+        "ai_relevance": entry.get("ai_relevance") or snippet,
+        "relocation_support": entry.get("relocation_support"),
+        "company_website_url": company_website_url,
+        "company_careers_url": company_careers_url,
+        "source_tags": entry.get("tags", []),
+        "dynamic_provider": entry.get("dynamic_provider"),
+    }
+    return {
+        "opportunity_kind": "job" if company_careers_url else "outreach_lead",
+        "company_name": entry.get("company_name") or "Startup lead",
+        "company_domain": extract_domain(company_website_url or company_careers_url or portal_job_url),
+        "company_website_url": company_website_url,
+        "company_careers_url": company_careers_url,
+        "role_title": payload["query"],
+        "location": entry.get("city") or payload.get("location") or "Germany",
+        "country": entry.get("country") or payload.get("country"),
+        "source_name": source_name,
+        "source_type": source_type,
+        "direct_apply_url": company_careers_url,
+        "canonical_job_url": canonicalize_url(company_careers_url) if company_careers_url else None,
+        "portal_job_url": portal_job_url,
+        "posted_at": None,
+        "company_payload": company_payload,
+        "contacts": entry.get("contacts", []),
+        "raw_text": f'{payload["query"]} {entry.get("company_name") or ""} {snippet}',
+        "citation": {
+            "source_name": source_name,
+            "canonical_url": canonicalize_url(portal_job_url) if portal_job_url else "",
+            "job_url": company_careers_url or portal_job_url or "",
+            "posted_at": None,
+            "evidence": ["Recovered via company-page fallback discovery"],
+            "extraction_note": "Fallback discovery inspected startup pages directly when search-engine result parsing returned nothing.",
+        },
+    }
+
+
 async def _fetch_apify_actor(
     client: httpx.AsyncClient,
     source: StartupHuntSourceConfig,
@@ -1260,16 +1788,42 @@ async def _fetch_apify_actor(
     actor_id = source.metadata.get("actor_id") or settings.apify_startup_hunt_actor_id
     if not settings.apify_api_token or not actor_id:
         return []
+    contract = str(source.metadata.get("actor_output_type") or "").strip().lower()
+    source_payload = dict(payload)
+    if source.metadata.get("location"):
+        source_payload["__source_location"] = source.metadata["location"]
+    if _is_startup_jobs_intelligence_actor(actor_id):
+        try:
+            items = await _run_apify_actor(
+                client,
+                actor_id,
+                _startup_jobs_intelligence_input(source_payload, strategy, minimal=False),
+            )
+        except httpx.HTTPStatusError as exc:
+            if exc.response.status_code != 400:
+                raise
+            items = await _run_apify_actor(
+                client,
+                actor_id,
+                _startup_jobs_intelligence_input(source_payload, strategy, minimal=True),
+            )
+        return _normalize_apify_items(
+            items,
+            source.name,
+            source.type,
+            payload,
+            contract or "startup_jobs_intelligence_v1",
+        )
     run_input = {
         "query": payload["query"],
+        "queries": _ai_engineer_family_variants(payload["query"])[:6],
         "location": payload["location"],
         "country": payload.get("country"),
         "strategy": strategy,
         "limit": payload.get("result_limit", 15),
     }
     items = await _run_apify_actor(client, actor_id, run_input)
-    contract = str(source.metadata.get("actor_output_type") or "startup_hunt_v1").strip().lower()
-    return _normalize_apify_items(items, source.name, source.type, payload, contract)
+    return _normalize_apify_items(items, source.name, source.type, payload, contract or "startup_hunt_v1")
 
 
 async def _fetch_indeed_search(
@@ -1282,16 +1836,67 @@ async def _fetch_indeed_search(
     if not settings.apify_api_token or not actor_id:
         return []
     result_limit = max(1, int(payload.get("indeed_limit", 0) or payload.get("result_limit", 15) or 15))
-    run_input = {
-        "title": payload["query"],
-        "location": payload["location"],
+    variants = _ai_engineer_family_variants(payload["query"])[:6]
+    title_query = " OR ".join(f'"{v}"' for v in variants) if variants else payload["query"]
+    search_location = source.metadata.get("location") or payload["location"]
+    is_remote_location = "remote" in normalize_text(str(search_location))
+    run_input: dict[str, Any] = {
+        "title": title_query,
+        "location": search_location,
         "country": _country_code_for_indeed(payload.get("country")),
         "limit": result_limit,
         "datePosted": _indeed_date_posted(payload.get("posted_within_hours")),
     }
+    if is_remote_location:
+        run_input["remoteOnly"] = True
+        run_input["remote"] = True
     items = await _run_apify_actor(client, actor_id, run_input)
     contract = str(source.metadata.get("actor_output_type") or "indeed_v1").strip().lower()
     return _normalize_apify_items(items, source.name, source.type, payload, contract)
+
+
+async def _fetch_theirstack_search(
+    client: httpx.AsyncClient,
+    source: StartupHuntSourceConfig,
+    payload: dict[str, Any],
+    strategy: dict[str, Any],
+) -> list[dict[str, Any]]:
+    if not settings.theirstack_api_key:
+        return []
+
+    result_limit = max(1, int(payload.get("theirstack_limit", 0) or payload.get("result_limit", 15) or 15))
+    request_payload: dict[str, Any] = {
+        "limit": result_limit,
+        "page": 0,
+        "posted_at_max_age_days": max(1, int((payload.get("posted_within_hours") or 168) / 24)),
+        "job_title_pattern_or": _theirstack_title_patterns(payload["query"]),
+        "job_country_code_or": [_country_code_for_indeed(payload.get("country")).upper()],
+        "company_country_code_or": [_country_code_for_indeed(payload.get("country")).upper()],
+    }
+
+    if payload.get("remote_only"):
+        request_payload["remote"] = True
+
+    if _looks_startup_focused(payload, strategy):
+        request_payload["max_employee_count_or_null"] = 1000
+        explicit_stage = normalize_text(str(payload.get("company_stage") or strategy.get("company_stage") or ""))
+        if explicit_stage:
+            funding_stages = _theirstack_funding_stages(payload, strategy)
+            if funding_stages:
+                request_payload["funding_stage_or"] = funding_stages
+
+    response = await client.post(
+        f"{settings.theirstack_base_url.rstrip('/')}/v1/jobs/search",
+        headers={
+            "Authorization": f"Bearer {settings.theirstack_api_key}",
+            "Content-Type": "application/json",
+        },
+        json=request_payload,
+    )
+    response.raise_for_status()
+    data = response.json()
+    items = data if isinstance(data, list) else data.get("data") or data.get("jobs") or data.get("results") or []
+    return _normalize_theirstack_items(items, source.name, source.type, payload)
 
 
 async def _fetch_html_with_optional_scrapling(client: httpx.AsyncClient, url: str) -> str:
@@ -1330,20 +1935,22 @@ async def _run_apify_actor(client: httpx.AsyncClient, actor_id: str, run_input: 
         return []
 
     status = str(run_data.get("status") or "").upper()
-    for _ in range(10):
-        if status in APIFY_TERMINAL_STATUSES:
-            break
-        if run_id:
-            run_res = await client.get(
-                f"{base}/actor-runs/{run_id}",
-                params={"token": token},
-            )
-            run_res.raise_for_status()
-            run_data = run_res.json().get("data", {}) or run_data
-            status = str(run_data.get("status") or "").upper()
-            if status in APIFY_TERMINAL_STATUSES:
-                break
-        await asyncio.sleep(2)
+    max_wait_seconds = max(30, int(getattr(settings, "startup_hunt_apify_poll_seconds", 120)))
+    elapsed = 0.0
+    delay = 2.0
+    while status not in APIFY_TERMINAL_STATUSES and elapsed < max_wait_seconds:
+        await asyncio.sleep(delay)
+        elapsed += delay
+        delay = min(delay * 1.4, 8.0)
+        if not run_id:
+            continue
+        run_res = await client.get(
+            f"{base}/actor-runs/{run_id}",
+            params={"token": token},
+        )
+        run_res.raise_for_status()
+        run_data = run_res.json().get("data", {}) or run_data
+        status = str(run_data.get("status") or "").upper()
 
     if status and status != "SUCCEEDED":
         return []
@@ -1365,7 +1972,9 @@ def _normalize_apify_items(
     contract: str,
 ) -> list[dict[str, Any]]:
     opportunities: list[dict[str, Any]] = []
-    for item in items[: payload.get("result_limit", 15)]:
+    base_limit = max(1, int(payload.get("apify_limit", 0) or payload.get("result_limit", 15) or 15))
+    limit = min(base_limit * 3, 60)
+    for item in items[:limit]:
         if not isinstance(item, dict):
             continue
         mapped = _map_apify_item(item, contract, payload)
@@ -1384,7 +1993,7 @@ def _normalize_apify_items(
             "english_friendly": mapped["english_friendly"],
             "ai_relevance": mapped["ai_relevance"] or snippet,
             "relocation_support": mapped["relocation_support"],
-            "company_website_url": mapped["company_website_url"] or _root_url(url),
+            "company_website_url": _safe_company_website_url(mapped["company_website_url"]) or _root_url(url),
             "company_careers_url": mapped["company_careers_url"] or (url if any(token in url.lower() for token in ["/careers", "/jobs", "greenhouse.io", "lever.co"]) else None),
             "source_tags": mapped["tags"],
         }
@@ -1436,6 +2045,75 @@ def _normalize_apify_items(
     return opportunities
 
 
+def _normalize_theirstack_items(
+    items: list[dict[str, Any]],
+    source_name: str,
+    source_type: str,
+    payload: dict[str, Any],
+) -> list[dict[str, Any]]:
+    opportunities: list[dict[str, Any]] = []
+    for item in items[: payload.get("theirstack_limit", 0) or payload.get("result_limit", 15)]:
+        if not isinstance(item, dict):
+            continue
+        company_obj = item.get("company_object") if isinstance(item.get("company_object"), dict) else {}
+        title = str(item.get("job_title") or item.get("title") or "").strip() or payload["query"]
+        company_name = str(item.get("company_name") or company_obj.get("name") or "").strip() or "Unknown company"
+        final_url = str(item.get("final_url") or item.get("url") or item.get("job_url") or "").strip()
+        source_url = str(item.get("source_url") or final_url).strip()
+        location = ", ".join([part for part in [item.get("city"), item.get("country")] if isinstance(part, str) and part.strip()]) or str(item.get("location") or payload["location"]).strip()
+        company_website_url = _safe_company_website_url(
+            company_obj.get("domain")
+            or item.get("company_domain")
+            or company_obj.get("url")
+        )
+        if company_website_url and not str(company_website_url).startswith("http"):
+            company_website_url = f"https://{str(company_website_url).lstrip('/')}"
+        company_careers_url = final_url or None
+        description = str(item.get("description") or item.get("job_description") or "").strip()
+        company_payload = {
+            "stage": _humanize_theirstack_stage(company_obj.get("funding_stage")),
+            "company_size": _humanize_employee_count(company_obj.get("employee_count")),
+            "country": item.get("country") or payload.get("country"),
+            "city": item.get("city") or payload.get("location"),
+            "english_friendly": "english" in normalize_text(description) or "english" in normalize_text(title),
+            "ai_relevance": description or title,
+            "relocation_support": "relocation" if "relocation" in normalize_text(description) else None,
+            "company_website_url": company_website_url,
+            "company_careers_url": company_careers_url,
+            "source_tags": ["theirstack", str(item.get("source") or "").strip()],
+        }
+        opportunities.append(
+            {
+                "opportunity_kind": "job",
+                "company_name": company_name,
+                "company_domain": extract_domain(company_website_url or company_careers_url or source_url),
+                "company_website_url": company_website_url,
+                "company_careers_url": company_careers_url,
+                "role_title": title,
+                "location": location,
+                "country": item.get("country") or payload.get("country"),
+                "source_name": source_name,
+                "source_type": source_type,
+                "direct_apply_url": company_careers_url,
+                "canonical_job_url": canonicalize_url(company_careers_url or source_url) if (company_careers_url or source_url) else None,
+                "portal_job_url": source_url or None,
+                "posted_at": parse_dt(str(item.get("date_posted") or item.get("posted_at") or "")),
+                "company_payload": company_payload,
+                "contacts": [],
+                "raw_text": f"{title} {company_name} {description}",
+                "citation": {
+                    "source_name": source_name,
+                    "canonical_url": canonicalize_url(source_url) if source_url else "",
+                    "job_url": company_careers_url or source_url,
+                    "posted_at": item.get("date_posted") or item.get("posted_at"),
+                    "evidence": ["Imported from TheirStack Jobs API"],
+                    "extraction_note": "Result imported from TheirStack hiring search.",
+                },
+            }
+        )
+    return opportunities
+
+
 def _map_apify_item(item: dict[str, Any], contract: str, payload: dict[str, Any]) -> dict[str, Any]:
     if contract == "indeed_v1":
         employer = item.get("employer") if isinstance(item.get("employer"), dict) else {}
@@ -1463,11 +2141,80 @@ def _map_apify_item(item: dict[str, Any], contract: str, payload: dict[str, Any]
             "english_friendly": bool(item.get("englishFriendly") or item.get("english_friendly") or item.get("language") == "en"),
             "ai_relevance": item.get("ai_relevance"),
             "relocation_support": item.get("relocation_support"),
-            "company_website_url": item.get("companyWebsite") or item.get("company_website_url") or employer.get("corporateWebsite"),
+            "company_website_url": _safe_company_website_url(item.get("companyWebsite") or item.get("company_website_url") or employer.get("corporateWebsite")),
             "company_careers_url": item.get("applyUrl") or item.get("company_careers_url"),
             "tags": item.get("tags") or [],
             "contacts": item.get("contacts") or [],
             "posted_at": item.get("datePosted") or item.get("datePublished") or item.get("posted_at"),
+        }
+    if contract == "startup_jobs_intelligence_v1":
+        company_obj = item.get("company") if isinstance(item.get("company"), dict) else {}
+        startup_obj = item.get("startup") if isinstance(item.get("startup"), dict) else {}
+        effective_company = company_obj or startup_obj
+        company_name = str(
+            item.get("companyName")
+            or item.get("company_name")
+            or effective_company.get("name")
+            or item.get("company")
+            or ""
+        ).strip()
+        title = str(item.get("title") or item.get("role") or item.get("jobTitle") or payload["query"]).strip()
+        url = str(
+            item.get("applyUrl")
+            or item.get("jobUrl")
+            or item.get("postingUrl")
+            or item.get("url")
+            or item.get("link")
+            or ""
+        ).strip()
+        description = str(
+            item.get("description")
+            or item.get("summary")
+            or item.get("snippet")
+            or item.get("whyNow")
+            or ""
+        ).strip()
+        tags = item.get("techStack") if isinstance(item.get("techStack"), list) else item.get("tags") or []
+        return {
+            "url": url,
+            "title": title,
+            "company_name": company_name or _infer_company_from_search_result(title, url),
+            "location": str(
+                item.get("location")
+                or item.get("city")
+                or effective_company.get("location")
+                or payload["location"]
+            ).strip(),
+            "snippet": description,
+            "stage": (
+                _humanize_theirstack_stage(item.get("fundingStage"))
+                or _humanize_theirstack_stage(item.get("stage"))
+                or _humanize_theirstack_stage(effective_company.get("fundingStage"))
+            ),
+            "company_size": (
+                _humanize_employee_count(item.get("companySize"))
+                or _humanize_employee_count(item.get("teamSize"))
+                or _humanize_employee_count(effective_company.get("employeeCount"))
+                or _humanize_employee_count(effective_company.get("companySize"))
+            ),
+            "country": item.get("country") or effective_company.get("country") or payload.get("country"),
+            "city": item.get("city") or effective_company.get("city"),
+            "english_friendly": bool(
+                item.get("englishFriendly")
+                or item.get("english_friendly")
+                or "english" in normalize_text(description)
+            ),
+            "ai_relevance": item.get("ai_relevance") or description or " ".join(str(tag) for tag in tags),
+            "relocation_support": item.get("relocation_support") or item.get("relocation") or effective_company.get("relocationSupport"),
+            "company_website_url": _safe_company_website_url(
+                item.get("companyWebsite")
+                or effective_company.get("website")
+                or effective_company.get("domain")
+            ),
+            "company_careers_url": item.get("careersUrl") or item.get("applyUrl") or item.get("jobUrl"),
+            "tags": tags,
+            "contacts": item.get("contacts") or [],
+            "posted_at": item.get("postedAt") or item.get("datePosted") or item.get("posted_at"),
         }
 
     company_name = str(item.get("company") or item.get("companyName") or "").strip()
@@ -1492,6 +2239,45 @@ def _map_apify_item(item: dict[str, Any], contract: str, payload: dict[str, Any]
         "contacts": item.get("contacts") or [],
         "posted_at": item.get("posted_at") or item.get("datePosted"),
     }
+
+
+async def _google_cse_search_matches(client: httpx.AsyncClient, query: str, target: int) -> list[dict[str, str]]:
+    if not settings.google_cse_api_key or not settings.google_cse_cx:
+        return []
+    target = max(1, min(target, 30))
+    out: list[dict[str, str]] = []
+    start = 1
+    while len(out) < target and start <= 91:
+        try:
+            response = await client.get(
+                "https://www.googleapis.com/customsearch/v1",
+                params={
+                    "key": settings.google_cse_api_key,
+                    "cx": settings.google_cse_cx,
+                    "q": query,
+                    "num": min(10, target - len(out)),
+                    "start": start,
+                },
+            )
+            if response.status_code in (400, 429):
+                break
+            response.raise_for_status()
+        except Exception:
+            break
+        data = response.json()
+        page = data.get("items", []) or []
+        if not page:
+            break
+        for item in page:
+            link = str(item.get("link", "")).strip()
+            title = str(item.get("title", "")).strip()
+            snippet = str(item.get("snippet", "")).strip()
+            if link and title:
+                out.append({"url": link, "title": title, "snippet": snippet})
+        start += len(page)
+        if len(page) < 10:
+            break
+    return out
 
 
 async def _search_html(client: httpx.AsyncClient, query: str) -> str:
@@ -1598,13 +2384,13 @@ def _filter_search_matches(matches: list[dict[str, str]], mode: str) -> list[dic
         if any(blocked in domain for blocked in ["duckduckgo.com", "bing.com", "google.com", "apify.com"]):
             continue
         if mode == "ats":
-            if not any(host in domain for host in ["ashbyhq.com", "greenhouse.io", "lever.co", "join.com", "workable.com"]):
+            if not any(host in domain for host in ATS_HOST_MARKERS):
                 continue
         else:
             if not (
                 any(token in path for token in ["/careers", "/jobs", "/job", "/join", "/hiring"])
                 or any(token in title for token in ["career", "job", "hiring", "startup"])
-                or any(host in domain for host in ["ashbyhq.com", "greenhouse.io", "lever.co", "join.com", "workable.com"])
+                or any(host in domain for host in ATS_HOST_MARKERS)
             ):
                 continue
         if url in seen:
@@ -1614,12 +2400,21 @@ def _filter_search_matches(matches: list[dict[str, str]], mode: str) -> list[dic
     return filtered
 
 
+def _location_query_clause(payload: dict[str, Any]) -> str:
+    locations = [loc for loc in _split_locations(payload) if loc]
+    if not locations:
+        return payload.get("location") or ""
+    if len(locations) == 1:
+        return locations[0]
+    return "(" + " OR ".join(f'"{loc}"' for loc in locations) + ")"
+
+
 def _build_web_query(payload: dict[str, Any], strategy: dict[str, Any]) -> str:
     parts = [
-        payload["query"],
-        payload["location"],
+        _search_query_variant(payload["query"], mode="web"),
+        _location_query_clause(payload),
         payload.get("country") or "",
-        "startup jobs OR careers OR hiring",
+        "(startup OR scale-up OR founding OR venture-backed) (jobs OR careers OR hiring)",
     ]
     if strategy.get("company_stage"):
         parts.append(strategy["company_stage"])
@@ -1630,13 +2425,14 @@ def _build_web_query(payload: dict[str, Any], strategy: dict[str, Any]) -> str:
 
 def _build_ats_query(payload: dict[str, Any], strategy: dict[str, Any]) -> str:
     parts = [
-        f'"{payload["query"]}"',
-        payload["location"],
+        _search_query_variant(payload["query"], mode="ats"),
+        _location_query_clause(payload),
         payload.get("country") or "",
-        "(site:jobs.ashbyhq.com OR site:boards.greenhouse.io OR site:job-boards.greenhouse.io OR site:jobs.lever.co)",
+        "(site:jobs.ashbyhq.com OR site:boards.greenhouse.io OR site:job-boards.greenhouse.io OR site:jobs.lever.co OR site:jobs.smartrecruiters.com OR site:apply.workable.com)",
     ]
     if strategy.get("keywords"):
         parts.append(" ".join(strategy["keywords"][:3]))
+    parts.append("(startup OR scale-up OR ai)")
     return " ".join(part for part in parts if part).strip()
 
 
@@ -1692,6 +2488,42 @@ def _country_code_for_indeed(country: str | None) -> str:
     return COUNTRY_CODE_OVERRIDES.get(normalized, "de")
 
 
+def _role_title_from_search_result(title: str, fallback_query: str) -> str:
+    cleaned = title.strip()
+    if not cleaned:
+        return fallback_query.strip() or "AI Engineer"
+    separators = ["|", " - ", " — ", " at ", " · ", "::"]
+    parts: list[str] = [cleaned]
+    for separator in separators:
+        if separator in cleaned:
+            parts = [piece.strip() for piece in cleaned.split(separator) if piece.strip()]
+            break
+    role_keywords = (
+        "engineer",
+        "developer",
+        "scientist",
+        "researcher",
+        "research",
+        "specialist",
+        "analyst",
+        "architect",
+        "intern",
+        "lead",
+        "manager",
+        "consultant",
+        "ml",
+        "ai",
+        "llm",
+        "nlp",
+        "data",
+    )
+    for piece in parts:
+        lowered = piece.lower()
+        if any(token in lowered for token in role_keywords):
+            return re.sub(r"\s+", " ", piece)[:160]
+    return re.sub(r"\s+", " ", parts[0])[:160]
+
+
 def _infer_company_from_search_result(title: str, url: str) -> str:
     separators = ["|", "-", " at "]
     for separator in separators:
@@ -1708,7 +2540,180 @@ def _root_url(url: str) -> str | None:
     parsed = urlparse(url)
     if not parsed.scheme or not parsed.netloc:
         return None
-    return f"{parsed.scheme}://{parsed.netloc}"
+    root = f"{parsed.scheme}://{parsed.netloc}"
+    domain = extract_domain(root)
+    if not domain:
+        return None
+    if any(marker in domain for marker in SHORTENER_OR_PROXY_HOSTS):
+        return None
+    if any(marker in domain for marker in ATS_HOST_MARKERS):
+        return None
+    return root
+
+
+def _search_query_variant(query: str, mode: str) -> str:
+    variants = [f'"{variant}"' for variant in _ai_engineer_family_variants(query)]
+    joined = " OR ".join(variants[:4])
+    if mode == "web":
+        return f"({joined})"
+    return f"({joined})"
+
+
+def _theirstack_title_patterns(query: str) -> list[str]:
+    return _ai_engineer_family_variants(query)[:6]
+
+
+def _theirstack_funding_stages(payload: dict[str, Any], strategy: dict[str, Any]) -> list[str]:
+    stage_inputs = [
+        normalize_text(str(payload.get("company_stage") or "")),
+        normalize_text(str(strategy.get("company_stage") or "")),
+        normalize_text(str(payload.get("strategy_prompt") or "")),
+    ]
+    joined = " ".join(part for part in stage_inputs if part)
+    if not joined and not _looks_startup_focused(payload, strategy):
+        return []
+
+    stage_map = {
+        "pre-seed": ["pre_seed"],
+        "pre seed": ["pre_seed"],
+        "seed": ["seed"],
+        "early": ["seed", "series_a"],
+        "early access": ["seed", "series_a"],
+        "series a": ["series_a"],
+        "series b": ["series_b"],
+        "series c": ["series_c"],
+        "growth": ["series_b", "series_c"],
+    }
+
+    selected: list[str] = []
+    for needle, mapped in stage_map.items():
+        if needle in joined:
+            for value in mapped:
+                if value not in selected:
+                    selected.append(value)
+
+    if selected:
+        return selected
+    if _looks_startup_focused(payload, strategy):
+        return ["pre_seed", "seed", "series_a", "series_b"]
+    return []
+
+
+def _is_startup_jobs_intelligence_actor(actor_id: str | None) -> bool:
+    normalized = normalize_text(actor_id or "").replace("~", "/")
+    return normalized.endswith("brilliant_gum/startup-jobs-intelligence")
+
+
+def _startup_jobs_intelligence_seniority(strategy: dict[str, Any]) -> str | None:
+    preference = normalize_text(str(strategy.get("seniority_preference") or ""))
+    mapping = {
+        "junior": "entry",
+        "mid": "mid",
+        "senior": "senior",
+        "staff_plus": "staff",
+    }
+    return mapping.get(preference)
+
+
+def _startup_jobs_intelligence_input(
+    payload: dict[str, Any],
+    strategy: dict[str, Any],
+    *,
+    minimal: bool = False,
+) -> dict[str, Any]:
+    result_limit = max(1, int(payload.get("apify_limit", 0) or payload.get("result_limit", 15) or 15))
+    base_query = (payload.get("query") or "AI Engineer").strip()
+    search_location = payload.get("__source_location") or payload.get("location") or payload.get("country") or "Germany"
+    is_remote_location = "remote" in normalize_text(str(search_location))
+    actor_input: dict[str, Any] = {
+        "keywords": base_query,
+        "searchTerm": base_query,
+        "search": base_query,
+        "query": base_query,
+        "location": search_location,
+        "maxResults": min(result_limit * 2, 50),
+        "maxItems": min(result_limit * 2, 50),
+    }
+    if payload.get("remote_only") or is_remote_location:
+        actor_input["remoteOnly"] = True
+        actor_input["remote"] = True
+    if minimal:
+        return actor_input
+
+    funding_stage = _theirstack_funding_stages(payload, strategy)
+    if funding_stage:
+        actor_input["fundingStage"] = funding_stage
+    seniority = _startup_jobs_intelligence_seniority(strategy)
+    if seniority:
+        actor_input["seniority"] = seniority
+    if payload.get("country"):
+        actor_input["country"] = payload.get("country")
+    if _looks_startup_focused(payload, strategy):
+        actor_input["sources"] = ["workatastartup", "greenhouse"]
+    return actor_input
+
+
+def _humanize_theirstack_stage(value: Any) -> str | None:
+    if value is None:
+        return None
+    text = normalize_text(str(value))
+    if not text:
+        return None
+    mapping = {
+        "pre_seed": "Pre-Seed",
+        "seed": "Seed",
+        "series_a": "Series A",
+        "series_b": "Series B",
+        "series_c": "Series C",
+        "series_d": "Series D+",
+        "bootstrapped": "Bootstrapped",
+        "public": "Public",
+    }
+    return mapping.get(text, text.replace("_", " ").title())
+
+
+def _humanize_employee_count(value: Any) -> str | None:
+    if value is None:
+        return None
+    if isinstance(value, str):
+        text = value.strip()
+        if not text:
+            return None
+        return text
+    if not isinstance(value, (int, float)):
+        return None
+
+    count = int(value)
+    if count <= 10:
+        return "1 to 10"
+    if count <= 50:
+        return "11 to 50"
+    if count <= 200:
+        return "51 to 200"
+    if count <= 500:
+        return "201 to 500"
+    if count <= 1000:
+        return "501 to 1000"
+    if count <= 5000:
+        return "1001 to 5000"
+    if count <= 10000:
+        return "5001 to 10000"
+    return "10,000+"
+
+
+def _safe_company_website_url(url: str | None) -> str | None:
+    if not url:
+        return None
+    if not _is_probable_company_url(url):
+        return None
+    return url
+
+
+def _is_ats_url(url: str | None) -> bool:
+    domain = extract_domain(url)
+    if not domain:
+        return False
+    return any(marker in domain for marker in ATS_HOST_MARKERS)
 
 
 async def _extract_startup_directory_entries(
@@ -2148,11 +3153,37 @@ def _extract_careers_url(html: str, page_url: str) -> str | None:
     links = re.findall(r'href=["\']([^"\']+)["\']', html, flags=re.I)
     for link in links:
         lowered = link.lower()
-        if any(token in lowered for token in ["/careers", "/jobs", "greenhouse.io", "lever.co", "join.com"]):
+        if any(token in lowered for token in ["/careers", "/jobs", "/job", "greenhouse.io", "lever.co", "join.com", "workable.com", "smartrecruiters.com", "myworkdayjobs.com", "kenjo.io", "teamtailor.com", "personio"]):
             if lowered.startswith("http"):
                 return link
             return urljoin(page_url, link)
     return None
+
+
+def _extract_matching_job_url(html: str, page_url: str, target_role: str) -> str | None:
+    link_matches = re.findall(r'<a[^>]+href=["\']([^"\']+)["\'][^>]*>(.*?)</a>', html, flags=re.I | re.S)
+    if not link_matches:
+        return None
+
+    query_tokens = set(tokenize(target_role))
+    best_url: str | None = None
+    best_score = 0
+    for href, label_html in link_matches:
+        label = _html_to_text(label_html)
+        if not label:
+            continue
+        absolute_url = href if href.startswith("http") else urljoin(page_url, href)
+        lowered_url = absolute_url.lower()
+        if not any(token in lowered_url for token in ["/jobs", "/job", "/careers", "greenhouse.io", "lever.co", "ashbyhq.com", "workable.com", "smartrecruiters.com", "myworkdayjobs.com", "personio", "teamtailor", "kenjo.io"]):
+            continue
+        label_tokens = set(tokenize(label))
+        score = len(query_tokens & label_tokens)
+        if "senior" in label.lower() and "senior" not in target_role.lower():
+            score -= 1
+        if score > best_score:
+            best_score = score
+            best_url = absolute_url
+    return best_url if best_score > 0 else None
 
 
 def _extract_company_website_url(html: str, page_url: str) -> str | None:
@@ -2190,7 +3221,7 @@ def _is_probable_company_url(url: str | None, page_url: str | None = None) -> bo
         return False
     if any(marker in domain for marker in INFRASTRUCTURE_HOST_MARKERS):
         return False
-    if any(marker in domain for marker in ["startupmap.one", "facebook.com", "instagram.com", "x.com", "twitter.com", "linkedin.com"]):
+    if any(marker in domain for marker in [*SHORTENER_OR_PROXY_HOSTS, "startupmap.one", "facebook.com", "instagram.com", "x.com", "twitter.com", "linkedin.com"]):
         return False
     return True
 
@@ -2343,56 +3374,91 @@ def _score_opportunity(
     payload: dict[str, Any],
     strategy: dict[str, Any],
     existing_opportunities: dict[str, dict[str, Any]],
-) -> dict[str, Any] | None:
+) -> tuple[dict[str, Any] | None, str | None]:
     query_tokens = tokenize(payload["query"])
+    normalized_title = normalize_text(item["role_title"])
     location_target = normalize_text(payload["location"])
     country_target = normalize_text(payload.get("country") or "")
     raw_text = normalize_text(item.get("raw_text", ""))
     company_payload = item.get("company_payload") or {}
     location_text = normalize_text(item["location"])
     company_stage = normalize_text(str(company_payload.get("stage", "") or ""))
+    company_size = normalize_text(str(company_payload.get("company_size", "") or ""))
     ai_relevance = normalize_text(str(company_payload.get("ai_relevance", "") or ""))
     direct_url = item.get("direct_apply_url")
     contacts = item.get("contacts", [])
     posted_at: datetime | None = item.get("posted_at")
     source_type = item["source_type"]
     source_bucket = _result_source_bucket(item)
+    seniority_preference = (
+        _normalize_seniority_preference(strategy.get("seniority_preference"))
+        or _infer_seniority_preference_from_prompt(payload.get("strategy_prompt"))
+    )
+    strict_mid_preference = _strict_mid_level_preference(payload.get("strategy_prompt"), seniority_preference)
+    role_seniority = _role_seniority_level(item["role_title"], raw_text)
+    stack_signals = _query_stack_signals(payload["query"])
 
-    if query_tokens and not any(token in raw_text or token in normalize_text(item["role_title"]) for token in query_tokens):
-        return None
+    is_outreach_lead = item.get("opportunity_kind") == "outreach_lead"
+
+    if query_tokens and not any(token in raw_text or token in normalized_title for token in query_tokens):
+        if not (is_outreach_lead and ai_relevance):
+            return None, "Missing query keyword match"
+
+    if not is_outreach_lead and not _role_title_matches_query(payload["query"], item["role_title"], raw_text):
+        return None, "Role title did not match requested role family"
+
+    if strict_mid_preference and role_seniority in {"senior", "staff_plus"}:
+        return None, "Role seniority exceeded the requested mid-level range"
+
+    max_years = _max_years_allowed(payload.get("strategy_prompt"), seniority_preference)
+    if max_years is not None and not is_outreach_lead:
+        min_years_required = _extract_min_years_required(item.get("raw_text", "") or "")
+        if min_years_required is not None and min_years_required > max_years:
+            return None, f"Role requires {min_years_required}+ years experience (limit {max_years})"
 
     if payload.get("direct_links_only") and not direct_url:
-        return None
+        return None, "Direct links only filter removed this result"
 
     if payload.get("english_friendly_only") and not bool(company_payload.get("english_friendly")):
         languages = [normalize_text(str(v)) for v in company_payload.get("source_tags", [])]
         if "english" not in languages:
-            return None
+            return None, "English-friendly filter removed this result"
 
     if payload.get("company_stage") and payload["company_stage"].strip().lower() not in company_stage:
-        return None
+        return None, "Company stage filter removed this result"
 
-    if location_target not in location_text and country_target and country_target not in location_text:
-        company_country = normalize_text(str(company_payload.get("country", "") or ""))
-        if country_target and country_target != company_country:
-            return None
+    is_remote = "remote" in location_text or "anywhere" in location_text or "distributed" in location_text
+    location_targets = [normalize_text(loc) for loc in _split_locations(payload)] or [location_target]
+    matched_any_location = False
+    for target in location_targets:
+        if not target:
+            continue
+        if target == "remote" or target == "anywhere":
+            if is_remote:
+                matched_any_location = True
+                break
+            continue
+        if _location_matches(target, country_target, location_text, company_payload, is_remote):
+            matched_any_location = True
+            break
+    if not matched_any_location:
+        return None, "Location filter removed this result"
 
-    is_remote = "remote" in location_text
     if payload.get("remote_only") and not is_remote:
-        return None
+        return None, "Remote-only filter removed this result"
 
     age_hours = 999999.0
     if posted_at:
         age_hours = max(0.0, (now_utc() - posted_at).total_seconds() / 3600)
         cutoff = payload.get("posted_within_hours")
         if cutoff is not None and age_hours > cutoff:
-            return None
+            return None, "Freshness filter removed this result"
 
     score = 0.0
     labels: list[str] = []
     reasons: list[str] = []
 
-    token_hits = [token for token in query_tokens if token in raw_text]
+    token_hits = [token for token in query_tokens if token in raw_text or token in normalized_title]
     score += len(token_hits) * 4
     if token_hits:
         reasons.append(f"Matched role keywords: {', '.join(sorted(set(token_hits)))}")
@@ -2419,6 +3485,44 @@ def _score_opportunity(
     if item["opportunity_kind"] == "outreach_lead":
         score += 1.5
 
+    if seniority_preference == "mid":
+        if role_seniority == "mid":
+            score += 2
+            reasons.append("Role seniority aligns with mid-level preference")
+        elif role_seniority == "junior":
+            score -= 1.5
+        elif role_seniority == "senior":
+            score -= 7
+            reasons.append("Senior title penalized for mid-level preference")
+        elif role_seniority == "staff_plus":
+            score -= 10
+            reasons.append("Staff/principal title heavily penalized for mid-level preference")
+    elif seniority_preference == "junior":
+        if role_seniority == "junior":
+            score += 2.5
+            reasons.append("Role seniority aligns with junior preference")
+        elif role_seniority in {"senior", "staff_plus"}:
+            score -= 5
+    elif seniority_preference == "senior":
+        if role_seniority in {"senior", "staff_plus"}:
+            score += 2
+            reasons.append("Role seniority aligns with senior preference")
+
+    if _looks_startup_focused(payload, strategy):
+        if _is_startup_sized(company_size):
+            score += 2
+            labels.append("Hidden Gem")
+            reasons.append(f"Startup-sized team signal: {company_payload.get('company_size')}")
+        elif _is_large_company(company_size):
+            if any(term in company_size for term in ["10000", "10,000", "5001", "enterprise"]):
+                score -= 8
+                reasons.append("Large enterprise team size penalized for startup-focused hunt")
+            elif any(term in company_size for term in ["1001", "large"]):
+                score -= 5
+                reasons.append("Larger-company team size penalized for startup-focused hunt")
+            else:
+                score -= 3
+
     if company_stage:
         desired_stage = strategy.get("company_stage") or normalize_text(payload.get("company_stage") or "")
         if desired_stage and desired_stage in company_stage:
@@ -2433,6 +3537,10 @@ def _score_opportunity(
             score += 2
             labels.append("AI/ML Fit")
             reasons.append(f"Company signal: {company_payload.get('ai_relevance')}")
+        stack_hits = [signal for signal in stack_signals if signal in ai_relevance or signal in raw_text or signal in normalized_title]
+        if stack_hits:
+            score += min(len(stack_hits), 2) * 0.75
+            reasons.append(f"Modern AI stack signal: {', '.join(sorted(set(stack_hits)))}")
 
     if bool(company_payload.get("english_friendly")):
         score += 1
@@ -2455,6 +3563,16 @@ def _score_opportunity(
     elif source_bucket == "crawler":
         score += 0.5
 
+    if _looks_startup_focused(payload, strategy):
+        if source_bucket == "startupmap":
+            score += 1.25
+            reasons.append("Startup directory source boosted for hidden-gem discovery")
+        elif source_bucket == "web":
+            score += 1.0
+            reasons.append("Web-discovered startup lead boosted for hidden-gem discovery")
+        elif source_bucket == "crawler":
+            score += 0.75
+
     if strategy.get("hidden_gem_signals"):
         score += min(len(strategy["hidden_gem_signals"]), 2)
 
@@ -2464,7 +3582,7 @@ def _score_opportunity(
     citation = item["citation"]
     citation["evidence"] = (citation.get("evidence") or []) + reasons[:3]
 
-    return {
+    return ({
         "company_name": item["company_name"],
         "company_domain": item["company_domain"],
         "company_website_url": item.get("company_website_url"),
@@ -2490,7 +3608,7 @@ def _score_opportunity(
         "saved_opportunity_id": existing.get("id") if existing else None,
         "rank_age_hours": age_hours,
         "source_bucket": source_bucket,
-    }
+    }, None)
 
 
 def _dedupe_opportunities(items: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -2522,8 +3640,324 @@ def _dedupe_opportunities(items: list[dict[str, Any]]) -> list[dict[str, Any]]:
         if canonical_index in seen_groups:
             continue
         seen_groups.add(canonical_index)
-        output.append(groups[canonical_index])
+        output.append(_finalize_merged_opportunity(groups[canonical_index]))
     return output
+
+
+def _looks_startup_focused(payload: dict[str, Any], strategy: dict[str, Any]) -> bool:
+    prompt = normalize_text(payload.get("strategy_prompt") or "")
+    if payload.get("company_stage"):
+        return True
+    if strategy.get("hidden_gem_signals"):
+        return True
+    return any(term in prompt for term in ["startup", "start-up", "hidden gem", "founder-led", "early access", "seed", "pre-seed"])
+
+
+def _is_startup_sized(company_size: str) -> bool:
+    if not company_size:
+        return False
+    return any(term in company_size for term in ["1 to 10", "11 to 50", "51 to 200", "201 to 500", "1-10", "11-50", "51-200", "201-500", "100-500", "under 500"])
+
+
+def _is_large_company(company_size: str) -> bool:
+    if not company_size:
+        return False
+    return any(term in company_size for term in ["1001", "5001", "10,000", "10000", "5000+", "10000+", "2,900+", "2900+", "10,000+", "1001 to 5000", "large", "enterprise"])
+
+
+def _normalize_seniority_preference(value: str | None) -> str | None:
+    text = normalize_text(value or "")
+    if not text:
+        return None
+    if text in {"junior", "entry", "entry level", "entry-level", "graduate", "new grad", "intern", "internship"}:
+        return "junior"
+    if text in {
+        "mid",
+        "mid-level",
+        "mid level",
+        "midlevel",
+        "intermediate",
+        "ic",
+        "ic role",
+        "individual contributor",
+        "3+ years",
+        "3 years",
+        "2-5 years",
+        "3-5 years",
+        "not senior",
+    }:
+        return "mid"
+    if text in {"senior", "sr", "sr.", "lead", "lead role", "lead-level", "lead level"}:
+        return "senior"
+    if text in {"staff", "staff+", "staff_plus", "principal", "head", "director"}:
+        return "staff_plus"
+    if "junior" in text or "intern" in text or "entry" in text or "graduate" in text:
+        return "junior"
+    if "mid" in text or "intermediate" in text or "3+" in text or "ic" in text:
+        return "mid"
+    if "staff" in text or "principal" in text or "head" in text:
+        return "staff_plus"
+    if "senior" in text or " sr" in text or "lead" in text:
+        return "senior"
+    return None
+
+
+def _infer_seniority_preference_from_prompt(prompt: str | None) -> str | None:
+    text = normalize_text(prompt or "")
+    if not text:
+        return None
+    if any(term in text for term in ["entry level", "entry-level", "junior", "new grad", "graduate", "0-2 years", "1-2 years"]):
+        return "junior"
+    if any(term in text for term in ["3+ years", "3 years", "mid-level", "mid level", "not senior", "ic role", "individual contributor", "2-5 years", "3-5 years"]):
+        return "mid"
+    if any(term in text for term in ["senior", "staff", "principal", "lead role", "lead-level", "lead level"]):
+        return "senior"
+    return None
+
+
+def _strict_mid_level_preference(prompt: str | None, seniority_preference: str | None) -> bool:
+    text = normalize_text(prompt or "")
+    if seniority_preference != "mid":
+        return False
+    return any(
+        term in text
+        for term in [
+            "mid-level",
+            "mid level",
+            "3+ years",
+            "3 years",
+            "2-5 years",
+            "3-5 years",
+            "not senior",
+            "not staff",
+            "not principal",
+            "individual contributor",
+            "ic role",
+        ]
+    )
+
+
+_EXPERIENCE_YEAR_PATTERNS = [
+    re.compile(r"(\d{1,2})\s*(?:\+|plus)\s*(?:years?|yrs?|jahre|jahren|ans|años|anni)", re.IGNORECASE),
+    re.compile(r"(?:minimum|at\s+least|min\.?|mindestens|au\s+moins|at\s+a\s+minimum\s+of)\s+(\d{1,2})\s*(?:years?|yrs?|jahre|jahren|ans)", re.IGNORECASE),
+    re.compile(r"(\d{1,2})\s*[-–]\s*\d{1,2}\s*(?:years?|yrs?|jahre|jahren|ans)", re.IGNORECASE),
+    re.compile(r"(\d{1,2})\s*(?:years?|yrs?|jahre|jahren|ans)\s+(?:of\s+)?(?:experience|exp|berufserfahrung|expérience|experiencia|esperienza)", re.IGNORECASE),
+]
+
+
+def _extract_min_years_required(raw_text: str) -> int | None:
+    if not raw_text:
+        return None
+    candidates: list[int] = []
+    for pattern in _EXPERIENCE_YEAR_PATTERNS:
+        for match in pattern.finditer(raw_text):
+            try:
+                value = int(match.group(1))
+            except (ValueError, IndexError):
+                continue
+            if 0 < value <= 25:
+                candidates.append(value)
+    if not candidates:
+        return None
+    return min(candidates)
+
+
+def _max_years_allowed(prompt: str | None, seniority_preference: str | None) -> int | None:
+    text = normalize_text(prompt or "")
+    if seniority_preference == "junior":
+        return 2
+    if seniority_preference == "mid":
+        if "3+ years" in text or "3 years" in text or "2-4 years" in text or "2-3 years" in text:
+            return 4
+        if "4+ years" in text or "4 years" in text or "3-5 years" in text:
+            return 5
+        if "5+ years" in text or "5 years" in text:
+            return 6
+        return 5
+    if seniority_preference == "senior":
+        return None
+    return None
+
+
+def _role_seniority_level(role_title: str, raw_text: str) -> str:
+    title_text = normalize_text(role_title)
+    body_text = normalize_text(raw_text)
+    combined = f"{title_text} {body_text}"
+    if any(term in combined for term in ["principal", "staff", "head of", "director", "vp ", "vice president"]):
+        return "staff_plus"
+    if any(term in combined for term in [" senior", "senior ", "sr ", "sr.", "lead "]):
+        return "senior"
+    if any(term in combined for term in ["junior", "entry level", "entry-level", "graduate", "intern", "werkstudent", "practicum", "praktikum", "praktikant"]):
+        return "junior"
+    return "mid"
+
+
+def _query_specialty_terms(query: str) -> list[str]:
+    query_text = _normalize_role_query_aliases(query)
+    specialties: list[str] = []
+    if any(term in query_text for term in ["applied ai", "ai engineer", "artificial intelligence"]):
+        specialties.append("ai")
+    if any(term in query_text for term in ["machine learning", "ml engineer"]):
+        specialties.append("ml")
+    if "nlp" in query_text or "natural language" in query_text:
+        specialties.append("nlp")
+    if "llm" in query_text:
+        specialties.append("llm")
+    return specialties
+
+
+def _query_stack_signals(query: str) -> list[str]:
+    query_text = _normalize_role_query_aliases(query)
+    signals: list[str] = []
+    if "rag" in query_text:
+        signals.append("rag")
+    if "agent" in query_text:
+        signals.append("agent")
+    if "mlops" in query_text:
+        signals.append("mlops")
+    if "fastapi" in query_text:
+        signals.append("fastapi")
+    return signals
+
+
+def _matches_ai_specialty_query(query: str, role_title: str, raw_text: str) -> bool:
+    query_text = _normalize_role_query_aliases(query)
+    title_text = normalize_text(role_title)
+    body_text = normalize_text(raw_text)
+    specialties = _query_specialty_terms(query)
+    if not specialties:
+        return True
+
+    if "ai engineer" in query_text or "ml engineer" in query_text or "machine learning engineer" in query_text:
+        engineer_aliases = [
+            "ai engineer",
+            "applied ai engineer",
+            "ml engineer",
+            "machine learning engineer",
+            "llm engineer",
+            "mlops engineer",
+            "nlp engineer",
+            "ai platform engineer",
+            "research engineer",
+            "applied research engineer",
+            "ml research engineer",
+        ]
+        if any(alias in title_text for alias in engineer_aliases):
+            return True
+
+    title_hits = 0
+    body_hits = 0
+    title_aliases = {
+        "ai": ["ai", "applied ai", "artificial intelligence", "machine learning", "ml", "llm"],
+        "ml": ["machine learning", "ml", "mlops", "applied ai"],
+        "nlp": ["nlp", "natural language", "language model", "llm"],
+        "llm": ["llm", "language model", "generative ai"],
+        "rag": ["rag", "retrieval augmented", "retrieval-augmented"],
+        "agent": ["agent", "agentic"],
+        "mlops": ["mlops", "machine learning platform", "model platform", "ai platform"],
+    }
+    for specialty in specialties:
+        aliases = title_aliases.get(specialty, [specialty])
+        if any(alias in title_text for alias in aliases):
+            title_hits += 1
+        elif any(alias in body_text for alias in aliases):
+            body_hits += 1
+
+    if title_hits >= 1:
+        return True
+    if "engineer" in query_text and body_hits >= max(2, len(specialties)):
+        return True
+    return False
+
+
+def _role_title_matches_query(query: str, role_title: str, raw_text: str) -> bool:
+    query_text = _normalize_role_query_aliases(query)
+    title_text = normalize_text(role_title)
+    body_text = normalize_text(raw_text)
+
+    ai_family_titles = (
+        "ai engineer",
+        "applied ai engineer",
+        "ml engineer",
+        "machine learning engineer",
+        "llm engineer",
+        "mlops engineer",
+        "nlp engineer",
+        "ai platform engineer",
+        "research engineer",
+        "applied research engineer",
+        "ml research engineer",
+        "ai researcher",
+        "ml researcher",
+        "ai scientist",
+        "ml scientist",
+        "applied scientist",
+        "machine learning scientist",
+        "data scientist",
+        "ai specialist",
+        "ml specialist",
+        "nlp specialist",
+        "llm specialist",
+        "ai architect",
+        "ml architect",
+        "ai intern",
+        "ml intern",
+        "machine learning intern",
+        "ai developer",
+        "ml developer",
+        "generative ai",
+        "gen ai",
+        "computer vision",
+        "deep learning",
+        "rag engineer",
+        "ai/ml",
+    )
+
+    if any(term in query_text for term in ["ai engineer", "ml engineer", "machine learning engineer", "ai ", " ai", "ml ", " ml", "llm", "nlp", "machine learning", "applied ai", "mlops", "rag"]):
+        if any(term in title_text for term in ai_family_titles):
+            return True
+
+    ai_signal_tokens = ("ai", "ml", "machine learning", "applied ai", "llm", "nlp", "mlops", "generative", "deep learning", "rag", "agent")
+    if "ai" in query_text or "ml" in query_text or "machine learning" in query_text or "llm" in query_text or "nlp" in query_text:
+        title_signal = any(token in title_text for token in ai_signal_tokens)
+        body_signal = any(token in body_text for token in ai_signal_tokens)
+        if not (title_signal or body_signal):
+            return False
+        role_function_tokens = (
+            "engineer",
+            "developer",
+            "architect",
+            "scientist",
+            "researcher",
+            "research",
+            "specialist",
+            "intern",
+            "lead",
+            "analyst",
+            "consultant",
+            "manager",
+            "ml",
+            "ai",
+        )
+        if not any(token in title_text for token in role_function_tokens):
+            return False
+        return True
+
+    required_groups: list[tuple[str, ...]] = []
+    if "engineer" in query_text:
+        required_groups.append(("engineer", "developer", "architect"))
+    if "scientist" in query_text:
+        required_groups.append(("scientist",))
+    if "manager" in query_text:
+        required_groups.append(("manager", "lead"))
+    if "research" in query_text:
+        required_groups.append(("research", "researcher"))
+
+    for group in required_groups:
+        if not any(token in title_text for token in group):
+            return False
+
+    return True
 
 
 def _dedupe_keys(item: dict[str, Any]) -> list[str]:
@@ -2620,6 +4054,14 @@ def _merge_duplicate_opportunities(primary: dict[str, Any], secondary: dict[str,
     if not merged.get("posted_at"):
         merged["posted_at"] = secondary.get("posted_at")
 
+    primary_company = primary.get("company") or {}
+    secondary_company = secondary.get("company") or {}
+    if isinstance(primary_company, dict) or isinstance(secondary_company, dict):
+        merged["company"] = {
+            **(secondary_company if isinstance(secondary_company, dict) else {}),
+            **(primary_company if isinstance(primary_company, dict) else {}),
+        }
+
     citation = dict(primary.get("citation") or {})
     secondary_citation = secondary.get("citation") or {}
     citation["evidence"] = list(
@@ -2630,4 +4072,31 @@ def _merge_duplicate_opportunities(primary: dict[str, Any], secondary: dict[str,
     if not citation.get("job_url"):
         citation["job_url"] = secondary_citation.get("job_url")
     merged["citation"] = citation
+    return _finalize_merged_opportunity(merged)
+
+
+def _finalize_merged_opportunity(item: dict[str, Any]) -> dict[str, Any]:
+    merged = dict(item)
+    company = merged.get("company") or {}
+    has_apply_path = bool(merged.get("direct_apply_url") or merged.get("company_careers_url"))
+    merged["opportunity_kind"] = "job" if has_apply_path else "outreach_lead"
+    if has_apply_path and "Direct Apply" not in (merged.get("score_labels") or []):
+        merged["score_labels"] = sorted(set([*(merged.get("score_labels") or []), "Direct Apply"]))
+    source_type = merged.get("source_type")
+    if source_type == "startup_directory" and isinstance(company, dict) and company.get("dynamic_provider") == "startupmap":
+        merged["source_bucket"] = "startupmap"
+    elif source_type in {"greenhouse", "lever", "ashby", "ats_discovery"}:
+        merged["source_bucket"] = "ats"
+    elif source_type == "indeed_search":
+        merged["source_bucket"] = "indeed"
+    elif source_type == "theirstack_search":
+        merged["source_bucket"] = "theirstack"
+    elif source_type == "apify_actor":
+        merged["source_bucket"] = "apify"
+    elif source_type in {"google_web", "web_search"}:
+        merged["source_bucket"] = "web"
+    elif source_type == "startup_directory":
+        merged["source_bucket"] = "crawler"
+    elif source_type == "startup_company":
+        merged["source_bucket"] = "crawler"
     return merged

@@ -72,9 +72,11 @@ async def search_startup_hunt_opportunities(request: Request, body: StartupHuntS
     user_id = get_user_id(request)
     await _check_rate_limit_fail_open(user_id)
     existing = await _load_opportunity_map(user_id)
-    results, parsed_strategy, configured_source_count, source_result_counts, source_diagnostics = await search_startup_hunt(body.model_dump(), existing)
+    results, overflow_results, filtered_out, parsed_strategy, configured_source_count, source_result_counts, source_diagnostics = await search_startup_hunt(body.model_dump(), existing)
     return {
         "results": results,
+        "overflow_results": overflow_results,
+        "filtered_out": filtered_out,
         "parsed_strategy": parsed_strategy,
         "configured_source_count": configured_source_count,
         "source_result_counts": source_result_counts,

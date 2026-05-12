@@ -163,19 +163,27 @@ class StartupHuntSearchRequest(BaseModel):
     query: str
     location: str = "Germany"
     country: str | None = "Germany"
-    posted_within_hours: int | None = 72
-    result_limit: int = 15
+    posted_within_hours: int | None = 168
+    result_limit: int = 25
     include_seeded_sources: bool = False
     remote_only: bool = False
     direct_links_only: bool = False
     english_friendly_only: bool = False
     company_stage: str | None = None
     strategy_prompt: str | None = None
+    crawler_enabled: bool = True
+    startupmap_enabled: bool = True
+    web_enabled: bool = True
+    indeed_enabled: bool = True
+    theirstack_enabled: bool = True
+    apify_enabled: bool = True
+    ats_enabled: bool = True
     seeded_limit: int = 0
     crawler_limit: int = 20
     startupmap_limit: int = 10
     web_limit: int = 10
     indeed_limit: int = 10
+    theirstack_limit: int = 10
     apify_limit: int = 10
     ats_limit: int = 10
 
@@ -206,7 +214,7 @@ class StartupHuntSearchRequest(BaseModel):
             raise ValueError("result_limit must be between 1 and 50")
         return v
 
-    @field_validator("seeded_limit", "crawler_limit", "startupmap_limit", "web_limit", "indeed_limit", "apify_limit", "ats_limit")
+    @field_validator("seeded_limit", "crawler_limit", "startupmap_limit", "web_limit", "indeed_limit", "theirstack_limit", "apify_limit", "ats_limit")
     @classmethod
     def validate_source_limit(cls, v: int) -> int:
         if v < 0 or v > 50:

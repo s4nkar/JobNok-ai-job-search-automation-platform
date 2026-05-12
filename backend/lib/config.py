@@ -61,13 +61,17 @@ class Settings(BaseSettings):
     # Example:
     # [{"type":"startup_company","name":"Acme","company":"Acme","url":"https://acme.com","metadata":{"country":"germany","city":"berlin","stage":"seed","careers_url":"https://acme.com/careers","contacts":[{"name":"Jane Doe","title":"Founder","email":"jane@acme.com"}]}}]
     startup_hunt_sources_json: str = "[]"
-    startup_hunt_timeout_seconds: int = 15
+    startup_hunt_timeout_seconds: int = 90
+    startup_hunt_apify_poll_seconds: int = 60
+    startup_hunt_total_budget_seconds: int = 150
     google_cse_api_key: str = ""
     google_cse_cx: str = ""
     apify_api_token: str = ""
     apify_base_url: str = "https://api.apify.com/v2"
     apify_startup_hunt_actor_id: str = ""
     apify_indeed_actor_id: str = ""
+    theirstack_api_key: str = ""
+    theirstack_base_url: str = "https://api.theirstack.com"
     startup_hunt_contact_enrichment_provider: str = ""
     apollo_api_key: str = ""
     people_data_labs_api_key: str = ""
@@ -88,6 +92,7 @@ class Settings(BaseSettings):
     upstash_redis_rest_token: str = ""
     # TCP Redis URL for Celery broker/backend (can reuse Upstash rediss:// URL)
     redis_url: str = "redis://localhost:6379/0"
+    redis_password: str = ""
 
     # ── Resend ───────────────────────────────────────────────────────────────
     resend_api_key: str = ""
