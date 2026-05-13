@@ -1,14 +1,16 @@
 'use client'
 
-import { useState } from 'react'
+import { useState, useEffect, Suspense } from 'react'
+import { useSearchParams } from 'next/navigation'
 import { config } from '@/lib/config'
 import { Button } from '@/components/ui/button'
 import { Textarea } from '@/components/ui/textarea'
 import { Label } from '@/components/ui/label'
 import { useToast } from '@/components/ui/use-toast'
-import { MessageSquare, Loader2, RefreshCw, ChevronDown, ChevronUp, Info } from 'lucide-react'
+import { MessageSquare, Loader2, RefreshCw, ChevronDown, ChevronUp, Info, Compass, X } from 'lucide-react'
 import { apiFetch } from '@/lib/api'
 import { cn } from '@/lib/utils'
+import { StartupHuntSavedOpportunity } from '@/lib/types'
 
 interface InterviewQuestion {
   question: string
@@ -17,7 +19,25 @@ interface InterviewQuestion {
   tips: string[]
 }
 
-export default function InterviewPrepPage() {
+function buildJdFromOpportunity(lead: StartupHuntSavedOpportunity): string {
+  const parts: string[] = []
+  parts.push(`${lead.role_title} at ${lead.company_name}`)
+  if (lead.location) parts.push(`Location: ${lead.location}`)
+  const cp = lead.company_payload as Record<string, unknown>
+  if (cp?.ai_relevance) parts.push(`\nCompany focus: ${cp.ai_relevance}`)
+  if (cp?.stage) parts.push(`Stage: ${cp.stage}`)
+  if (lead.score_reasons?.length) {
+    parts.push(`\nRole signals:\n${lead.score_reasons.map((r: string) => `• ${r}`).join('\n')}`)
+  }
+  parts.push('\n[Paste or add the full job description below this line for best results]')
+  return parts.join('\n')
+}
+
+function InterviewPrepInner() {
+  const searchParams = useSearchParams()
+  const opportunityId = searchParams.get('opportunity_id')
+
+  const [lead, setLead] = useState<StartupHuntSavedOpportunity | null>(null)
   const [jd, setJd] = useState('')
   const [loading, setLoading] = useState(false)
   const [questions, setQuestions] = useState<InterviewQuestion[]>([])
@@ -25,6 +45,19 @@ export default function InterviewPrepPage() {
   const [regeneratingIdx, setRegeneratingIdx] = useState<number | null>(null)
   const [error, setError] = useState<string | null>(null)
   const { toast } = useToast()
+
+  useEffect(() => {
+    if (!opportunityId) return
+    apiFetch('/api/startup-hunt/opportunities')
+      .then((r) => r.json())
+      .then((rows: StartupHuntSavedOpportunity[]) => {
+        const found = rows.find((r) => r.id === opportunityId)
+        if (found) {
+          setLead(found)
+          setJd(buildJdFromOpportunity(found))
+        }
+      })
+  }, [opportunityId])
 
   async function generateQuestions() {
     if (!jd.trim()) return
@@ -43,8 +76,23 @@ export default function InterviewPrepPage() {
       if (!res.ok) {
         setError(json.detail || 'Generation failed.')
       } else {
-        setQuestions(json.questions || [])
+        const qs: InterviewQuestion[] = json.questions || []
+        setQuestions(qs)
         setExpandedIdx(0)
+
+        if (opportunityId && qs.length) {
+          await apiFetch(`/api/startup-hunt/opportunities/${opportunityId}/artifacts`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              artifact_type: 'interview_prep',
+              tool_used: 'interview-prep',
+              content: JSON.stringify(qs),
+              metadata: { question_count: qs.length, company: lead?.company_name, role: lead?.role_title },
+            }),
+          })
+          toast({ title: 'Interview prep saved to lead' })
+        }
       }
     } catch {
       setError('Network error. Please try again.')
@@ -76,7 +124,6 @@ export default function InterviewPrepPage() {
 
   return (
     <div className="animate-fade-in">
-      {/* Page Header */}
       <div className="flex items-center gap-4 mb-6">
         <div className="page-header-icon bg-teal-100">
           <MessageSquare className="h-5 w-5 text-teal-600" />
@@ -87,14 +134,22 @@ export default function InterviewPrepPage() {
         </div>
       </div>
 
-      {/* Rate limit notice */}
+      {lead && (
+        <div className="flex items-center gap-2.5 bg-orange-50 border border-orange-100 text-orange-800 rounded-xl px-4 py-3 mb-4 text-sm">
+          <Compass className="h-4 w-4 flex-shrink-0 text-orange-500" />
+          <span>Pre-filled from <strong>{lead.company_name} — {lead.role_title}</strong>. Add the full JD below the signals for best results.</span>
+          <button onClick={() => { setLead(null); setJd('') }} className="ml-auto text-orange-400 hover:text-orange-700">
+            <X className="h-4 w-4" />
+          </button>
+        </div>
+      )}
+
       <div className="flex items-center gap-2.5 bg-indigo-50 border border-indigo-100 text-indigo-700 rounded-xl px-4 py-3 mb-6 text-sm">
         <Info className="h-4 w-4 flex-shrink-0 text-indigo-500" />
         <span><strong>{config.rateLimits.interviewPrepPerDay} preps/day</strong> on the free tier.</span>
       </div>
 
       <div className="grid grid-cols-2 gap-6">
-        {/* Input */}
         <div className="space-y-4">
           <div className="bg-white rounded-2xl border border-slate-100 shadow-card p-5">
             <Label className="text-sm font-semibold text-slate-700 mb-3 block">Job Description</Label>
@@ -119,12 +174,9 @@ export default function InterviewPrepPage() {
           </Button>
         </div>
 
-        {/* Questions */}
         <div>
           {error && (
-            <div className="bg-red-50 border border-red-100 text-red-700 rounded-xl px-4 py-3 text-sm mb-4">
-              {error}
-            </div>
+            <div className="bg-red-50 border border-red-100 text-red-700 rounded-xl px-4 py-3 text-sm mb-4">{error}</div>
           )}
 
           {!questions.length && !loading && (
@@ -189,19 +241,14 @@ export default function InterviewPrepPage() {
                           disabled={regeneratingIdx === i}
                           className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium text-slate-500 hover:text-indigo-600 hover:bg-indigo-50 transition-colors"
                         >
-                          {regeneratingIdx === i
-                            ? <Loader2 className="h-3 w-3 animate-spin" />
-                            : <RefreshCw className="h-3 w-3" />
-                          }
+                          {regeneratingIdx === i ? <Loader2 className="h-3 w-3 animate-spin" /> : <RefreshCw className="h-3 w-3" />}
                           Regenerate
                         </button>
                       </div>
-
                       <div className="bg-slate-50 rounded-xl p-4">
                         <p className="text-[10px] font-bold text-slate-500 uppercase tracking-widest mb-2">Answer Framework</p>
                         <p className="text-sm text-slate-700 whitespace-pre-wrap leading-relaxed">{q.answer_framework}</p>
                       </div>
-
                       {q.tips?.length > 0 && (
                         <div className="mt-3 bg-amber-50 rounded-xl p-4">
                           <p className="text-[10px] font-bold text-amber-600 uppercase tracking-widest mb-2">Tips</p>
@@ -224,5 +271,13 @@ export default function InterviewPrepPage() {
         </div>
       </div>
     </div>
+  )
+}
+
+export default function InterviewPrepPage() {
+  return (
+    <Suspense>
+      <InterviewPrepInner />
+    </Suspense>
   )
 }

@@ -244,6 +244,71 @@ export interface StartupHuntResult {
   source_bucket?: string
 }
 
+export type OpportunityArtifactType = 'resume_analysis' | 'cover_letter' | 'interview_prep'
+
+export interface OpportunityArtifact {
+  id: string
+  user_id: string
+  opportunity_id: string | null
+  artifact_type: OpportunityArtifactType
+  tool_used: string
+  content: string
+  metadata: Record<string, unknown>
+  created_at: string
+}
+
+export interface StartupHuntSavedOpportunity {
+  id: string
+  company_name: string
+  company_domain: string | null
+  company_website_url: string | null
+  company_careers_url: string | null
+  role_title: string
+  location: string
+  country: string | null
+  source_name: string
+  source_type: string
+  direct_apply_url: string | null
+  canonical_job_url: string | null
+  portal_job_url: string | null
+  opportunity_kind: StartupHuntOpportunityKind
+  opportunity_status: StartupHuntOpportunityStatus
+  score_total: number
+  score_labels: string[]
+  score_reasons: string[]
+  tracker_application_id: string | null
+  company_id: string | null
+  citation_payload: Record<string, unknown>
+  company_payload: Record<string, unknown>
+  search_context: Record<string, unknown>
+  created_at: string
+  updated_at: string
+}
+
+export interface UserProfile {
+  id: string
+  email: string
+  full_name: string | null
+  avatar_url: string | null
+  plan: string
+  created_at: string
+  // CV-specific fields
+  job_title: string | null
+  phone: string | null
+  address_street: string | null
+  address_city: string | null
+  address_postal_code: string | null
+  address_country: string | null
+  date_of_birth: string | null
+  nationality: string | null
+  linkedin_url: string | null
+  github_url: string | null
+  website_url: string | null
+  work_authorization: string | null
+  cv_photo_url: string | null
+  cv_email: string | null
+}
+
 export interface StartupHuntResponse {
   results: StartupHuntResult[]
   overflow_results: StartupHuntResult[]

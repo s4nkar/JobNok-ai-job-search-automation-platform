@@ -1,6 +1,7 @@
 'use client'
 
-import { useState } from 'react'
+import { useState, useEffect, Suspense } from 'react'
+import { useSearchParams } from 'next/navigation'
 import { useForm } from 'react-hook-form'
 import { zodResolver } from '@hookform/resolvers/zod'
 import { z } from 'zod'
@@ -10,8 +11,9 @@ import { Input } from '@/components/ui/input'
 import { Textarea } from '@/components/ui/textarea'
 import { Label } from '@/components/ui/label'
 import { useToast } from '@/components/ui/use-toast'
-import { PenLine, Loader2, Copy, Check, Info } from 'lucide-react'
+import { PenLine, Loader2, Copy, Check, Info, Compass, X } from 'lucide-react'
 import { apiFetch } from '@/lib/api'
+import { StartupHuntSavedOpportunity } from '@/lib/types'
 
 const schema = z.object({
   company: z.string().min(1, 'Required'),
@@ -21,16 +23,34 @@ const schema = z.object({
 })
 type FormData = z.infer<typeof schema>
 
-export default function CoverLetterPage() {
+function CoverLetterInner() {
+  const searchParams = useSearchParams()
+  const opportunityId = searchParams.get('opportunity_id')
+
+  const [lead, setLead] = useState<StartupHuntSavedOpportunity | null>(null)
   const [loading, setLoading] = useState(false)
   const [output, setOutput] = useState('')
   const [copied, setCopied] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const { toast } = useToast()
 
-  const { register, handleSubmit, formState: { errors } } = useForm<FormData>({
+  const { register, handleSubmit, setValue, formState: { errors } } = useForm<FormData>({
     resolver: zodResolver(schema),
   })
+
+  useEffect(() => {
+    if (!opportunityId) return
+    apiFetch('/api/startup-hunt/opportunities')
+      .then((r) => r.json())
+      .then((rows: StartupHuntSavedOpportunity[]) => {
+        const found = rows.find((r) => r.id === opportunityId)
+        if (found) {
+          setLead(found)
+          setValue('company', found.company_name)
+          setValue('role', found.role_title)
+        }
+      })
+  }, [opportunityId, setValue])
 
   async function onSubmit(data: FormData) {
     setLoading(true)
@@ -54,11 +74,28 @@ export default function CoverLetterPage() {
       if (!res.body) { setLoading(false); return }
       const reader = res.body.getReader()
       const decoder = new TextDecoder()
+      let fullText = ''
 
       while (true) {
         const { done, value } = await reader.read()
         if (done) break
-        setOutput((prev) => prev + decoder.decode(value))
+        const chunk = decoder.decode(value)
+        fullText += chunk
+        setOutput((prev) => prev + chunk)
+      }
+
+      if (opportunityId && fullText.trim()) {
+        await apiFetch(`/api/startup-hunt/opportunities/${opportunityId}/artifacts`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            artifact_type: 'cover_letter',
+            tool_used: 'cover-letter',
+            content: fullText,
+            metadata: { company: data.company, role: data.role },
+          }),
+        })
+        toast({ title: 'Cover letter saved to lead' })
       }
     } catch {
       setError('Network error. Please try again.')
@@ -76,7 +113,6 @@ export default function CoverLetterPage() {
 
   return (
     <div className="animate-fade-in">
-      {/* Page Header */}
       <div className="flex items-center gap-4 mb-6">
         <div className="page-header-icon bg-pink-100">
           <PenLine className="h-5 w-5 text-pink-600" />
@@ -87,14 +123,22 @@ export default function CoverLetterPage() {
         </div>
       </div>
 
-      {/* Rate limit notice */}
+      {lead && (
+        <div className="flex items-center gap-2.5 bg-orange-50 border border-orange-100 text-orange-800 rounded-xl px-4 py-3 mb-4 text-sm">
+          <Compass className="h-4 w-4 flex-shrink-0 text-orange-500" />
+          <span>Pre-filled from <strong>{lead.company_name} — {lead.role_title}</strong>. Add your selling points below.</span>
+          <button onClick={() => setLead(null)} className="ml-auto text-orange-400 hover:text-orange-700">
+            <X className="h-4 w-4" />
+          </button>
+        </div>
+      )}
+
       <div className="flex items-center gap-2.5 bg-indigo-50 border border-indigo-100 text-indigo-700 rounded-xl px-4 py-3 mb-6 text-sm">
         <Info className="h-4 w-4 flex-shrink-0 text-indigo-500" />
         <span><strong>{config.rateLimits.coverLetterPerDay} letters/day</strong> on the free tier.</span>
       </div>
 
       <div className="grid grid-cols-2 gap-6">
-        {/* Input Form */}
         <div>
           <form onSubmit={handleSubmit(onSubmit)} className="space-y-4">
             <div className="bg-white rounded-2xl border border-slate-100 shadow-card p-5 space-y-4">
@@ -149,12 +193,9 @@ export default function CoverLetterPage() {
           </form>
         </div>
 
-        {/* Output */}
         <div>
           {error && (
-            <div className="bg-red-50 border border-red-100 text-red-700 rounded-xl px-4 py-3 text-sm mb-4">
-              {error}
-            </div>
+            <div className="bg-red-50 border border-red-100 text-red-700 rounded-xl px-4 py-3 text-sm mb-4">{error}</div>
           )}
 
           {!output && !loading && (
@@ -177,9 +218,7 @@ export default function CoverLetterPage() {
                   <button
                     onClick={copy}
                     className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold transition-all ${
-                      copied
-                        ? 'bg-emerald-500 text-white'
-                        : 'bg-indigo-50 text-indigo-600 hover:bg-indigo-100'
+                      copied ? 'bg-emerald-500 text-white' : 'bg-indigo-50 text-indigo-600 hover:bg-indigo-100'
                     }`}
                   >
                     {copied ? <Check className="h-3.5 w-3.5" /> : <Copy className="h-3.5 w-3.5" />}
@@ -196,8 +235,7 @@ export default function CoverLetterPage() {
               />
               {loading && (
                 <div className="flex items-center gap-2 mt-2 text-sm text-slate-400">
-                  <Loader2 className="h-3 w-3 animate-spin" />
-                  Writing…
+                  <Loader2 className="h-3 w-3 animate-spin" /> Writing…
                 </div>
               )}
             </div>
@@ -205,5 +243,13 @@ export default function CoverLetterPage() {
         </div>
       </div>
     </div>
+  )
+}
+
+export default function CoverLetterPage() {
+  return (
+    <Suspense>
+      <CoverLetterInner />
+    </Suspense>
   )
 }

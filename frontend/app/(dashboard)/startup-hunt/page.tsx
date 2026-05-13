@@ -338,18 +338,22 @@ export default function StartupHuntPage() {
                   {errors.query && <p className="text-xs text-destructive">{errors.query.message}</p>}
                 </div>
 
-                <div className="grid grid-cols-2 gap-4">
-                  <div className="space-y-1.5">
-                    <Label className="text-sm font-medium">Cities / regions</Label>
-                    <Input placeholder="Berlin, Munich, Hamburg, Frankfurt, Cologne, Remote" className="rounded-xl border-slate-200" {...register('location')} />
-                    <p className="text-xs text-muted-foreground">Comma-separated. Each city runs in parallel; add "Remote" to include remote roles.</p>
-                    {errors.location && <p className="text-xs text-destructive">{errors.location.message}</p>}
-                  </div>
-                  <div className="space-y-1.5">
-                    <Label className="text-sm font-medium">Country</Label>
-                    <Input placeholder="Germany" className="rounded-xl border-slate-200" {...register('country')} />
-                  </div>
+
+                <div className="space-y-1.5">
+                  <Label className="text-sm font-medium">Cities / regions</Label>
+                  <Textarea
+                    rows={2}
+                    placeholder="Berlin, Munich, Hamburg, Frankfurt, Cologne, Remote"
+                    {...register('location')}
+                  />
+                  <p className="text-xs text-muted-foreground">Comma-separated. Each city runs in parallel; add "Remote" to include remote roles.</p>
+                  {errors.location && <p className="text-xs text-destructive">{errors.location.message}</p>}
                 </div>
+                <div className="space-y-1.5">
+                  <Label className="text-sm font-medium">Country</Label>
+                  <Input placeholder="Germany" className="rounded-xl border-slate-200" {...register('country')} />
+                </div>
+
 
                 <div className="grid grid-cols-2 gap-4">
                   <div className="space-y-1">
@@ -574,6 +578,51 @@ export default function StartupHuntPage() {
             </div>
           )}
 
+          {loading && results.length === 0 && (
+            <div className="space-y-4">
+              {Array.from({ length: 6 }).map((_, i) => (
+                <div key={i} className="bg-white rounded-2xl border border-slate-100 shadow-card p-5 animate-pulse">
+                  <div className="flex items-start justify-between gap-4">
+                    <div className="min-w-0 flex-1 space-y-3">
+                      <div className="flex items-center gap-2">
+                        <div className="h-4 bg-slate-200 rounded w-48" />
+                        <div className="h-4 bg-slate-100 rounded w-16" />
+                        <div className="h-4 bg-slate-100 rounded w-16" />
+                      </div>
+                      <div className="h-3.5 bg-slate-200 rounded w-32" />
+                      <div className="flex items-center gap-2">
+                        <div className="h-3 bg-slate-100 rounded w-24" />
+                        <div className="h-3 bg-slate-100 rounded w-20" />
+                        <div className="h-3 bg-slate-100 rounded w-16" />
+                      </div>
+                      <div className="flex gap-1.5 mt-2">
+                        <div className="h-5 bg-slate-100 rounded-md w-16" />
+                        <div className="h-5 bg-slate-100 rounded-md w-20" />
+                      </div>
+                    </div>
+                    <div className="flex gap-2 flex-shrink-0">
+                      <div className="h-9 w-20 bg-slate-100 rounded-xl" />
+                      <div className="h-9 w-14 bg-slate-200 rounded-xl" />
+                      <div className="h-9 w-28 bg-slate-100 rounded-xl" />
+                    </div>
+                  </div>
+                  <div className="grid grid-cols-2 gap-4 mt-4">
+                    <div className="rounded-xl border border-slate-100 bg-slate-50 p-3.5 space-y-2">
+                      <div className="h-2.5 bg-slate-200 rounded w-20" />
+                      <div className="h-3 bg-slate-100 rounded w-full" />
+                      <div className="h-3 bg-slate-100 rounded w-4/5" />
+                    </div>
+                    <div className="rounded-xl border border-slate-100 bg-slate-50 p-3.5 space-y-2">
+                      <div className="h-2.5 bg-slate-200 rounded w-16" />
+                      <div className="h-3 bg-slate-100 rounded w-full" />
+                      <div className="h-3 bg-slate-100 rounded w-3/4" />
+                    </div>
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+
           {!loading && results.length === 0 && !error && (
             <div className="bg-white rounded-2xl border border-slate-100 shadow-card min-h-[480px] flex items-center justify-center p-8">
               <div className="text-center space-y-2">
@@ -603,7 +652,7 @@ export default function StartupHuntPage() {
                 return (
                   <div key={resultKey} className="space-y-3">
                     {showBand && (
-                      <div className="flex items-center justify-between gap-3 px-2 bg-blue-50 rounded-lg">
+                      <div className="flex items-center justify-between gap-3 px-4 py-2 bg-violet-100 rounded-lg">
                         <div>
                           <h2 className="text-sm font-semibold text-slate-800">{bucketLabel(bucket)}</h2>
                           <p className="text-xs text-slate-500">Provider band continues from global rank #{index + 1}</p>

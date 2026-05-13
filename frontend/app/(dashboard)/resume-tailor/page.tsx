@@ -1,16 +1,19 @@
 'use client'
 
-import { useState, useRef } from 'react'
+import { useState, useRef, useEffect, Suspense } from 'react'
+import { useSearchParams, useRouter } from 'next/navigation'
 import { config } from '@/lib/config'
 import { Button } from '@/components/ui/button'
 import { Textarea } from '@/components/ui/textarea'
 import { Label } from '@/components/ui/label'
-import { Badge } from '@/components/ui/badge'
-import { Progress } from '@/components/ui/progress'
 import { useToast } from '@/components/ui/use-toast'
-import { Upload, FileText, Loader2, CheckCircle, XCircle, ArrowRight, Info, FileSearch } from 'lucide-react'
+import {
+  Upload, FileText, Loader2, CheckCircle, XCircle, ArrowRight,
+  Info, FileSearch, X, Compass, Download, LayoutTemplate, User, Lock,
+} from 'lucide-react'
 import { apiFetch } from '@/lib/api'
 import { cn } from '@/lib/utils'
+import { StartupHuntSavedOpportunity, UserProfile } from '@/lib/types'
 
 interface TailorResult {
   match_score: number
@@ -18,17 +21,69 @@ interface TailorResult {
   missing_keywords: Array<{ keyword: string; suggested_placement: string }>
   bullet_rewrites: Array<{ original: string; improved: string }>
   summary: string
+  target_role?: string
+  target_company?: string
+  profile_headline?: string
+  tailored_summary?: string
 }
 
-export default function ResumeTailorPage() {
+function buildJdFromOpportunity(lead: StartupHuntSavedOpportunity): string {
+  const parts: string[] = []
+  parts.push(`${lead.role_title} at ${lead.company_name}`)
+  if (lead.location) parts.push(`Location: ${lead.location}`)
+  const cp = lead.company_payload as Record<string, unknown>
+  if (cp?.ai_relevance) parts.push(`\nCompany focus: ${cp.ai_relevance}`)
+  if (cp?.stage) parts.push(`Stage: ${cp.stage}`)
+  if (lead.score_reasons?.length) {
+    parts.push(`\nRole signals:\n${lead.score_reasons.map((r: string) => `• ${r}`).join('\n')}`)
+  }
+  parts.push('\n[Paste or add the full job description below this line for best results]')
+  return parts.join('\n')
+}
+
+function classicProfileReady(p: UserProfile | null): boolean {
+  return !!(p?.full_name && p?.phone && (p?.address_city || p?.address_country) && p?.cv_photo_url)
+}
+
+function ResumeTailorInner() {
+  const searchParams = useSearchParams()
+  const router = useRouter()
+  const opportunityId = searchParams.get('opportunity_id')
+
+  const [lead, setLead] = useState<StartupHuntSavedOpportunity | null>(null)
+  const [profile, setProfile] = useState<UserProfile | null>(null)
   const [file, setFile] = useState<File | null>(null)
   const [jd, setJd] = useState('')
   const [loading, setLoading] = useState(false)
+  const [prefilling, setPrefilling] = useState(false)
   const [streamText, setStreamText] = useState('')
   const [result, setResult] = useState<TailorResult | null>(null)
   const [error, setError] = useState<string | null>(null)
+
+  // PDF generation state
+  const [selectedTemplate, setSelectedTemplate] = useState<'modern' | 'classic'>('modern')
+  const [generating, setGenerating] = useState(false)
+
   const fileRef = useRef<HTMLInputElement>(null)
   const { toast } = useToast()
+
+  useEffect(() => {
+    // Load profile for classic template eligibility
+    apiFetch('/api/profile').then(r => r.json()).then(setProfile).catch(() => {})
+
+    if (!opportunityId) return
+    setPrefilling(true)
+    apiFetch(`/api/startup-hunt/opportunities`)
+      .then((r) => r.json())
+      .then((rows: StartupHuntSavedOpportunity[]) => {
+        const found = rows.find((r) => r.id === opportunityId)
+        if (found) {
+          setLead(found)
+          setJd(buildJdFromOpportunity(found))
+        }
+      })
+      .finally(() => setPrefilling(false))
+  }, [opportunityId])
 
   function handleFileChange(e: React.ChangeEvent<HTMLInputElement>) {
     const f = e.target.files?.[0]
@@ -74,11 +129,28 @@ export default function ResumeTailorPage() {
         setStreamText(fullText)
       }
 
+      let parsed: TailorResult | null = null
       try {
         const jsonMatch = fullText.match(/\{[\s\S]*\}/)
-        if (jsonMatch) setResult(JSON.parse(jsonMatch[0]))
+        if (jsonMatch) parsed = JSON.parse(jsonMatch[0])
       } catch { /* raw stream fallback */ }
 
+      if (parsed) {
+        setResult(parsed)
+        if (opportunityId) {
+          await apiFetch(`/api/startup-hunt/opportunities/${opportunityId}/artifacts`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              artifact_type: 'resume_analysis',
+              tool_used: 'resume-tailor',
+              content: JSON.stringify(parsed),
+              metadata: { match_score: parsed.match_score, company: lead?.company_name, role: lead?.role_title },
+            }),
+          })
+          toast({ title: 'Analysis saved to lead' })
+        }
+      }
     } catch {
       setError('Network error. Please try again.')
     }
@@ -86,46 +158,96 @@ export default function ResumeTailorPage() {
     setLoading(false)
   }
 
+  async function generatePdf() {
+    if (!result) return
+    if (selectedTemplate === 'classic' && !classicProfileReady(profile)) {
+      toast({ title: 'Complete your profile first', description: 'Add photo, name, phone and city to use the Classic template.', variant: 'destructive' })
+      router.push('/profile')
+      return
+    }
+    setGenerating(true)
+    try {
+      const res = await apiFetch('/api/ai/tailor/generate-pdf', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          template_id: selectedTemplate,
+          analysis: result,
+          opportunity_id: opportunityId || undefined,
+        }),
+      })
+      if (!res.ok) {
+        const json = await res.json()
+        toast({ title: json.detail || 'Generation failed', variant: 'destructive' })
+        return
+      }
+      const blob = await res.blob()
+      const url = URL.createObjectURL(blob)
+      const a = document.createElement('a')
+      a.href = url
+      a.download = `tailored_cv_${selectedTemplate}.pdf`
+      a.click()
+      URL.revokeObjectURL(url)
+      toast({ title: 'PDF downloaded!' })
+    } catch {
+      toast({ title: 'Network error', variant: 'destructive' })
+    } finally {
+      setGenerating(false)
+    }
+  }
+
   const scoreColor = result
     ? result.match_score >= 70 ? 'text-emerald-600' : result.match_score >= 40 ? 'text-amber-600' : 'text-red-600'
     : ''
-
   const scoreBarColor = result
     ? result.match_score >= 70 ? 'bg-emerald-500' : result.match_score >= 40 ? 'bg-amber-500' : 'bg-red-500'
     : ''
 
+  const classicOk = classicProfileReady(profile)
+
   return (
     <div className="animate-fade-in">
-      {/* Page Header */}
       <div className="flex items-center gap-4 mb-6">
         <div className="page-header-icon bg-violet-100">
           <FileSearch className="h-5 w-5 text-violet-600" />
         </div>
         <div>
           <h1 className="text-2xl font-bold text-slate-900 tracking-tight">Resume Tailor</h1>
-          <p className="text-slate-500 text-sm mt-0.5">Get an ATS score, missing keywords, and bullet rewrites for your target role</p>
+          <p className="text-slate-500 text-sm mt-0.5">Get an ATS score, missing keywords, and bullet rewrites — then generate a tailored PDF</p>
         </div>
       </div>
 
-      {/* Rate limit notice */}
+      {lead && (
+        <div className="flex items-center gap-2.5 bg-orange-50 border border-orange-100 text-orange-800 rounded-xl px-4 py-3 mb-4 text-sm">
+          <Compass className="h-4 w-4 flex-shrink-0 text-orange-500" />
+          <span>Pre-filled from <strong>{lead.company_name} — {lead.role_title}</strong>. No full JD stored — add it below the signals for best results.</span>
+          <button onClick={() => { setLead(null); setJd('') }} className="ml-auto text-orange-400 hover:text-orange-700">
+            <X className="h-4 w-4" />
+          </button>
+        </div>
+      )}
+
+      {prefilling && (
+        <div className="flex items-center gap-2 text-sm text-slate-500 mb-4">
+          <Loader2 className="h-4 w-4 animate-spin" /> Loading lead details…
+        </div>
+      )}
+
       <div className="flex items-center gap-2.5 bg-indigo-50 border border-indigo-100 text-indigo-700 rounded-xl px-4 py-3 mb-6 text-sm">
         <Info className="h-4 w-4 flex-shrink-0 text-indigo-500" />
         <span><strong>{config.rateLimits.resumeTailorPerDay} analyses/day</strong> on the free tier.</span>
       </div>
 
       <div className="grid grid-cols-2 gap-6">
-        {/* Inputs */}
+        {/* Left — inputs */}
         <div className="space-y-4">
-          {/* PDF Upload */}
           <div className="bg-white rounded-2xl border border-slate-100 shadow-card p-5">
             <Label className="text-sm font-semibold text-slate-700 mb-3 block">Resume (PDF)</Label>
             <div
               onClick={() => fileRef.current?.click()}
               className={cn(
                 'border-2 border-dashed rounded-xl p-8 text-center cursor-pointer transition-all duration-200',
-                file
-                  ? 'border-emerald-300 bg-emerald-50/50'
-                  : 'border-slate-200 hover:border-indigo-300 hover:bg-indigo-50/30'
+                file ? 'border-emerald-300 bg-emerald-50/50' : 'border-slate-200 hover:border-indigo-300 hover:bg-indigo-50/30'
               )}
             >
               {file ? (
@@ -146,7 +268,6 @@ export default function ResumeTailorPage() {
             <input ref={fileRef} type="file" accept=".pdf" className="hidden" onChange={handleFileChange} />
           </div>
 
-          {/* Job Description */}
           <div className="bg-white rounded-2xl border border-slate-100 shadow-card p-5">
             <Label className="text-sm font-semibold text-slate-700 mb-3 block">Job Description</Label>
             <Textarea
@@ -170,12 +291,10 @@ export default function ResumeTailorPage() {
           </Button>
         </div>
 
-        {/* Results */}
+        {/* Right — results */}
         <div className="space-y-4">
           {error && (
-            <div className="bg-red-50 border border-red-100 text-red-700 rounded-xl px-4 py-3 text-sm">
-              {error}
-            </div>
+            <div className="bg-red-50 border border-red-100 text-red-700 rounded-xl px-4 py-3 text-sm">{error}</div>
           )}
 
           {loading && !result && (
@@ -209,6 +328,30 @@ export default function ResumeTailorPage() {
 
           {result && (
             <>
+              {/* Target role banner */}
+              {(result.target_role || result.target_company) && (
+                <div className="flex items-center gap-2.5 bg-violet-50 border border-violet-100 text-violet-800 rounded-xl px-4 py-3 text-sm">
+                  <FileText className="h-4 w-4 flex-shrink-0 text-violet-500" />
+                  <span>Tailored for <strong>{result.target_role}{result.target_company ? ` at ${result.target_company}` : ''}</strong></span>
+                </div>
+              )}
+
+              {/* Proposed headline */}
+              {result.profile_headline && (
+                <div className="bg-white rounded-2xl border border-violet-100 shadow-card p-4">
+                  <p className="text-xs font-semibold text-slate-500 uppercase tracking-wide mb-1">Suggested CV Headline</p>
+                  <p className="text-sm font-medium text-violet-700">{result.profile_headline}</p>
+                </div>
+              )}
+
+              {/* Tailored summary */}
+              {result.tailored_summary && (
+                <div className="bg-white rounded-2xl border border-violet-100 shadow-card p-4">
+                  <p className="text-xs font-semibold text-slate-500 uppercase tracking-wide mb-1">Tailored Summary</p>
+                  <p className="text-sm text-slate-600 leading-relaxed">{result.tailored_summary}</p>
+                </div>
+              )}
+
               {/* ATS Score */}
               <div className="bg-white rounded-2xl border border-slate-100 shadow-card p-5">
                 <div className="flex items-center justify-between mb-3">
@@ -216,17 +359,14 @@ export default function ResumeTailorPage() {
                   <span className={cn('text-3xl font-bold', scoreColor)}>{result.match_score}%</span>
                 </div>
                 <div className="h-2.5 bg-slate-100 rounded-full overflow-hidden">
-                  <div
-                    className={cn('h-full rounded-full transition-all duration-700', scoreBarColor)}
-                    style={{ width: `${result.match_score}%` }}
-                  />
+                  <div className={cn('h-full rounded-full transition-all duration-700', scoreBarColor)} style={{ width: `${result.match_score}%` }} />
                 </div>
                 <p className="text-xs text-slate-400 mt-2">
-                  {result.match_score >= 70 ? 'Strong match — you\'re a great fit!' : result.match_score >= 40 ? 'Moderate match — some gaps to address' : 'Weak match — needs significant tailoring'}
+                  {result.match_score >= 70 ? "Strong match — you're a great fit!" : result.match_score >= 40 ? 'Moderate match — some gaps to address' : 'Weak match — needs significant tailoring'}
                 </p>
               </div>
 
-              {/* Matched Keywords */}
+              {/* Matched */}
               <div className="bg-white rounded-2xl border border-slate-100 shadow-card p-5">
                 <div className="flex items-center gap-2 mb-3">
                   <CheckCircle className="h-4 w-4 text-emerald-500" />
@@ -234,14 +374,12 @@ export default function ResumeTailorPage() {
                 </div>
                 <div className="flex flex-wrap gap-1.5">
                   {result.matched_keywords.map((k) => (
-                    <span key={k} className="inline-flex items-center px-2.5 py-1 rounded-full text-xs font-medium bg-emerald-50 text-emerald-700 border border-emerald-100">
-                      {k}
-                    </span>
+                    <span key={k} className="inline-flex items-center px-2.5 py-1 rounded-full text-xs font-medium bg-emerald-50 text-emerald-700 border border-emerald-100">{k}</span>
                   ))}
                 </div>
               </div>
 
-              {/* Missing Keywords */}
+              {/* Missing */}
               {result.missing_keywords.length > 0 && (
                 <div className="bg-white rounded-2xl border border-slate-100 shadow-card p-5">
                   <div className="flex items-center gap-2 mb-3">
@@ -251,9 +389,7 @@ export default function ResumeTailorPage() {
                   <div className="space-y-2">
                     {result.missing_keywords.map(({ keyword, suggested_placement }) => (
                       <div key={keyword} className="flex items-start gap-2 text-sm">
-                        <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-red-50 text-red-600 border border-red-100 shrink-0">
-                          {keyword}
-                        </span>
+                        <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-red-50 text-red-600 border border-red-100 shrink-0">{keyword}</span>
                         <span className="text-slate-400 text-xs pt-0.5">→ {suggested_placement}</span>
                       </div>
                     ))}
@@ -261,7 +397,7 @@ export default function ResumeTailorPage() {
                 </div>
               )}
 
-              {/* Bullet Rewrites */}
+              {/* Bullet rewrites */}
               {result.bullet_rewrites.length > 0 && (
                 <div className="bg-white rounded-2xl border border-slate-100 shadow-card p-5">
                   <p className="text-sm font-semibold text-slate-700 mb-3">Top Bullet Rewrites</p>
@@ -282,15 +418,111 @@ export default function ResumeTailorPage() {
                 </div>
               )}
 
-              {/* Summary */}
+              {/* AI Assessment */}
               <div className="bg-white rounded-2xl border border-slate-100 shadow-card p-5">
                 <p className="text-sm font-semibold text-slate-700 mb-2">AI Assessment</p>
                 <p className="text-sm text-slate-600 leading-relaxed">{result.summary}</p>
+              </div>
+
+              {/* ── Generate Tailored Resume ── */}
+              <div className="bg-white rounded-2xl border border-indigo-100 shadow-card p-5">
+                <div className="flex items-center gap-2 mb-4">
+                  <LayoutTemplate className="h-4 w-4 text-indigo-500" />
+                  <p className="text-sm font-semibold text-slate-700">Generate Tailored Resume</p>
+                </div>
+                <p className="text-xs text-slate-500 mb-4">Rewrites are applied automatically. Choose a template and download your updated CV as a PDF.</p>
+
+                <div className="grid grid-cols-2 gap-3 mb-4">
+                  {/* Modern template */}
+                  <button
+                    onClick={() => setSelectedTemplate('modern')}
+                    className={cn(
+                      'text-left rounded-xl border-2 p-3 transition-all',
+                      selectedTemplate === 'modern' ? 'border-indigo-500 bg-indigo-50' : 'border-slate-200 hover:border-slate-300'
+                    )}
+                  >
+                    <div className="w-full h-20 rounded-lg bg-white border border-slate-200 mb-2 p-2 space-y-1 overflow-hidden">
+                      <div className="h-2 bg-slate-800 rounded w-2/3 mx-auto" />
+                      <div className="h-1 bg-slate-300 rounded w-1/2 mx-auto" />
+                      <div className="h-px bg-slate-300 w-full mt-1" />
+                      <div className="h-1 bg-slate-400 rounded w-1/3 mt-1" />
+                      <div className="space-y-0.5 mt-0.5">
+                        <div className="h-0.5 bg-slate-200 rounded" />
+                        <div className="h-0.5 bg-slate-200 rounded w-5/6" />
+                        <div className="h-0.5 bg-slate-200 rounded w-4/5" />
+                      </div>
+                    </div>
+                    <p className="text-xs font-semibold text-slate-700">Modern Single-Column</p>
+                    <p className="text-[10px] text-slate-400 mt-0.5">Clean, minimal — preferred by German tech companies</p>
+                  </button>
+
+                  {/* Classic template */}
+                  <button
+                    onClick={() => classicOk && setSelectedTemplate('classic')}
+                    className={cn(
+                      'text-left rounded-xl border-2 p-3 transition-all relative',
+                      !classicOk && 'opacity-60 cursor-not-allowed',
+                      classicOk && selectedTemplate === 'classic' ? 'border-indigo-500 bg-indigo-50' : 'border-slate-200',
+                      classicOk && 'hover:border-slate-300'
+                    )}
+                  >
+                    <div className="w-full h-20 rounded-lg border border-slate-200 mb-2 overflow-hidden flex">
+                      <div className="w-1/3 bg-slate-700 p-1 space-y-0.5">
+                        <div className="w-5 h-5 rounded-full bg-slate-500 mx-auto mb-1" />
+                        <div className="h-0.5 bg-slate-500 rounded" />
+                        <div className="h-0.5 bg-slate-500 rounded w-4/5" />
+                        <div className="h-0.5 bg-slate-600 rounded w-3/4 mt-1" />
+                        <div className="h-0.5 bg-slate-600 rounded" />
+                      </div>
+                      <div className="flex-1 bg-white p-1 space-y-0.5">
+                        <div className="h-1.5 bg-slate-700 rounded w-3/4 mb-1" />
+                        <div className="h-px bg-slate-300 rounded" />
+                        <div className="h-0.5 bg-slate-300 rounded" />
+                        <div className="h-0.5 bg-slate-300 rounded w-5/6" />
+                        <div className="h-0.5 bg-slate-300 rounded w-4/5" />
+                      </div>
+                    </div>
+                    <p className="text-xs font-semibold text-slate-700">Classic 2-Column</p>
+                    <p className="text-[10px] text-slate-400 mt-0.5">Traditional German Lebenslauf with photo</p>
+                    {!classicOk && (
+                      <div className="absolute top-2 right-2 flex items-center gap-1 bg-amber-100 text-amber-700 rounded-lg px-1.5 py-0.5">
+                        <Lock className="h-2.5 w-2.5" />
+                        <span className="text-[9px] font-semibold">Profile needed</span>
+                      </div>
+                    )}
+                  </button>
+                </div>
+
+                {!classicOk && (
+                  <div className="flex items-center gap-2 text-xs text-amber-700 bg-amber-50 border border-amber-100 rounded-lg px-3 py-2 mb-3">
+                    <User className="h-3.5 w-3.5 shrink-0" />
+                    <span>Classic template requires photo, name, phone and city. <button onClick={() => router.push('/profile')} className="underline font-semibold">Complete your profile →</button></span>
+                  </div>
+                )}
+
+                <Button
+                  onClick={generatePdf}
+                  disabled={generating}
+                  className="w-full h-10 gradient-brand text-white border-0 shadow-brand-sm hover:opacity-90 transition-opacity rounded-xl font-semibold text-sm"
+                >
+                  {generating
+                    ? <><Loader2 className="h-4 w-4 mr-2 animate-spin" /> Generating PDF…</>
+                    : <><Download className="h-4 w-4 mr-2" /> Generate & Download {selectedTemplate === 'classic' ? 'Classic' : 'Modern'} CV</>
+                  }
+                </Button>
               </div>
             </>
           )}
         </div>
       </div>
     </div>
+  )
+}
+
+export default function ResumeTailorPage() {
+  return (
+    <Suspense>
+      <ResumeTailorInner />
+    </Suspense>
   )
 }
