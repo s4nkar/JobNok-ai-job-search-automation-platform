@@ -49,6 +49,28 @@ create trigger on_auth_user_created
   after insert on auth.users
   for each row execute procedure public.handle_new_user();
 
+-- CV Profile extended fields (run ALTER in Supabase SQL editor to add to existing table)
+alter table public.profiles add column if not exists job_title text;
+alter table public.profiles add column if not exists phone text;
+alter table public.profiles add column if not exists address_street text;
+alter table public.profiles add column if not exists address_city text;
+alter table public.profiles add column if not exists address_postal_code text;
+alter table public.profiles add column if not exists address_country text;
+alter table public.profiles add column if not exists date_of_birth date;
+alter table public.profiles add column if not exists nationality text;
+alter table public.profiles add column if not exists linkedin_url text;
+alter table public.profiles add column if not exists github_url text;
+alter table public.profiles add column if not exists website_url text;
+alter table public.profiles add column if not exists work_authorization text;
+alter table public.profiles add column if not exists cv_photo_url text;
+alter table public.profiles add column if not exists cv_email text;
+
+-- Supabase Storage bucket for CV photos (run once in SQL editor):
+-- insert into storage.buckets (id, name, public) values ('cv-photos', 'cv-photos', true) on conflict do nothing;
+-- create policy "Users can upload own cv photo" on storage.objects for insert with check (bucket_id = 'cv-photos' and auth.uid()::text = (storage.foldername(name))[1]);
+-- create policy "Users can update own cv photo" on storage.objects for update using (bucket_id = 'cv-photos' and auth.uid()::text = (storage.foldername(name))[1]);
+-- create policy "CV photos are publicly readable" on storage.objects for select using (bucket_id = 'cv-photos');
+
 -- ============================================================
 -- TEMPLATES
 -- ============================================================
@@ -435,6 +457,42 @@ create index if not exists startup_hunt_contacts_opportunity_idx
   on public.startup_hunt_contacts(opportunity_id);
 
 -- ============================================================
+-- OPPORTUNITY ARTIFACTS
+-- Generated docs (resume analysis, cover letters, interview prep) linked to a lead
+-- ============================================================
+create table if not exists public.opportunity_artifacts (
+  id             uuid primary key default uuid_generate_v4(),
+  user_id        uuid not null references public.profiles(id) on delete cascade,
+  opportunity_id uuid references public.startup_hunt_opportunities(id) on delete cascade,
+  artifact_type  text not null,
+  tool_used      text not null,
+  content        text not null,
+  metadata       jsonb not null default '{}',
+  created_at     timestamptz not null default now(),
+  constraint opportunity_artifact_type_check
+    check (artifact_type in ('resume_analysis', 'cover_letter', 'interview_prep'))
+);
+
+alter table public.opportunity_artifacts enable row level security;
+
+create policy "Users can view own artifacts"
+  on public.opportunity_artifacts for select
+  using (auth.uid() = user_id);
+
+create policy "Users can insert own artifacts"
+  on public.opportunity_artifacts for insert
+  with check (auth.uid() = user_id);
+
+create policy "Users can delete own artifacts"
+  on public.opportunity_artifacts for delete
+  using (auth.uid() = user_id);
+
+create index if not exists opportunity_artifacts_user_idx
+  on public.opportunity_artifacts(user_id);
+create index if not exists opportunity_artifacts_opportunity_idx
+  on public.opportunity_artifacts(opportunity_id);
+
+-- ============================================================
 -- LINKEDIN CACHE
 -- Shared cache — no RLS (profile data is public on LinkedIn)
 -- ============================================================
@@ -450,3 +508,36 @@ create table if not exists public.linkedin_cache (
 
 create index if not exists linkedin_cache_url_idx on public.linkedin_cache(linkedin_url);
 create index if not exists linkedin_cache_scraped_at_idx on public.linkedin_cache(scraped_at);
+
+-- ============================================================
+-- ROLE GRANTS
+-- Supabase does not automatically grant table-level permissions
+-- when tables are created via raw SQL. These grants are required
+-- for PostgREST to access tables as service_role or authenticated.
+-- Run this section any time new tables are added.
+-- ============================================================
+do $$
+declare
+  t text;
+  tables text[] := array[
+    'profiles',
+    'templates',
+    'email_campaigns',
+    'email_recipients',
+    'job_applications',
+    'job_search_applications',
+    'startup_hunt_companies',
+    'startup_hunt_opportunities',
+    'startup_hunt_contacts',
+    'opportunity_artifacts',
+    'linkedin_cache'
+  ];
+begin
+  foreach t in array tables loop
+    execute format('grant all on table public.%I to service_role', t);
+    execute format('grant all on table public.%I to authenticated', t);
+  end loop;
+  -- anon gets read-only access only to linkedin_cache (shared, no RLS)
+  grant select on table public.linkedin_cache to anon;
+end;
+$$;
