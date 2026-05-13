@@ -7,7 +7,10 @@ Rate limits enforced per user per tool via Upstash Redis.
 import asyncio
 import base64
 import json
+import logging
 from pathlib import Path
+
+logger = logging.getLogger(__name__)
 
 import fitz  # PyMuPDF
 import httpx
@@ -18,7 +21,16 @@ from weasyprint import HTML as WeasyHTML
 
 from lib.config import settings
 from lib.redis_client import check_rate_limit, get_cached, set_cached
-from lib.resume_cache import compute_resume_hash, get_resume_cache, update_resume_cache
+from lib.resume_cache import (
+    compute_resume_hash,
+    deserialize_embeddings,
+    get_resume_cache,
+    serialize_embeddings,
+    update_resume_cache,
+)
+from lib.resume_chunker import chunk_jd, chunk_resume, chunks_from_dicts, chunks_to_dicts
+from lib.resume_matcher import match_resume_to_jd
+from lib.embeddings import EmbeddingError, embed
 from lib.supabase_client import get_supabase, get_user_id
 from lib import ai_provider
 from models.schemas import CoverLetterRequest, InterviewPrepRequest, InterviewRegenerateRequest, SalaryResearchRequest
@@ -68,47 +80,151 @@ async def tailor_resume(
     # Legacy short-TTL key — generate-pdf still reads from here without needing the hash.
     await set_cached(f"resume_text:{user_id}", resume_text, ttl_seconds=7200)
 
-    system = """You are an expert ATS analyst and professional CV tailoring coach.
+    # ─── Resume chunks + embeddings (cached per resume hash) ─────────
+    resume_chunks_dicts = (cached or {}).get("chunks") if cached else None
+    if resume_chunks_dicts:
+        resume_chunks = chunks_from_dicts(resume_chunks_dicts)
+        resume_embeddings = deserialize_embeddings((cached or {}).get("embeddings"))
+    else:
+        resume_chunks = chunk_resume(resume_text)
+        try:
+            resume_embeddings = await embed([c.text for c in resume_chunks], purpose="matching")
+        except EmbeddingError as exc:
+            import numpy as np
+            logger.warning("Resume embeddings unavailable: %r — falling back to keyword-only matching", exc)
+            resume_embeddings = np.zeros((0, 0), dtype="float32")
+        await update_resume_cache(
+            user_id, resume_hash,
+            chunks=chunks_to_dicts(resume_chunks),
+            embeddings=serialize_embeddings(resume_embeddings) if resume_embeddings.size > 0 else [],
+        )
 
-Analyse the resume against the job description and return a JSON object with EXACTLY this structure:
-{
-  "target_role": "<job title extracted from the JD>",
-  "target_company": "<company name extracted from the JD>",
-  "match_score": <integer 0-100, ATS keyword match percentage>,
-  "matched_keywords": [<keywords genuinely present in BOTH the resume and JD>],
-  "missing_keywords": [{"keyword": <str>, "suggested_placement": <specific section where it fits naturally>}],
-  "profile_headline": "<new CV tagline using ONLY skills the candidate actually has, reframed toward the target role — e.g. 'Machine Learning Engineer · PyTorch · MLOps · Computer Vision'>",
-  "tailored_summary": "<rewritten professional summary paragraph that honestly repositions the candidate's real experience toward this role — reframe genuine transferable skills only, never invent skills absent from the resume>",
-  "bullet_rewrites": [{"original": <exact original bullet text>, "improved": <rewritten bullet highlighting genuine transferable value — only rewrite bullets with real relevance to the JD>}],
-  "summary": "<1-paragraph honest fit assessment noting genuine strengths and real gaps>"
-}
+    # ─── JD chunks + embeddings (always fresh) ────────────────────────
+    jd_chunks = chunk_jd(job_description)
+    try:
+        jd_embeddings = await embed([c.text for c in jd_chunks], purpose="matching") if jd_chunks else _empty_array()
+    except EmbeddingError as exc:
+        logger.warning("JD embeddings unavailable: %r — falling back to keyword-only matching", exc)
+        jd_embeddings = _empty_array()
 
-Rules:
-- matched_keywords: only include terms that appear EXPLICITLY in BOTH the resume text AND the job description — do not infer or guess; "WebSockets" does not match if the JD never mentions it
-- profile_headline: use only skills the candidate demonstrably has; frame the tagline toward the target role domain
-- tailored_summary: reframe genuine transferable experience honestly; NEVER claim geospatial, satellite, or domain expertise the resume does not show
-- bullet_rewrites: max 5; ONLY rewrite bullets where the underlying experience is genuinely transferable to the JD; for each rewrite:
-  * PRESERVE every specific number, percentage, and metric from the original (e.g. "50–100×", "78.10%", "20%", "95.08%") — never soften to "significant" or "state-of-the-art"
-  * NEVER add tools, methods, domains, or outcomes not stated in the original bullet
-  * Adjust only the framing/verb/emphasis — the evidence must remain identical
-  * If a bullet is not transferable, skip it rather than forcing irrelevant domain keywords in
-- Return ONLY valid JSON, no markdown fences"""
+    # ─── Deterministic match + scoring + gap analysis ─────────────────
+    analysis = match_resume_to_jd(
+        resume_chunks=resume_chunks,
+        resume_embeddings=resume_embeddings,
+        jd_chunks=jd_chunks,
+        jd_embeddings=jd_embeddings,
+        resume_text=resume_text,
+        jd_text=job_description,
+    )
 
-    prompt = f"""RESUME:
-{resume_text[:4500]}
+    # ─── LLM call — only for AI-generated prose ───────────────────────
+    ai_fields = await _generate_tailor_prose(resume_text, job_description, analysis)
 
-JOB DESCRIPTION:
-{job_description[:2500]}"""
+    # ─── Merge deterministic + AI into the wire format the frontend expects ──
+    response_payload = {
+        # AI-generated
+        "target_role": ai_fields.get("target_role", ""),
+        "target_company": ai_fields.get("target_company", ""),
+        "profile_headline": ai_fields.get("profile_headline", ""),
+        "tailored_summary": ai_fields.get("tailored_summary", ""),
+        "bullet_rewrites": ai_fields.get("bullet_rewrites", []),
+        "summary": ai_fields.get("summary", ""),
 
-    async def generate():
-        async for chunk in ai_provider.stream_text(prompt, system, max_tokens=2500):
-            yield chunk
+        # Deterministic — authoritative, never produced by LLM
+        "match_score": analysis.overall_score,
+        "matched_keywords": analysis.matched_keywords,
+        "missing_keywords": [
+            {"keyword": kw, "suggested_placement": "skills"} for kw in analysis.missing_keywords
+        ],
+        "score_breakdown": analysis.score_breakdown,
+        "transferable_strengths": analysis.transferable_strengths,
+        "critical_missing": analysis.critical_missing,
+        "matches": [m.as_dict() for m in analysis.matches],
+        "degraded": analysis.degraded,
+    }
+
+    # Wrap in StreamingResponse so frontend's existing reader loop keeps working;
+    # we just emit one chunk. The frontend regex-extracts the JSON object.
+    body = json.dumps(response_payload)
+
+    async def emit():
+        yield body
 
     return StreamingResponse(
-        generate(),
-        media_type="text/plain",
+        emit(),
+        media_type="application/json",
         headers={"X-Resume-Hash": resume_hash},
     )
+
+
+def _empty_array():
+    import numpy as np
+    return np.zeros((0, 0), dtype="float32")
+
+
+async def _generate_tailor_prose(
+    resume_text: str,
+    job_description: str,
+    analysis,  # MatchResult — typed loosely to avoid an import cycle
+) -> dict:
+    """One small LLM call. Receives the deterministic analysis as context and
+    returns only the AI-generated fields. Keeps the LLM scope narrow so cheaper
+    open-weight models (Llama 3.3 via Groq) can hit it reliably.
+    """
+    rewrites_block = (
+        "\n".join(f"- ORIGINAL: {r.resume_bullet}\n  TARGET REQUIREMENT: {r.target_requirement}"
+                  for r in analysis.rewrite_candidates)
+        or "(no bullets in the rewrite band — leave bullet_rewrites empty)"
+    )
+    transferable_block = "; ".join(analysis.transferable_strengths[:6]) or "(none)"
+    critical_block = "; ".join(analysis.critical_missing[:6]) or "(none)"
+
+    system = """You are a CV tailoring assistant. The deterministic ATS analysis is already done —
+you receive its results and must NOT recompute scores, matched keywords, or missing keywords.
+
+Return ONLY valid JSON in this shape:
+{
+  "target_role": "<job title from the JD>",
+  "target_company": "<company name from the JD>",
+  "profile_headline": "<CV tagline using ONLY skills the candidate actually has, reframed toward the target role>",
+  "tailored_summary": "<professional summary paragraph reframing genuine transferable experience honestly>",
+  "bullet_rewrites": [{"original": "<EXACT original bullet from REWRITE CANDIDATES>", "improved": "<sharpened framing>"}],
+  "summary": "<1-paragraph honest fit assessment noting strengths and real gaps>"
+}
+
+Hard rules:
+- bullet_rewrites: ONLY rewrite bullets from the REWRITE CANDIDATES list. Use the original verbatim as the "original" field.
+  * PRESERVE every number, percentage, and metric from the original
+  * NEVER add tools, methods, or domains absent from the original
+  * Adjust only verb / framing / emphasis — the evidence must stay identical
+- profile_headline: use only skills present in the resume. Reframe, don't invent.
+- tailored_summary: reframe genuine transferable experience honestly. Never claim domain expertise the resume does not show.
+- summary: ground the fit assessment in the provided CRITICAL GAPS and TRANSFERABLE STRENGTHS.
+- Return ONLY valid JSON, no markdown fences."""
+
+    prompt = f"""DETERMINISTIC ANALYSIS (do not recompute, just use):
+OVERALL SCORE: {analysis.overall_score}
+SCORE BREAKDOWN: {json.dumps(analysis.score_breakdown)}
+TRANSFERABLE STRENGTHS: {transferable_block}
+CRITICAL GAPS (do not invent experience to cover these): {critical_block}
+
+REWRITE CANDIDATES (only rewrite these — copy "ORIGINAL" verbatim):
+{rewrites_block}
+
+JOB DESCRIPTION:
+{job_description[:2500]}
+
+RESUME (for extracting target_role/target_company and grounding prose only):
+{resume_text[:3500]}"""
+
+    raw = await ai_provider.generate_text(prompt, system, max_tokens=1200)
+    try:
+        start = raw.find("{")
+        end = raw.rfind("}") + 1
+        return json.loads(raw[start:end])
+    except Exception:
+        logger.warning("LLM tailor prose returned malformed JSON: %r", raw[:300])
+        return {}
 
 
 # ── CV PDF Generation ─────────────────────────────────────────────

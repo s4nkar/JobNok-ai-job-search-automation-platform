@@ -55,6 +55,16 @@ class Chunk:
         return {"kind": self.kind, "section": self.section, "text": self.text}
 
 
+def chunks_to_dicts(chunks: list["Chunk"]) -> list[dict]:
+    return [c.as_dict() for c in chunks]
+
+
+def chunks_from_dicts(raw: list[dict] | None) -> list["Chunk"]:
+    if not raw:
+        return []
+    return [Chunk(kind=r.get("kind", "bullet"), section=r.get("section", ""), text=r.get("text", "")) for r in raw]
+
+
 # ── Resume chunker ────────────────────────────────────────────────
 
 def chunk_resume(text: str) -> list[Chunk]:
