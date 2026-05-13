@@ -9,6 +9,9 @@ pydantic-settings==2.4.0
 anthropic==0.32.0
 huggingface-hub>=0.31.0
 
+# Embeddings (API-based — Jina/Cohere). Only numpy needed locally for matrix ops.
+numpy>=1.26,<3.0
+
 # Background Tasks
 celery==5.4.0
 redis==5.0.8

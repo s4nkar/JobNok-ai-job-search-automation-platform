@@ -46,6 +46,25 @@ class Settings(BaseSettings):
     huggingface_model: str = "mistralai/Mistral-7B-Instruct-v0.3"
     huggingface_max_tokens: int = 2048
 
+    # ── Embedding Providers ──────────────────────────────────────────────────
+    # Primary embedding provider. Supported: jina | cohere
+    # Used by resume↔JD semantic matching. Resume embeddings are cached per
+    # resume_hash, so cost is ~600 tokens per tailoring run after the first
+    # upload of a given resume.
+    embedding_provider: str = "jina"
+    embedding_fallback_chain: str = "cohere"
+    embedding_request_timeout_seconds: int = 30
+
+    # Jina AI (free tier: 1M tokens/month, no card required)
+    jina_api_key: str = ""
+    jina_model: str = "jina-embeddings-v3"
+    jina_base_url: str = "https://api.jina.ai/v1"
+
+    # Cohere (free tier with rate limits)
+    cohere_api_key: str = ""
+    cohere_embedding_model: str = "embed-english-v3.0"
+    cohere_base_url: str = "https://api.cohere.com/v2"
+
     # ── Rate Limits (enforced via Redis sliding window) ──────────────────────
     # All limits are per-user per-day unless stated otherwise
     rate_limit_linkedin_per_day: int = 10
