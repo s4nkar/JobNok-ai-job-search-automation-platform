@@ -203,10 +203,42 @@ def _split_skill_line(line: str) -> list[str]:
 
 _JD_HEADER_PATTERNS = [
     (re.compile(r"(requirements?|qualifications?|must[-\s]?have|what\s+you'?ll?\s+need)", re.I), "requirement"),
-    (re.compile(r"(preferred|nice[-\s]?to[-\s]?have|bonus|plus)", re.I), "requirement"),  # treated as requirement; weighted lower downstream
-    (re.compile(r"(responsibilities|what\s+you'?ll?\s+do|role|duties)", re.I), "responsibility"),
-    (re.compile(r"(about|who\s+we\s+are|company)", re.I), "domain"),
+    (re.compile(r"(preferred|nice[-\s]?to[-\s]?have|bonus|plus)", re.I), "requirement"),
+    (re.compile(r"(responsibilities|what\s+you'?ll?\s+do|about\s+the\s+role|your\s+role|duties)", re.I), "responsibility"),
+    # Benefits / perks — never skills, never match the candidate against these
+    (re.compile(r"(benefits?|perks?|what\s+we\s+offer|compensation|###\s*benefits?)", re.I), "domain"),
+    # "About <company>" — matches "About osapiens", "About us" etc. but NOT "About the role"
+    (re.compile(r"(about\s+(?!the\s+role|your\s+role|this\s+role)\w+|who\s+we\s+are|company\s+(overview|focus)|join\s+us\s+for)", re.I), "domain"),
 ]
+
+# Sentinel lines that mark where tracker-appended metadata begins.
+_JD_METADATA_SENTINEL = re.compile(
+    r"^(role\s+signals\s*:|\[paste\s+or\s+add|•\s*matched\s+role\s+keywords)",
+    re.I | re.MULTILINE,
+)
+
+# Where the real JD body begins — strip the title/location header above this.
+_JD_BODY_START = re.compile(
+    r"^(about\s+the\s+role|your\s+responsibilities|responsibilities|requirements?|"
+    r"what\s+you|we\s+are\s+looking|the\s+role|job\s+description|overview|"
+    r"company\s+focus|as\s+an?\s+\w+[\s,])",
+    re.I | re.MULTILINE,
+)
+
+
+def clean_jd_text(text: str) -> str:
+    """Strip tracker metadata and leading title/location lines from a JD.
+
+    Call this before keyword extraction as well as before chunking so both
+    paths operate on the same cleaned text.
+    """
+    m = _JD_METADATA_SENTINEL.search(text)
+    if m:
+        text = text[: m.start()].strip()
+    m = _JD_BODY_START.search(text)
+    if m:
+        text = text[m.start():]
+    return text
 
 
 def chunk_jd(text: str) -> list[Chunk]:
@@ -219,6 +251,8 @@ def chunk_jd(text: str) -> list[Chunk]:
       - Default chunk kind is 'requirement' when no section is detected —
         better to over-classify as requirements than to drop signal.
     """
+    text = clean_jd_text(text)
+
     chunks: list[Chunk] = []
     current_kind: ChunkKind = "requirement"
     current_section = "requirements"
@@ -260,17 +294,25 @@ def chunk_jd(text: str) -> list[Chunk]:
 
 
 def _detect_jd_section(line: str) -> tuple[ChunkKind, str] | None:
-    # Treat short lines that look like headers (title-cased, no period, short).
+    _SECTION_MAP = {
+        "requirement": "requirements",
+        "responsibility": "responsibilities",
+        "domain": "about",
+    }
+    # Some JDs inline content on the same header line: "Company focus: - As an AI..."
+    # Check just the prefix before ":" when it's short enough to be a label.
+    if ":" in line:
+        prefix = line.split(":", 1)[0].strip()
+        if len(prefix) <= 30 and not prefix.endswith("."):
+            for pat, kind in _JD_HEADER_PATTERNS:
+                if pat.search(prefix):
+                    return kind, _SECTION_MAP[kind]  # type: ignore[return-value]
+    # Standard check: short lines that look like section headers.
     if len(line) > 60 or line.endswith("."):
         return None
     for pat, kind in _JD_HEADER_PATTERNS:
         if pat.search(line):
-            section = {
-                "requirement": "requirements",
-                "responsibility": "responsibilities",
-                "domain": "about",
-            }[kind]
-            return kind, section  # type: ignore[return-value]
+            return kind, _SECTION_MAP[kind]  # type: ignore[return-value]
     return None
 
 

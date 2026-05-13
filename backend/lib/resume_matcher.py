@@ -144,14 +144,76 @@ _PHRASES = [
     "cloud infrastructure", "distributed systems", "system design",
     "test driven development", "continuous integration", "continuous deployment",
     "design patterns",
+    # Tools / platforms that read as two tokens individually
+    "weights and biases", "weights & biases",
+    "amazon web services", "aws",
+    "data pipeline", "data pipelines",
+    "google cloud platform",
+    "high performance computing",
+    "remote sensing",
+    "satellite imagery",
+    "change detection",
+    "time series",
+    "object detection",
 ]
 
 # Common false-positive tokens that match the regex but aren't useful keywords.
+# Rule: a word belongs here if it (a) isn't a technology/skill name, and
+# (b) commonly appears capitalised in JD prose (sentence-initial verbs,
+# location names, company metadata, generic adjectives).
 _KEYWORD_STOPWORDS = {
+    # Pronouns / determiners / conjunctions
     "The", "This", "That", "These", "Those", "With", "From", "Into",
     "Will", "What", "When", "Where", "Which", "Who", "Why", "How",
     "Your", "Our", "Their", "His", "Her", "Its", "And", "But", "Not",
-    "You", "We", "I", "Resume", "JD", "Job", "Role", "Team", "Company",
+    "You", "We", "For", "Are", "Can", "May", "Must", "Has", "Have",
+    # Generic JD section labels
+    "Resume", "JD", "Job", "Role", "Team", "Company", "Description",
+    "Overview", "Requirements", "Responsibilities", "Benefits", "Opportunity",
+    "Location", "About", "Founded", "Join", "Ownership",
+    # Common sentence-initial verbs that are NOT skills
+    "Build", "Develop", "Apply", "Contribute", "Improve", "Support",
+    "Collaborate", "Communicate", "Deliver", "Create", "Design", "Define",
+    "Translate", "Provide", "Enable", "Leverage", "Utilize", "Ensure",
+    "Manage", "Lead", "Drive", "Grow", "Learn", "Use", "Run", "Help",
+    "Feeling", "Hands-on",
+    # Generic adjectives / adverbs in JD prose
+    "Nice", "Modern", "Flexible", "Competitive", "Strong", "Clear",
+    "Understanding", "Familiarity", "Direct", "Through",
+    # Location / company names that leak in via capitalised tokens
+    "Munich", "München", "Mannheim", "Deutschland", "Sendlinger", "Tor",
+    "Goldman", "Sachs", "Decarbonization", "Partners",
+    # Company-specific product / programme names (not transferable skills)
+    "HUB",
+    # Solo tokens that are subsumed by a multi-word phrase already in _PHRASES
+    # (e.g. "Weights" and "Biases" are noise when "weights & biases" is captured)
+    "Weights", "Biases",
+    # Generic standalone words that add no signal without their partner token
+    "Services", "Web",
+    # Business model / product descriptors (not candidate skills)
+    "Software-as-a-Service",
+    # Tracker-appended metadata words
+    "Matched", "Paste", "Signal", "Signals",
+    # Funding / company stage metadata
+    "Stage", "Series", "Seed",
+    # JD personality / culture words (not technical skills)
+    "Adaptability", "Pace", "Positive", "Ownership",
+    # Sentence-initial verbs common in startup JDs
+    "Architect", "Challenge", "Decide", "Enjoy", "Fine-tune", "Keep",
+    "Set", "Shape",
+    # Benefits section noise
+    "Club", "Free", "Sports", "Urban",
+    # Generic labels that appear as tokens
+    "Development", "Engineering", "Expertise", "Qualifications", "Language",
+    "Tech-Leverage", "Berlin/Leipzig",
+    # Company names that appear as keywords
+    "Circula",
+    # Solo tokens subsumed by phrases or too generic alone
+    "System",  # "system design" is the phrase; "System" alone adds no signal
+    "Cloud",   # "cloud infrastructure" is the phrase
+    # Months (appear in date ranges inside JDs)
+    "January", "February", "March", "April", "June", "July", "August",
+    "September", "October", "November", "December",
 }
 
 
@@ -280,6 +342,9 @@ def match_resume_to_jd(
             r_chunk = resume_chunks[int(i_idx)]
             if r_chunk.kind != "bullet":
                 continue
+            # Education, publication, and header entries aren't rewritable bullets.
+            if r_chunk.section in ("education", "header", "publications", "certifications", "languages"):
+                continue
             sim = float(col[int(i_idx)])
             if not (REWRITE_BAND[0] <= sim <= REWRITE_BAND[1]):
                 continue
@@ -330,14 +395,17 @@ def _compute_score_breakdown(
 
     ats_pct = int(round(100 * matched_keyword_count / max(1, jd_keyword_count))) if jd_keyword_count else 0
 
+    req_score = avg_score_for_kind("requirement")
+    resp_score = avg_score_for_kind("responsibility")
     return {
-        "core_skills": avg_score_for_kind("requirement"),
-        "responsibilities": avg_score_for_kind("responsibility"),
+        "core_skills": req_score,
+        # Many JDs (especially startup ones) have no explicit "Responsibilities"
+        # section — all bullets are requirements. Fall back to req_score so the
+        # category doesn't misleadingly show 0.
+        "responsibilities": resp_score if resp_score > 0 else req_score,
         "domain": avg_score_for_kind("domain"),
         "ats_keywords": ats_pct,
-        # Seniority needs role-level signals we don't extract yet — leave at the
-        # core_skills floor so it doesn't drag overall down to zero.
-        "seniority": avg_score_for_kind("requirement"),
+        "seniority": req_score,
     }
 
 

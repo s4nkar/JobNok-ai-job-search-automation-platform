@@ -61,9 +61,12 @@ function buildJdFromOpportunity(lead: StartupHuntSavedOpportunity): string {
   if (cp?.ai_relevance) parts.push(`\nCompany focus: ${cp.ai_relevance}`)
   if (cp?.stage) parts.push(`Stage: ${cp.stage}`)
   if (lead.score_reasons?.length) {
-    parts.push(`\nRole signals:\n${lead.score_reasons.map((r: string) => `• ${r}`).join('\n')}`)
+    // Filter "Company signal:" — its content is already present in Company focus above.
+    const signals = lead.score_reasons.filter((r: string) => !r.startsWith('Company signal:'))
+    if (signals.length) {
+      parts.push(`\nRole signals:\n${signals.map((r: string) => `• ${r}`).join('\n')}`)
+    }
   }
-  parts.push('\n[Paste or add the full job description below this line for best results]')
   return parts.join('\n')
 }
 

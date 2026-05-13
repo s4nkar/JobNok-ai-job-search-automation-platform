@@ -14,6 +14,7 @@ logger = logging.getLogger(__name__)
 
 import fitz  # PyMuPDF
 import httpx
+import numpy as np
 from fastapi import APIRouter, Request, HTTPException, UploadFile, File, Form
 from fastapi.responses import StreamingResponse, Response
 from jinja2 import Environment, FileSystemLoader
@@ -28,7 +29,7 @@ from lib.resume_cache import (
     serialize_embeddings,
     update_resume_cache,
 )
-from lib.resume_chunker import chunk_jd, chunk_resume, chunks_from_dicts, chunks_to_dicts
+from lib.resume_chunker import chunk_jd, chunk_resume, chunks_from_dicts, chunks_to_dicts, clean_jd_text
 from lib.resume_matcher import match_resume_to_jd
 from lib.embeddings import EmbeddingError, embed
 from lib.supabase_client import get_supabase, get_user_id
@@ -87,10 +88,14 @@ async def tailor_resume(
         resume_embeddings = deserialize_embeddings((cached or {}).get("embeddings"))
     else:
         resume_chunks = chunk_resume(resume_text)
+        resume_embeddings = np.zeros((0, 0), dtype="float32")
+
+    # Re-embed if embeddings are absent — covers first run and cache entries
+    # written before embeddings were available (e.g. after a provider outage).
+    if resume_embeddings.size == 0:
         try:
             resume_embeddings = await embed([c.text for c in resume_chunks], purpose="matching")
         except EmbeddingError as exc:
-            import numpy as np
             logger.warning("Resume embeddings unavailable: %r — falling back to keyword-only matching", exc)
             resume_embeddings = np.zeros((0, 0), dtype="float32")
         await update_resume_cache(
@@ -100,7 +105,8 @@ async def tailor_resume(
         )
 
     # ─── JD chunks + embeddings (always fresh) ────────────────────────
-    jd_chunks = chunk_jd(job_description)
+    jd_text_clean = clean_jd_text(job_description)
+    jd_chunks = chunk_jd(jd_text_clean)
     try:
         jd_embeddings = await embed([c.text for c in jd_chunks], purpose="matching") if jd_chunks else _empty_array()
     except EmbeddingError as exc:
@@ -114,7 +120,7 @@ async def tailor_resume(
         jd_chunks=jd_chunks,
         jd_embeddings=jd_embeddings,
         resume_text=resume_text,
-        jd_text=job_description,
+        jd_text=jd_text_clean,
     )
 
     # ─── LLM call — only for AI-generated prose ───────────────────────
@@ -186,7 +192,7 @@ Return ONLY valid JSON in this shape:
 {
   "target_role": "<job title from the JD>",
   "target_company": "<company name from the JD>",
-  "profile_headline": "<CV tagline using ONLY skills the candidate actually has, reframed toward the target role>",
+  "profile_headline": "<headline in the format: [target job title] | [relevant skill] | [relevant skill] | [relevant skill] — use the exact target job title from the JD as the first segment, then 2–3 skills from the resume most relevant to this specific role>",
   "tailored_summary": "<professional summary paragraph reframing genuine transferable experience honestly>",
   "bullet_rewrites": [{"original": "<EXACT original bullet from REWRITE CANDIDATES>", "improved": "<sharpened framing>"}],
   "summary": "<1-paragraph honest fit assessment noting strengths and real gaps>"
@@ -197,7 +203,7 @@ Hard rules:
   * PRESERVE every number, percentage, and metric from the original
   * NEVER add tools, methods, or domains absent from the original
   * Adjust only verb / framing / emphasis — the evidence must stay identical
-- profile_headline: use only skills present in the resume. Reframe, don't invent.
+- profile_headline: lead with the exact job title from the JD, then 2–3 of the candidate's real skills most relevant to this role. Never add skills the resume doesn't show.
 - tailored_summary: reframe genuine transferable experience honestly. Never claim domain expertise the resume does not show.
 - summary: ground the fit assessment in the provided CRITICAL GAPS and TRANSFERABLE STRENGTHS.
 - Return ONLY valid JSON, no markdown fences."""
