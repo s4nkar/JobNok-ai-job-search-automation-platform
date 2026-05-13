@@ -10,6 +10,7 @@ import { useToast } from '@/components/ui/use-toast'
 import {
   Upload, FileText, Loader2, CheckCircle, XCircle, ArrowRight,
   Info, FileSearch, X, Compass, Download, LayoutTemplate, User, Lock,
+  Sparkles, AlertTriangle, BarChart3,
 } from 'lucide-react'
 import { apiFetch } from '@/lib/api'
 import { cn } from '@/lib/utils'
@@ -25,6 +26,31 @@ interface TailorResult {
   target_company?: string
   profile_headline?: string
   tailored_summary?: string
+  // Phase 4 additions — produced by the deterministic matcher
+  score_breakdown?: {
+    core_skills?: number
+    responsibilities?: number
+    domain?: number
+    ats_keywords?: number
+    seniority?: number
+  }
+  transferable_strengths?: string[]
+  critical_missing?: string[]
+  degraded?: boolean
+}
+
+const SCORE_LABELS: Record<string, string> = {
+  core_skills: 'Core Skills',
+  responsibilities: 'Responsibilities',
+  domain: 'Domain Fit',
+  ats_keywords: 'ATS Keywords',
+  seniority: 'Seniority Fit',
+}
+
+function scoreBarTone(score: number): string {
+  if (score >= 70) return 'bg-emerald-500'
+  if (score >= 40) return 'bg-amber-500'
+  return 'bg-red-500'
 }
 
 function buildJdFromOpportunity(lead: StartupHuntSavedOpportunity): string {
@@ -365,6 +391,80 @@ function ResumeTailorInner() {
                   {result.match_score >= 70 ? "Strong match — you're a great fit!" : result.match_score >= 40 ? 'Moderate match — some gaps to address' : 'Weak match — needs significant tailoring'}
                 </p>
               </div>
+
+              {/* Degraded mode notice — embeddings were unavailable */}
+              {result.degraded && (
+                <div className="flex items-start gap-2.5 bg-amber-50 border border-amber-100 text-amber-800 rounded-xl px-4 py-3 text-sm">
+                  <AlertTriangle className="h-4 w-4 flex-shrink-0 text-amber-500 mt-0.5" />
+                  <span>Semantic matching unavailable — scores are based on keyword overlap only. Results are still useful but less nuanced than usual.</span>
+                </div>
+              )}
+
+              {/* Score breakdown by category */}
+              {result.score_breakdown && Object.values(result.score_breakdown).some((v) => typeof v === 'number') && (
+                <div className="bg-white rounded-2xl border border-slate-100 shadow-card p-5">
+                  <div className="flex items-center gap-2 mb-3">
+                    <BarChart3 className="h-4 w-4 text-indigo-500" />
+                    <p className="text-sm font-semibold text-slate-700">Score Breakdown</p>
+                  </div>
+                  <div className="space-y-2.5">
+                    {Object.entries(result.score_breakdown)
+                      .filter(([, v]) => typeof v === 'number')
+                      .map(([key, value]) => (
+                        <div key={key}>
+                          <div className="flex items-center justify-between text-xs mb-1">
+                            <span className="text-slate-500 font-medium">{SCORE_LABELS[key] || key}</span>
+                            <span className="text-slate-700 font-semibold tabular-nums">{value as number}%</span>
+                          </div>
+                          <div className="h-1.5 bg-slate-100 rounded-full overflow-hidden">
+                            <div
+                              className={cn('h-full rounded-full transition-all duration-700', scoreBarTone(value as number))}
+                              style={{ width: `${value}%` }}
+                            />
+                          </div>
+                        </div>
+                      ))}
+                  </div>
+                </div>
+              )}
+
+              {/* Transferable strengths — partial matches the user can lean into */}
+              {result.transferable_strengths && result.transferable_strengths.length > 0 && (
+                <div className="bg-white rounded-2xl border border-amber-100 shadow-card p-5">
+                  <div className="flex items-center gap-2 mb-3">
+                    <Sparkles className="h-4 w-4 text-amber-500" />
+                    <p className="text-sm font-semibold text-slate-700">Transferable Strengths <span className="text-slate-400 font-normal">({result.transferable_strengths.length})</span></p>
+                  </div>
+                  <p className="text-xs text-slate-400 mb-3">Requirements where you have related — but not explicit — experience. Reframe these honestly to strengthen alignment.</p>
+                  <div className="space-y-2">
+                    {result.transferable_strengths.map((s, i) => (
+                      <div key={i} className="flex items-start gap-2 text-sm">
+                        <ArrowRight className="h-3.5 w-3.5 text-amber-500 mt-1 shrink-0" />
+                        <span className="text-slate-600 leading-relaxed">{s}</span>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              {/* Critical missing — hard gaps the user shouldn't try to fake */}
+              {result.critical_missing && result.critical_missing.length > 0 && (
+                <div className="bg-white rounded-2xl border border-red-100 shadow-card p-5">
+                  <div className="flex items-center gap-2 mb-3">
+                    <AlertTriangle className="h-4 w-4 text-red-500" />
+                    <p className="text-sm font-semibold text-slate-700">Critical Gaps <span className="text-slate-400 font-normal">({result.critical_missing.length})</span></p>
+                  </div>
+                  <p className="text-xs text-slate-400 mb-3">Requirements with no matching evidence in your resume. Don&apos;t fabricate experience — instead, address these in your cover letter or accept them as honest gaps.</p>
+                  <div className="space-y-2">
+                    {result.critical_missing.map((g, i) => (
+                      <div key={i} className="flex items-start gap-2 text-sm">
+                        <XCircle className="h-3.5 w-3.5 text-red-400 mt-1 shrink-0" />
+                        <span className="text-slate-600 leading-relaxed">{g}</span>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
 
               {/* Matched */}
               <div className="bg-white rounded-2xl border border-slate-100 shadow-card p-5">
