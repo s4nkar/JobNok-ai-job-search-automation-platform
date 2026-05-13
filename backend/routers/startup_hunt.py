@@ -10,7 +10,7 @@ from fastapi import APIRouter, HTTPException, Request
 from lib.config import settings
 from lib.startup_hunt import canonicalize_url, extract_domain, search_startup_hunt
 from lib.redis_client import check_rate_limit
-from lib.supabase_client import get_supabase, get_user_id
+from lib.supabase_client import get_supabase, get_user_id, verify_jwt
 from models.schemas import (
     StartupHuntOpportunityCreateRequest,
     StartupHuntOpportunityUpdateRequest,
@@ -18,6 +18,21 @@ from models.schemas import (
 )
 
 router = APIRouter()
+
+
+async def _ensure_profile_exists(sb, user_id: str, request: Request) -> None:
+    """Upsert a profiles row so FK constraints don't fail for users whose profile trigger missed."""
+    token = request.headers.get("Authorization", "").removeprefix("Bearer ").strip()
+    claims = verify_jwt(token)
+    email = claims.get("email") or f"{user_id}@unknown.local"
+    try:
+        await asyncio.to_thread(
+            lambda: sb.table("profiles")
+            .upsert({"id": user_id, "email": email}, on_conflict="id")
+            .execute()
+        )
+    except Exception:
+        pass
 
 
 async def _check_rate_limit_fail_open(user_id: str) -> None:
@@ -105,10 +120,81 @@ async def list_startup_hunt_contacts(request: Request, opportunity_id: str | Non
     return rows
 
 
+@router.get("/artifact-counts")
+async def get_artifact_counts(request: Request):
+    user_id = get_user_id(request)
+    sb = get_supabase()
+    res = await asyncio.to_thread(
+        lambda: sb.table("opportunity_artifacts")
+        .select("opportunity_id")
+        .eq("user_id", user_id)
+        .not_.is_("opportunity_id", "null")
+        .execute()
+    )
+    counts: dict[str, int] = {}
+    for row in res.data or []:
+        oid = row["opportunity_id"]
+        counts[oid] = counts.get(oid, 0) + 1
+    return counts
+
+
+@router.get("/opportunities/{opportunity_id}/artifacts")
+async def list_opportunity_artifacts(request: Request, opportunity_id: str):
+    user_id = get_user_id(request)
+    sb = get_supabase()
+    res = await asyncio.to_thread(
+        lambda: sb.table("opportunity_artifacts")
+        .select("*")
+        .eq("user_id", user_id)
+        .eq("opportunity_id", opportunity_id)
+        .order("created_at", desc=True)
+        .execute()
+    )
+    return res.data or []
+
+
+@router.post("/opportunities/{opportunity_id}/artifacts", status_code=201)
+async def create_opportunity_artifact(request: Request, opportunity_id: str, body: dict):
+    user_id = get_user_id(request)
+    sb = get_supabase()
+    artifact_type = body.get("artifact_type", "")
+    if artifact_type not in {"resume_analysis", "cover_letter", "interview_prep"}:
+        from fastapi import HTTPException
+        raise HTTPException(status_code=422, detail="Invalid artifact_type")
+    row = {
+        "user_id": user_id,
+        "opportunity_id": opportunity_id,
+        "artifact_type": artifact_type,
+        "tool_used": body.get("tool_used", artifact_type),
+        "content": body.get("content", ""),
+        "metadata": body.get("metadata", {}),
+    }
+    res = await asyncio.to_thread(lambda: sb.table("opportunity_artifacts").insert(row).select().single().execute())
+    return res.data
+
+
+@router.delete("/opportunities/{opportunity_id}/artifacts/{artifact_id}", status_code=204)
+async def delete_opportunity_artifact(request: Request, opportunity_id: str, artifact_id: str):
+    user_id = get_user_id(request)
+    sb = get_supabase()
+    res = await asyncio.to_thread(
+        lambda: sb.table("opportunity_artifacts")
+        .delete()
+        .eq("id", artifact_id)
+        .eq("opportunity_id", opportunity_id)
+        .eq("user_id", user_id)
+        .select()
+        .execute()
+    )
+    if not res.data:
+        raise HTTPException(status_code=404, detail="Artifact not found")
+
+
 @router.post("/opportunities", status_code=201)
 async def create_startup_hunt_opportunity(request: Request, body: StartupHuntOpportunityCreateRequest):
     user_id = get_user_id(request)
     sb = get_supabase()
+    await _ensure_profile_exists(sb, user_id, request)
     payload = body.model_dump()
 
     direct_apply_url = str(body.direct_apply_url) if body.direct_apply_url else None
@@ -154,7 +240,7 @@ async def create_startup_hunt_opportunity(request: Request, body: StartupHuntOpp
 
     company_id = await _upsert_company(sb, user_id, payload)
     db_payload = {
-        **payload,
+        **{k: v for k, v in payload.items() if k != "contacts"},
         "user_id": user_id,
         "tracker_application_id": tracker_id,
         "company_id": company_id,
@@ -219,6 +305,22 @@ async def update_startup_hunt_opportunity(request: Request, opportunity_id: str,
         .execute()
     )
     return await _fetch_single_row(sb, "startup_hunt_opportunities", user_id, opportunity_id)
+
+
+@router.delete("/opportunities/{opportunity_id}", status_code=204)
+async def delete_startup_hunt_opportunity(request: Request, opportunity_id: str):
+    user_id = get_user_id(request)
+    sb = get_supabase()
+    res = await asyncio.to_thread(
+        lambda: sb.table("startup_hunt_opportunities")
+        .delete()
+        .eq("id", opportunity_id)
+        .eq("user_id", user_id)
+        .select()
+        .execute()
+    )
+    if not res.data:
+        raise HTTPException(status_code=404, detail="Not found")
 
 
 async def _upsert_company(sb, user_id: str, payload: dict) -> str:

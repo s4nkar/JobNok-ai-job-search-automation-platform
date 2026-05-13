@@ -10,7 +10,7 @@ from fastapi.responses import JSONResponse
 import sentry_sdk
 
 from lib.config import settings
-from routers import scrape, ai, email, tracker, templates, campaigns, job_search, startup_hunt
+from routers import scrape, ai, email, tracker, templates, campaigns, job_search, startup_hunt, profile
 
 # ── Sentry ───────────────────────────────────────────────────────
 if settings.sentry_dsn:
@@ -63,6 +63,7 @@ app.include_router(templates.router, prefix="/api/templates", tags=["templates"]
 app.include_router(campaigns.router, prefix="/api/campaigns", tags=["campaigns"])
 app.include_router(job_search.router, prefix="/api/job-search", tags=["job-search"])
 app.include_router(startup_hunt.router, prefix="/api/startup-hunt", tags=["startup-hunt"])
+app.include_router(profile.router,     prefix="/api/profile",       tags=["profile"])
 
 
 @app.get("/api/health", tags=["health"])

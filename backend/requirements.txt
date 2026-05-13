@@ -16,9 +16,12 @@ redis==5.0.8
 # Database
 supabase==2.7.0
 
-# PDF Parsing
+# PDF Parsing + Generation
 PyMuPDF==1.24.9
 scrapling>=0.2.96
+weasyprint==62.3
+pydyf==0.10.0
+jinja2==3.1.4
 
 # File uploads
 python-multipart==0.0.9

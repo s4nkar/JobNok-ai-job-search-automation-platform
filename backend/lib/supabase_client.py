@@ -41,6 +41,9 @@ def get_supabase() -> Client:
             settings.supabase_url,
             settings.supabase_service_role_key,
         )
+        # supabase-py 2.x passes the key as apikey but not as Authorization Bearer.
+        # Without this, PostgREST falls back to the anon role which blocks some tables.
+        _supabase_client.postgrest.auth(settings.supabase_service_role_key)
 
     return _supabase_client
 

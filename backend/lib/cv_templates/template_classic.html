@@ -1,0 +1,193 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<style>
+  @page { margin: 0; size: A4; }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { font-family: Arial, Helvetica, sans-serif; font-size: 9pt; color: #1a1a1a; }
+
+  /* ── Layout table ── */
+  .layout { width: 100%; border-collapse: collapse; }
+  .col-left { width: 37%; background: #1b2d4f; color: #dce6f5; vertical-align: top; padding: 22px 16px 30px; }
+  .col-right { width: 63%; background: #ffffff; vertical-align: top; padding: 24px 22px 30px; }
+
+  /* ── Left sidebar ── */
+  .photo-wrap { text-align: center; margin-bottom: 14px; }
+  .photo { width: 88px; height: 88px; border-radius: 50%; border: 3px solid #4a7ab5; display: block; margin: 0 auto; }
+  .no-photo {
+    width: 88px; height: 88px; border-radius: 50%; border: 2px dashed #4a7ab5;
+    background: #243b5e; display: block; margin: 0 auto;
+  }
+  .sidebar-name { font-size: 12pt; font-weight: bold; color: #ffffff; text-align: center; margin-bottom: 3px; line-height: 1.3; }
+  .sidebar-title { font-size: 7.5pt; color: #8aadd4; text-align: center; margin-bottom: 16px; line-height: 1.4; }
+
+  .sidebar-section {
+    font-size: 7pt; font-weight: bold; text-transform: uppercase; letter-spacing: 1.3px;
+    color: #6a96c4; border-bottom: 1px solid #2d4870; padding-bottom: 3px; margin: 13px 0 7px;
+  }
+  .contact-item { font-size: 7.5pt; color: #c0d4ee; margin-bottom: 5px; word-break: break-all; line-height: 1.4; }
+  .contact-label { font-size: 6.5pt; color: #6a96c4; display: block; text-transform: uppercase; letter-spacing: 0.8px; margin-bottom: 1px; }
+
+  .skill-cat { font-size: 7.5pt; font-weight: bold; color: #c0d4ee; margin-bottom: 1px; }
+  .skill-items { font-size: 7pt; color: #8aadd4; margin-bottom: 6px; line-height: 1.4; }
+
+  .lang-item { font-size: 7.5pt; color: #c0d4ee; margin-bottom: 4px; }
+  .work-auth-text { font-size: 7pt; color: #8aadd4; font-style: italic; line-height: 1.4; }
+
+  /* ── Right main ── */
+  .main-name { font-size: 19pt; font-weight: bold; color: #1b2d4f; margin-bottom: 2px; }
+  .main-title { font-size: 8.5pt; color: #4a7ab5; margin-bottom: 14px; line-height: 1.4; }
+
+  .section-title {
+    font-size: 8.5pt; font-weight: bold; text-transform: uppercase; letter-spacing: 0.9px;
+    color: #1b2d4f; border-bottom: 2px solid #1b2d4f; padding-bottom: 2px; margin: 13px 0 7px;
+  }
+
+  .exp-row { display: table; width: 100%; }
+  .exp-left { display: table-cell; vertical-align: top; }
+  .exp-right { display: table-cell; text-align: right; white-space: nowrap; font-size: 7.5pt; color: #555; padding-left: 8px; vertical-align: top; }
+  .exp-title { font-weight: bold; font-size: 9pt; color: #1a1a1a; }
+  .exp-company { font-style: italic; color: #4a7ab5; font-size: 7.5pt; margin: 1px 0 4px; }
+
+  ul { padding-left: 13px; margin: 0; }
+  li { margin-bottom: 2px; font-size: 8.5pt; line-height: 1.4; }
+  li strong { font-weight: bold; }
+
+  .edu-degree { font-weight: bold; font-size: 9pt; }
+  .edu-inst { font-style: italic; color: #4a7ab5; font-size: 7.5pt; margin: 1px 0 2px; }
+  .edu-detail { font-size: 7.5pt; color: #444; margin-top: 2px; line-height: 1.4; }
+
+  .proj-name { font-weight: bold; font-size: 8.5pt; }
+  .proj-tech { font-style: italic; font-size: 7.5pt; color: #555; margin: 1px 0 3px; }
+
+  .pub-title { font-size: 8.5pt; font-weight: bold; }
+  .pub-venue { font-size: 7.5pt; font-style: italic; color: #555; }
+
+  .mb2 { margin-bottom: 9px; }
+  .mb1 { margin-bottom: 6px; }
+  p { margin: 0; }
+</style>
+</head>
+<body>
+<table class="layout" cellpadding="0" cellspacing="0">
+<tr>
+  <!-- ═══════════════════ LEFT SIDEBAR ═══════════════════ -->
+  <td class="col-left">
+    <div class="photo-wrap">
+      {% if photo_base64 %}
+      <img class="photo" src="data:image/jpeg;base64,{{ photo_base64 }}" />
+      {% else %}
+      <div class="no-photo"></div>
+      {% endif %}
+    </div>
+
+    <div class="sidebar-name">{{ full_name }}</div>
+    {% if job_title %}<div class="sidebar-title">{{ job_title }}</div>{% endif %}
+
+    <div class="sidebar-section">Contact</div>
+    {% if email %}<div class="contact-item"><span class="contact-label">Email</span>{{ email }}</div>{% endif %}
+    {% if phone %}<div class="contact-item"><span class="contact-label">Phone</span>{{ phone }}</div>{% endif %}
+    {% if location %}<div class="contact-item"><span class="contact-label">Location</span>{{ location }}</div>{% endif %}
+    {% if linkedin %}<div class="contact-item"><span class="contact-label">LinkedIn</span>{{ linkedin }}</div>{% endif %}
+    {% if github %}<div class="contact-item"><span class="contact-label">GitHub</span>{{ github }}</div>{% endif %}
+    {% if website %}<div class="contact-item"><span class="contact-label">Website</span>{{ website }}</div>{% endif %}
+    {% if date_of_birth %}<div class="contact-item"><span class="contact-label">Date of Birth</span>{{ date_of_birth }}</div>{% endif %}
+    {% if nationality %}<div class="contact-item"><span class="contact-label">Nationality</span>{{ nationality }}</div>{% endif %}
+
+    {% if skills %}
+    <div class="sidebar-section">Technical Skills</div>
+    {% for skill in skills %}
+    <div class="skill-cat">{{ skill.category }}</div>
+    <div class="skill-items">{{ skill.items }}</div>
+    {% endfor %}
+    {% endif %}
+
+    {% if languages %}
+    <div class="sidebar-section">Languages</div>
+    {% for lang in languages %}
+    <div class="lang-item">{{ lang }}</div>
+    {% endfor %}
+    {% endif %}
+
+    {% if work_authorization %}
+    <div class="sidebar-section">Work Authorization</div>
+    <div class="work-auth-text">{{ work_authorization }}</div>
+    {% endif %}
+  </td>
+
+  <!-- ═══════════════════ RIGHT MAIN ═══════════════════ -->
+  <td class="col-right">
+    <div class="main-name">{{ full_name }}</div>
+    {% if job_title %}<div class="main-title">{{ job_title }}</div>{% endif %}
+
+    {% if summary %}
+    <div class="section-title">Profile</div>
+    <p style="font-size: 8.5pt; line-height: 1.5; margin-bottom: 0;">{{ summary }}</p>
+    {% endif %}
+
+    {% if experience %}
+    <div class="section-title">Professional Experience</div>
+    {% for exp in experience %}
+    <div class="mb2">
+      <div class="exp-row">
+        <div class="exp-left"><div class="exp-title">{{ exp.title }}</div></div>
+        <div class="exp-right">{{ exp.period }}</div>
+      </div>
+      <div class="exp-company">{{ exp.company }}{% if exp.location %} · {{ exp.location }}{% endif %}</div>
+      <ul>{% for b in exp.bullets %}<li>{{ b }}</li>{% endfor %}</ul>
+    </div>
+    {% endfor %}
+    {% endif %}
+
+    {% if education %}
+    <div class="section-title">Education</div>
+    {% for edu in education %}
+    <div class="mb1">
+      <div class="exp-row">
+        <div class="exp-left"><div class="edu-degree">{{ edu.degree }}</div></div>
+        <div class="exp-right">{{ edu.period }}</div>
+      </div>
+      <div class="edu-inst">{{ edu.institution }}{% if edu.location %} · {{ edu.location }}{% endif %}</div>
+      {% if edu.details %}<div class="edu-detail">{{ edu.details }}</div>{% endif %}
+    </div>
+    {% endfor %}
+    {% endif %}
+
+    {% if projects %}
+    <div class="section-title">Selected Projects</div>
+    {% for proj in projects %}
+    <div class="mb2">
+      <div class="proj-name">{{ proj.name }}</div>
+      {% if proj.tech %}<div class="proj-tech">{{ proj.tech }}</div>{% endif %}
+      <ul>{% for b in proj.bullets %}<li>{{ b }}</li>{% endfor %}</ul>
+    </div>
+    {% endfor %}
+    {% endif %}
+
+    {% if publications %}
+    <div class="section-title">Publications</div>
+    {% for pub in publications %}
+    <div class="mb1">
+      <div class="pub-title">{{ pub.venue }}{% if pub.year %}, {{ pub.year }}{% endif %}</div>
+      <div class="pub-venue">{{ pub.title }}</div>
+    </div>
+    {% endfor %}
+    {% endif %}
+
+    {% if featured_project %}
+    <div class="section-title">Featured Project</div>
+    <div class="mb2">
+      <div class="exp-row">
+        <div class="exp-left"><div class="proj-name">{{ featured_project.name }}</div></div>
+        {% if featured_project.year %}<div class="exp-right">{{ featured_project.year }}</div>{% endif %}
+      </div>
+      {% if featured_project.tech %}<div class="proj-tech">{{ featured_project.tech }}</div>{% endif %}
+      <ul>{% for b in featured_project.bullets %}<li>{{ b }}</li>{% endfor %}</ul>
+    </div>
+    {% endif %}
+  </td>
+</tr>
+</table>
+</body>
+</html>

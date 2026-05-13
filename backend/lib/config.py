@@ -17,13 +17,31 @@ from typing import Self
 
 class Settings(BaseSettings):
     # ── AI Provider ──────────────────────────────────────────────────────────
-    # Set AI_PROVIDER=anthropic or AI_PROVIDER=huggingface in .env
-    ai_provider: str = "anthropic"
-    # Set AI_MODEL=claude-sonnet-4-6 or any HuggingFace model ID
+    # Primary provider. Supported: groq | cerebras | anthropic | huggingface
+    ai_provider: str = "groq"
+    # Model for the primary provider (Anthropic-style id when ai_provider=anthropic,
+    # otherwise ignored — provider-specific *_model fields below are authoritative).
     ai_model: str = "claude-sonnet-4-6"
-    # Required when AI_PROVIDER=anthropic
+    # Comma-separated fallback chain tried in order on rate-limit/5xx/timeouts.
+    # Example: "cerebras,huggingface". Leave empty to disable fallback.
+    ai_fallback_chain: str = "cerebras,huggingface"
+    # Per-call timeout (seconds) — applies to non-streaming generate_text only.
+    ai_request_timeout_seconds: int = 60
+
+    # Groq (OpenAI-compatible)
+    groq_api_key: str = ""
+    groq_model: str = "llama-3.3-70b-versatile"
+    groq_base_url: str = "https://api.groq.com/openai/v1"
+
+    # Cerebras (OpenAI-compatible)
+    cerebras_api_key: str = ""
+    cerebras_model: str = "llama-3.3-70b"
+    cerebras_base_url: str = "https://api.cerebras.ai/v1"
+
+    # Anthropic (paid fallback / explicit opt-in)
     anthropic_api_key: str = ""
-    # Optional — anonymous free HF inference used when empty
+
+    # HuggingFace Inference (last-resort fallback)
     huggingface_api_key: str = ""
     huggingface_model: str = "mistralai/Mistral-7B-Instruct-v0.3"
     huggingface_max_tokens: int = 2048
@@ -115,9 +133,19 @@ class Settings(BaseSettings):
         """Fail fast at startup if critical environment variables are missing."""
         missing: list[str] = []
 
-        # AI provider key
-        if self.ai_provider == "anthropic" and not self.anthropic_api_key:
-            missing.append("ANTHROPIC_API_KEY (required when AI_PROVIDER=anthropic)")
+        # AI provider key — validate the primary provider has its credential.
+        # Fallback providers are best-effort; missing keys just skip them at runtime.
+        provider_key_map = {
+            "anthropic": ("ANTHROPIC_API_KEY", self.anthropic_api_key),
+            "groq": ("GROQ_API_KEY", self.groq_api_key),
+            "cerebras": ("CEREBRAS_API_KEY", self.cerebras_api_key),
+            # huggingface allows anonymous calls — key optional
+        }
+        primary = self.ai_provider.lower()
+        if primary in provider_key_map:
+            env_name, value = provider_key_map[primary]
+            if not value:
+                missing.append(f"{env_name} (required when AI_PROVIDER={primary})")
 
         # Supabase — always required
         if not self.supabase_url:

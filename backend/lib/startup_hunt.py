@@ -362,9 +362,83 @@ async def search_startup_hunt(
         return [], [], [], strategy, 0, {bucket: 0 for bucket in SOURCE_BUCKETS}, _build_source_diagnostics(payload, [], [])
 
     total_budget = float(getattr(settings, "startup_hunt_total_budget_seconds", 150))
+    bucket_fatal: dict[str, str] = {}
+    # Buckets that should be sequential so a credit/auth error short-circuits the rest.
+    sequential_buckets = {"apify"}
+
+    async def _per_bucket_sequential(bucket_sources: list[StartupHuntSourceConfig]) -> list[tuple[int, dict[str, Any]]]:
+        out: list[tuple[int, dict[str, Any]]] = []
+        for src in bucket_sources:
+            idx = sources.index(src)
+            result = await _fetch_source_safe(client, src, payload, strategy, bucket_fatal=bucket_fatal)
+            out.append((idx, result))
+        return out
+
     async with httpx.AsyncClient(timeout=settings.startup_hunt_timeout_seconds, follow_redirects=True) as client:
-        tasks = [_fetch_source_safe(client, source, payload, strategy) for source in sources]
-        raw_results = await _gather_with_budget(tasks, total_budget)
+        sources_by_bucket: dict[str, list[StartupHuntSourceConfig]] = {}
+        for source in sources:
+            sources_by_bucket.setdefault(_source_bucket(source), []).append(source)
+
+        parallel_tasks: list[Any] = []
+        parallel_indices: list[int] = []
+        sequential_task_groups: list[Any] = []
+
+        for bucket, bucket_sources in sources_by_bucket.items():
+            if bucket in sequential_buckets and len(bucket_sources) > 1:
+                sequential_task_groups.append(_per_bucket_sequential(bucket_sources))
+            else:
+                for src in bucket_sources:
+                    parallel_indices.append(sources.index(src))
+                    parallel_tasks.append(
+                        _fetch_source_safe(client, src, payload, strategy, bucket_fatal=bucket_fatal)
+                    )
+
+        # Run parallel sources and sequential bucket groups concurrently.
+        import asyncio as _aio
+
+        all_jobs = [_aio.ensure_future(t) for t in parallel_tasks] + [
+            _aio.ensure_future(g) for g in sequential_task_groups
+        ]
+        try:
+            await _aio.wait(all_jobs, timeout=max(5.0, total_budget))
+        except Exception:
+            pass
+
+        bucket_outputs: dict[int, dict[str, Any]] = {}
+        # Parallel results
+        for i, future in enumerate(all_jobs[: len(parallel_tasks)]):
+            idx = parallel_indices[i]
+            if future.done():
+                try:
+                    result = future.result()
+                except Exception as exc:
+                    msg = _scrub_error_message(f"{exc.__class__.__name__}: {exc}")
+                    bucket_outputs[idx] = {"items": [], "error": msg}
+                else:
+                    bucket_outputs[idx] = result if isinstance(result, dict) else {"items": [], "error": "Invalid source response"}
+            else:
+                future.cancel()
+                bucket_outputs[idx] = {"items": [], "error": "TimeoutError: source exceeded total search budget"}
+
+        # Sequential bucket groups
+        for future in all_jobs[len(parallel_tasks):]:
+            if future.done():
+                try:
+                    group = future.result()
+                except Exception:
+                    group = []
+                for idx, result in group or []:
+                    bucket_outputs[idx] = result
+            else:
+                future.cancel()
+
+        raw_results = [
+            bucket_outputs.get(
+                i,
+                {"items": [], "error": "TimeoutError: source exceeded total search budget"},
+            )
+            for i in range(len(sources))
+        ]
 
     results: list[dict[str, Any]] = []
     raw_bucket_counts: dict[str, int] = {bucket: 0 for bucket in SOURCE_BUCKETS}
@@ -447,6 +521,30 @@ async def _gather(tasks: list[Any]) -> list[dict[str, Any]]:
     return output
 
 
+async def _gather_bucket_results(tasks: list[Any], budget_seconds: float) -> list[list[tuple[int, dict[str, Any]]]]:
+    import asyncio
+
+    futures = [asyncio.ensure_future(task) for task in tasks]
+    try:
+        await asyncio.wait(futures, timeout=max(5.0, budget_seconds))
+    except Exception:
+        pass
+
+    output: list[list[tuple[int, dict[str, Any]]]] = []
+    for future in futures:
+        if future.done():
+            try:
+                result = future.result()
+            except Exception:
+                output.append([])
+            else:
+                output.append(result if isinstance(result, list) else [])
+        else:
+            future.cancel()
+            output.append([])
+    return output
+
+
 async def _gather_with_budget(tasks: list[Any], budget_seconds: float) -> list[dict[str, Any]]:
     import asyncio
 
@@ -471,17 +569,67 @@ async def _gather_with_budget(tasks: list[Any], budget_seconds: float) -> list[d
     return output
 
 
+_SECRET_QUERY_KEYS = {"token", "api_key", "apikey", "key", "auth", "access_token", "x-api-key"}
+_BUCKET_FATAL_STATUSES = {401, 402, 403, 429}
+
+
+def _scrub_url(url: str) -> str:
+    try:
+        parsed = urlparse(url)
+    except Exception:
+        return url
+    if not parsed.query:
+        return url
+    cleaned = [
+        (key, "***" if key.lower() in _SECRET_QUERY_KEYS else value)
+        for key, value in parse_qsl(parsed.query, keep_blank_values=True)
+    ]
+    return urlunparse(parsed._replace(query=urlencode(cleaned)))
+
+
+def _scrub_error_message(message: str) -> str:
+    text = re.sub(r"https?://\S+", lambda m: _scrub_url(m.group(0)), message or "")
+    text = re.sub(r"(token|api[_-]?key|apikey|access[_-]?token|authorization)=([^\s&'\"]+)", r"\1=***", text, flags=re.IGNORECASE)
+    text = re.sub(r"apify_api_[A-Za-z0-9]+", "apify_api_***", text)
+    return text
+
+
+def _classify_bucket_fatal(exc: Exception) -> tuple[int | None, str | None]:
+    """Return (status, friendly_reason) when the error means we should stop calling this bucket."""
+    if isinstance(exc, httpx.HTTPStatusError):
+        status = exc.response.status_code
+        if status in _BUCKET_FATAL_STATUSES:
+            if status == 402:
+                return status, "Provider credit/quota exhausted (402 Payment Required). Stopping further calls."
+            if status == 401:
+                return status, "Provider authentication failed (401). Check API token."
+            if status == 403:
+                return status, "Provider rejected the request (403 Forbidden)."
+            if status == 429:
+                return status, "Provider rate limit hit (429). Stopping further calls."
+    return None, None
+
+
 async def _fetch_source_safe(
     client: httpx.AsyncClient,
     source: StartupHuntSourceConfig,
     payload: dict[str, Any],
     strategy: dict[str, Any],
+    bucket_fatal: dict[str, str] | None = None,
 ) -> dict[str, Any]:
+    bucket = _source_bucket(source)
+    if bucket_fatal is not None and bucket in bucket_fatal:
+        return {"items": [], "error": bucket_fatal[bucket]}
     try:
         items = await _fetch_source(client, source, payload, strategy)
         return {"items": items, "error": None}
     except Exception as exc:
-        return {"items": [], "error": f"{exc.__class__.__name__}: {exc}"}
+        status, friendly = _classify_bucket_fatal(exc)
+        if status and bucket_fatal is not None:
+            bucket_fatal[bucket] = friendly or f"Provider returned HTTP {status}"
+            return {"items": [], "error": friendly or f"Provider returned HTTP {status}"}
+        message = _scrub_error_message(f"{exc.__class__.__name__}: {exc}")
+        return {"items": [], "error": message}
 
 
 async def _fetch_source(
@@ -1134,7 +1282,7 @@ async def _fetch_startup_directory(
                 "source_type": source.type,
                 "direct_apply_url": company_payload.get("company_careers_url"),
                 "canonical_job_url": canonicalize_url(company_payload["company_careers_url"]) if company_payload.get("company_careers_url") else None,
-                "portal_job_url": entry.get("detail_url") or source.url,
+                "portal_job_url": entry.get("detail_url"),
                 "posted_at": None,
                 "company_payload": company_payload,
                 "contacts": contacts,
