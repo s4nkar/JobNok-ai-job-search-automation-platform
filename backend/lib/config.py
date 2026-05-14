@@ -43,7 +43,7 @@ class Settings(BaseSettings):
 
     # HuggingFace Inference (last-resort fallback)
     huggingface_api_key: str = ""
-    huggingface_model: str = "mistralai/Mistral-7B-Instruct-v0.3"
+    huggingface_model: str = "Qwen/Qwen2.5-7B-Instruct"
     huggingface_max_tokens: int = 2048
 
     # ── Embedding Providers ──────────────────────────────────────────────────

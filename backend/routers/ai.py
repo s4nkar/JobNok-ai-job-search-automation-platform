@@ -8,6 +8,7 @@ import asyncio
 import base64
 import json
 import logging
+import re
 from pathlib import Path
 
 logger = logging.getLogger(__name__)
@@ -104,8 +105,17 @@ async def tailor_resume(
             embeddings=serialize_embeddings(resume_embeddings) if resume_embeddings.size > 0 else [],
         )
 
+    # ─── JD language normalisation (translate to English if needed) ──────
+    jd_for_processing = job_description
+    if not _is_english(job_description):
+        logger.info("Non-English JD detected — translating to English before analysis")
+        try:
+            jd_for_processing = await _translate_jd(job_description)
+        except Exception as exc:
+            logger.warning("JD translation failed: %r — proceeding with original text", exc)
+
     # ─── JD chunks + embeddings (always fresh) ────────────────────────
-    jd_text_clean = clean_jd_text(job_description)
+    jd_text_clean = clean_jd_text(jd_for_processing)
     jd_chunks = chunk_jd(jd_text_clean)
     try:
         jd_embeddings = await embed([c.text for c in jd_chunks], purpose="matching") if jd_chunks else _empty_array()
@@ -124,7 +134,7 @@ async def tailor_resume(
     )
 
     # ─── LLM call — only for AI-generated prose ───────────────────────
-    ai_fields = await _generate_tailor_prose(resume_text, job_description, analysis)
+    ai_fields = await _generate_tailor_prose(resume_text, jd_for_processing, analysis)
 
     # ─── Merge deterministic + AI into the wire format the frontend expects ──
     response_payload = {
@@ -164,8 +174,48 @@ async def tailor_resume(
 
 
 def _empty_array():
-    import numpy as np
     return np.zeros((0, 0), dtype="float32")
+
+
+# German structural words that rarely appear in English technical text.
+# Used to catch German JDs written mostly in ASCII (few umlauts).
+_GERMAN_STRUCTURAL_RE = re.compile(
+    r"\b(deine?[rns]?|kenntnisse[n]?|aufgaben|werkstudent|studium\b|praktikum|"
+    r"bewerbung|erfahrung\b|bereich\b|programmierkenntnisse|abgeschlossenes|"
+    r"mehrjährige|solide\b|fundierte|sicherer|vertrautheit|laufendes)\b",
+    re.I,
+)
+
+
+def _is_english(text: str) -> bool:
+    """Return False if the text appears to be non-English.
+
+    Two-pass check:
+    1. Non-ASCII ratio ≥ 1% → non-English (catches umlauts/accents).
+    2. German structural word count ≥ 3 → non-English (catches ASCII-heavy
+       German JDs like startup postings that use few umlauts).
+    """
+    if not text:
+        return True
+    non_ascii = sum(1 for c in text if ord(c) > 127)
+    if (non_ascii / len(text)) >= 0.01:
+        return False
+    german_hits = len(_GERMAN_STRUCTURAL_RE.findall(text))
+    return german_hits < 3
+
+
+async def _translate_jd(text: str) -> str:
+    """Translate a non-English JD to English via the configured LLM."""
+    system = (
+        "Translate the following job description to English. "
+        "CRITICAL: Preserve ALL original line breaks, bullet points, and list structure exactly — "
+        "each item that was on its own line must remain on its own line after translation. "
+        "If the text contains the SAME content in BOTH German AND English already, "
+        "output ONLY the English version — do NOT translate the German again or duplicate any section. "
+        "Preserve all technical terms, tool names, company names, and section headers exactly. "
+        "Return only the translated text with no commentary or preamble."
+    )
+    return await ai_provider.generate_text(text[:4000], system, max_tokens=4000)
 
 
 async def _generate_tailor_prose(
@@ -184,6 +234,8 @@ async def _generate_tailor_prose(
     )
     transferable_block = "; ".join(analysis.transferable_strengths[:6]) or "(none)"
     critical_block = "; ".join(analysis.critical_missing[:6]) or "(none)"
+    missing_block = ", ".join(analysis.missing_keywords) or "(none)"
+    matched_block = ", ".join(analysis.matched_keywords[:15]) or "(none)"
 
     system = """You are a CV tailoring assistant. The deterministic ATS analysis is already done —
 you receive its results and must NOT recompute scores, matched keywords, or missing keywords.
@@ -193,7 +245,7 @@ Return ONLY valid JSON in this shape:
   "target_role": "<job title from the JD>",
   "target_company": "<company name from the JD>",
   "profile_headline": "<headline in the format: [target job title] | [relevant skill] | [relevant skill] | [relevant skill] — use the exact target job title from the JD as the first segment, then 2–3 skills from the resume most relevant to this specific role>",
-  "tailored_summary": "<professional summary paragraph reframing genuine transferable experience honestly>",
+  "tailored_summary": "<professional summary paragraph — see tone rules below>",
   "bullet_rewrites": [{"original": "<EXACT original bullet from REWRITE CANDIDATES>", "improved": "<sharpened framing>"}],
   "summary": "<1-paragraph honest fit assessment noting strengths and real gaps>"
 }
@@ -203,16 +255,26 @@ Hard rules:
   * PRESERVE every number, percentage, and metric from the original
   * NEVER add tools, methods, or domains absent from the original
   * Adjust only verb / framing / emphasis — the evidence must stay identical
-- profile_headline: lead with the exact job title from the JD, then 2–3 of the candidate's real skills most relevant to this role. Never add skills the resume doesn't show.
-- tailored_summary: reframe genuine transferable experience honestly. Never claim domain expertise the resume does not show.
+- profile_headline: lead with the exact job title from the JD, then 2–3 of the candidate's REAL skills most relevant to THIS SPECIFIC ROLE. Prefer specific technical skills (e.g. RAG, NLP, LangChain, Transformers) over generic acronyms (AI, ML) — use MATCHED KEYWORDS as signal but don't be limited to them; draw from resume skills when they clearly overlap the JD's domain. Never add skills the resume doesn't show.
+- tailored_summary TONE AND CONTENT — strict CV style, not cover letter style:
+  * Write in third person or nominative style. NO first-person pronouns ("I am", "I have", "My experience").
+  * NO cover-letter phrases: "I am confident", "I am excited", "I look forward to", "I believe".
+  * NO vague filler: "drive innovation", "leveraging expertise", "improve complex workflows", "passionate about".
+  * Lead with years of experience and core specialty, e.g. "Applied AI Engineer with 3+ years of experience building..."
+  * Include at least ONE specific achievement from the resume (a metric, a project name, or a publication). Make it feel like THIS candidate, not any AI engineer.
+  * Reframe genuine transferable experience for this specific role. Never claim domain expertise the resume does not show.
+  * Write in your own words — do NOT copy or paraphrase sentence fragments from the JD requirements. The summary must read as the candidate's own story, not a reflection of the job posting.
+  * NEVER mention any skill from the MISSING KEYWORDS list — those are absent from the resume.
 - summary: ground the fit assessment in the provided CRITICAL GAPS and TRANSFERABLE STRENGTHS.
 - Return ONLY valid JSON, no markdown fences."""
 
     prompt = f"""DETERMINISTIC ANALYSIS (do not recompute, just use):
 OVERALL SCORE: {analysis.overall_score}
 SCORE BREAKDOWN: {json.dumps(analysis.score_breakdown)}
+MATCHED KEYWORDS (use these to pick headline skills — prefer the ones most role-relevant): {matched_block}
 TRANSFERABLE STRENGTHS: {transferable_block}
 CRITICAL GAPS (do not invent experience to cover these): {critical_block}
+MISSING KEYWORDS — absent from resume, do not mention in any prose field: {missing_block}
 
 REWRITE CANDIDATES (only rewrite these — copy "ORIGINAL" verbatim):
 {rewrites_block}
@@ -276,7 +338,9 @@ CRITICAL RULES — violating any of these produces a broken CV:
 3. languages: Copy language entries EXACTLY as written in the resume. Do NOT substitute, add, or remove languages.
 4. Completeness: Include ALL experience entries, ALL projects, ALL publications found in the resume. Do not omit any.
 5. bullet_rewrites: Replace each original bullet with its improved version verbatim — do not skip any provided rewrite.
-6. If a TAILORED HEADLINE is provided, use it as job_title. If a TAILORED SUMMARY is provided, use it as summary.
+6. If a TAILORED HEADLINE is provided, use it as job_title. If a TAILORED SUMMARY is provided, use it as summary — copy it VERBATIM, do NOT modify it to weave in keywords.
+7. bullets: Each string in ANY bullets array MUST NOT start with a bullet character (•, -, *, ▪, –). The template adds its own markers. Strip any such prefix before including the text.
+8. publications venue: Preserve the COMPLETE venue string verbatim, including any ranking qualifiers (e.g. "Q1-ranked", "Scopus indexed", "SJR"). Never truncate the venue name.
 
 Return ONLY this JSON structure (no markdown, no extra text):
 {
@@ -303,7 +367,7 @@ Return ONLY this JSON structure (no markdown, no extra text):
      "period": "string", "details": "string or null"}
   ],
   "skills": [
-    {"category": "string", "items": "string — comma-separated list of actual skills, NEVER empty"}
+    {"category": "string", "items": "SINGLE STRING — skills separated by commas, e.g. \"Python, PyTorch, Docker\". NOT an array. NEVER null or empty."}
   ],
   "projects": [
     {"name": "string", "tech": "string or null", "bullets": ["string"]}
@@ -347,12 +411,47 @@ RESUME TEXT:
     except Exception:
         raise HTTPException(status_code=500, detail="Failed to structure resume. Please try again.")
 
-    # Post-process: strip skill rows with empty items (AI sometimes returns empty strings)
+    # Hard-override: tailored_summary is authoritative — never let the structuring
+    # LLM drift it by weaving in missing keywords or changing tone.
+    if tailored_summary:
+        cv_data["summary"] = tailored_summary
+
+    # Strip stray bullet prefix characters from all bullets arrays — LLMs occasionally
+    # prefix items with •, -, *, ▪ even when told not to, causing double-bullets in HTML.
+    _BULLET_PREFIX = re.compile(r"^[\s•\-\*▪–]+")
+    for section_key in ("featured_project", ):
+        if cv_data.get(section_key) and isinstance(cv_data[section_key].get("bullets"), list):
+            cv_data[section_key]["bullets"] = [
+                _BULLET_PREFIX.sub("", b) for b in cv_data[section_key]["bullets"]
+            ]
+    for section_key in ("experience", "projects"):
+        for entry in (cv_data.get(section_key) or []):
+            if isinstance(entry.get("bullets"), list):
+                entry["bullets"] = [_BULLET_PREFIX.sub("", b) for b in entry["bullets"]]
+
+    # Normalise skill items — LLMs occasionally return an array, HTML, or bullet-prefixed
+    # lines instead of the requested comma-separated string. Normalise all of these to a
+    # plain string so the Jinja template can render {{ skill.items }} safely.
     if cv_data.get("skills"):
-        cv_data["skills"] = [
-            s for s in cv_data["skills"]
-            if s.get("items") and str(s["items"]).strip()
-        ]
+        normalized_skills = []
+        for s in cv_data["skills"]:
+            items = s.get("items")
+            if isinstance(items, list):
+                # Array → comma-separated string, strip any stray bullet prefixes
+                items = ", ".join(str(i).strip(" •·-–\t") for i in items if str(i).strip(" •·-–\t"))
+            elif items is not None:
+                items = str(items)
+                # Strip HTML tags (LLM sometimes returns <ul><li>...</li></ul>)
+                items = re.sub(r"<[^>]+>", " ", items)
+                # Convert bullet-prefixed newlines to comma-separated
+                lines = [ln.strip(" •·-–\t") for ln in items.splitlines() if ln.strip(" •·-–\t")]
+                if len(lines) > 1:
+                    items = ", ".join(lines)
+                items = items.strip()
+            if items:
+                s = {**s, "items": items}
+                normalized_skills.append(s)
+        cv_data["skills"] = normalized_skills
 
     # Overlay profile contact fields (always authoritative for contact info)
     # full_name: only override if profile has a proper full name (first + last)
@@ -400,6 +499,11 @@ RESUME TEXT:
     cv_data["photo_base64"] = photo_base64
     cv_data["date_of_birth"] = profile.get("date_of_birth")
     cv_data["nationality"] = profile.get("nationality")
+
+    logger.warning(
+        "CV skills pre-render: %s",
+        json.dumps([{"category": s.get("category"), "items_type": type(s.get("items")).__name__, "items": s.get("items")} for s in (cv_data.get("skills") or [])]),
+    )
 
     # Render template
     template_file = "template_classic.html" if template_id == "classic" else "template_modern.html"

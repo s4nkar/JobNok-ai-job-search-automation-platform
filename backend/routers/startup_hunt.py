@@ -169,8 +169,8 @@ async def create_opportunity_artifact(request: Request, opportunity_id: str, bod
         "content": body.get("content", ""),
         "metadata": body.get("metadata", {}),
     }
-    res = await asyncio.to_thread(lambda: sb.table("opportunity_artifacts").insert(row).select().single().execute())
-    return res.data
+    res = await asyncio.to_thread(lambda: sb.table("opportunity_artifacts").insert(row).execute())
+    return res.data[0] if res.data else {}
 
 
 @router.delete("/opportunities/{opportunity_id}/artifacts/{artifact_id}", status_code=204)

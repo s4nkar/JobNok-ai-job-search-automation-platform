@@ -202,13 +202,23 @@ def _split_skill_line(line: str) -> list[str]:
 # ── JD chunker ────────────────────────────────────────────────────
 
 _JD_HEADER_PATTERNS = [
+    # ── English ────────────────────────────────────────────────────────────────
     (re.compile(r"(requirements?|qualifications?|must[-\s]?have|what\s+you'?ll?\s+need)", re.I), "requirement"),
     (re.compile(r"(preferred|nice[-\s]?to[-\s]?have|bonus|plus)", re.I), "requirement"),
-    (re.compile(r"(responsibilities|what\s+you'?ll?\s+do|about\s+the\s+role|your\s+role|duties)", re.I), "responsibility"),
-    # Benefits / perks — never skills, never match the candidate against these
-    (re.compile(r"(benefits?|perks?|what\s+we\s+offer|compensation|###\s*benefits?)", re.I), "domain"),
-    # "About <company>" — matches "About osapiens", "About us" etc. but NOT "About the role"
-    (re.compile(r"(about\s+(?!the\s+role|your\s+role|this\s+role)\w+|who\s+we\s+are|company\s+(overview|focus)|join\s+us\s+for)", re.I), "domain"),
+    # Modern JD phrasing for candidate requirements
+    (re.compile(r"(you'?ll?\s+thrive|ideal\s+candidates?|what\s+you\s+(bring|offer)|you\s+should\s+have|about\s+you\b)", re.I), "requirement"),
+    (re.compile(r"(responsibilities|what\s+you'?ll?\s+do|about\s+the\s+role|your\s+role|duties|in\s+this\s+role\b)", re.I), "responsibility"),
+    # Benefits / perks sections — classified as domain so they don't pollute
+    # critical gaps or keyword extraction regardless of where they appear in the JD
+    (re.compile(r"(###\s*benefits?|benefits?\s*:?$|perks?\s*:?$|what\s+we\s+offer|what\s+speaks|compensation)", re.I), "domain"),
+    (re.compile(r"(about\s+(?!the\s+role|your\s+role|this\s+role|you\b)\w+|who\s+we\s+are|company\s+(overview|focus)|join\s+us\s+for)", re.I), "domain"),
+    # ── German ────────────────────────────────────────────────────────────────
+    # Responsibilities: "Deine Aufgaben", "Dein Aufgabenbereich", "Das erwartet dich"
+    (re.compile(r"(deine?\s+aufgaben|aufgabenbereich|dein\s+(profil|aufgaben)|das\s+erwartet)", re.I), "responsibility"),
+    # Requirements: "Das bringst du mit", "Dein Profil", "Anforderungen", "Was du mitbringst"
+    (re.compile(r"(das\s+bringst\s+du|was\s+du\s+mitbringst|dein\s+profil|anforderungen|tech[-\s]?skills?|know[-\s]?how)", re.I), "requirement"),
+    # Benefits / company info (German) — catch all common variants including "Das spricht für uns"
+    (re.compile(r"(was\s+wir\s+(bieten|mitbringen|dir|euch)|wer\s+wir\s+sind|das\s+bieten\s+wir|unser\s+angebot|das\s+spricht\s+für)", re.I), "domain"),
 ]
 
 # Sentinel lines that mark where tracker-appended metadata begins.
@@ -221,20 +231,44 @@ _JD_METADATA_SENTINEL = re.compile(
 _JD_BODY_START = re.compile(
     r"^(about\s+the\s+role|your\s+responsibilities|responsibilities|requirements?|"
     r"what\s+you|we\s+are\s+looking|the\s+role|job\s+description|overview|"
-    r"company\s+focus|as\s+an?\s+\w+[\s,])",
+    r"company\s+focus|as\s+an?\s+\w+[\s,]|"
+    # German body start markers
+    r"deine?\s+aufgaben|das\s+bringst\s+du|anforderungen|wir\s+suchen)",
+    re.I | re.MULTILINE,
+)
+
+# Where useful JD content ends — contact info, apply instructions, legal text,
+# and company "About us" boilerplate. These ALWAYS come last and are safe to
+# truncate because no candidate requirements ever follow them.
+# NOTE: Benefits sections are NOT truncated here — some JDs place requirements
+# after benefits. Benefits are handled by _JD_HEADER_PATTERNS (domain kind).
+_JD_END_SENTINEL = re.compile(
+    r"^(contact\s+(us|information|details?)|about\s+(us|the\s+company)|"
+    r"apply\s+(now|online|here|today)|how\s+to\s+apply|please\s+apply|"
+    r"to\s+apply|equal\s+opportunity|background\s+check|affirmative\s+action|"
+    r"privacy\s+policy|we\s+are\s+committed|we\s+look\s+forward|"
+    # German equivalents
+    r"kontakt(\s+zu\s+uns)?|über\s+uns|so\s+bewirbst\s+du\s+dich|"
+    r"bewirb\s+dich|impressum|datenschutz)",
     re.I | re.MULTILINE,
 )
 
 
 def clean_jd_text(text: str) -> str:
-    """Strip tracker metadata and leading title/location lines from a JD.
+    """Strip tracker metadata, leading title/location lines, and end-of-JD boilerplate.
 
     Call this before keyword extraction as well as before chunking so both
     paths operate on the same cleaned text.
     """
+    # Strip tracker metadata appended by the job tracker UI
     m = _JD_METADATA_SENTINEL.search(text)
     if m:
         text = text[: m.start()].strip()
+    # Strip contact info / legal / apply boilerplate at the end
+    m = _JD_END_SENTINEL.search(text)
+    if m:
+        text = text[: m.start()].strip()
+    # Strip leading title/location lines before the JD body
     m = _JD_BODY_START.search(text)
     if m:
         text = text[m.start():]
@@ -316,7 +350,10 @@ def _detect_jd_section(line: str) -> tuple[ChunkKind, str] | None:
     return None
 
 
-_SENTENCE_SPLIT = re.compile(r"(?<=[.!?])\s+(?=[A-Z])")
+# Split on sentence-ending punctuation followed by a capital letter.
+# Negative lookbehind for common abbreviations so "e.g. Pandas" and
+# "i.e. Docker" don't get split mid-clause.
+_SENTENCE_SPLIT = re.compile(r"(?<![A-Z])(?<!e\.g)(?<!i\.e)(?<!etc)(?<=[.!?])\s+(?=[A-Z])")
 
 
 def _split_sentences(text: str) -> list[str]:

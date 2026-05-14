@@ -98,8 +98,8 @@
     {% if skills %}
     <div class="sidebar-section">Technical Skills</div>
     {% for skill in skills %}
-    <div class="skill-cat">{{ skill.category }}</div>
-    <div class="skill-items">{{ skill.items }}</div>
+    <div class="skill-cat">{{ skill['category'] }}</div>
+    <div class="skill-items">{{ skill['items'] if skill['items'] is string else skill['items'] | join(', ') }}</div>
     {% endfor %}
     {% endif %}
 

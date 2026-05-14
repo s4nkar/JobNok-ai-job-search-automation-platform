@@ -148,6 +148,10 @@ _PHRASES = [
     "weights and biases", "weights & biases",
     "amazon web services", "aws",
     "data pipeline", "data pipelines",
+    "predictive analytics", "predictive modeling",
+    "model deployment", "model serving",
+    "etl pipeline", "etl process",
+    "chatbot",
     "google cloud platform",
     "high performance computing",
     "remote sensing",
@@ -155,7 +159,40 @@ _PHRASES = [
     "change detection",
     "time series",
     "object detection",
+    # Recommender system domain
+    "recommender system", "recommender systems", "collaborative filtering",
+    "content-based filtering", "content based filtering",
+    "matrix factorization", "knowledge graph",
+    # MLOps / evaluation
+    "a/b testing", "evaluation framework", "model evaluation",
+    "data versioning", "model registry",
+    # Agentic / LLM tooling
+    "agentic pipeline", "agentic pipelines", "mcp server",
+    "multi-agent", "function calling",
 ]
+
+# Canonical form for plural/variant phrases — keyed by the non-canonical form.
+# If a text contains the key, it's replaced by the value before comparison so
+# "data pipelines" and "data pipeline" are treated as the same keyword.
+_PHRASE_ALIASES: dict[str, str] = {
+    "data pipelines": "data pipeline",
+    "etl processes": "etl process",
+    "etl pipelines": "etl pipeline",
+    "predictive models": "predictive modeling",
+    "large language models": "large language model",
+    "vector databases": "vector database",
+    "recommender systems": "recommender system",
+    "agentic pipelines": "agentic pipeline",
+    "mcp servers": "mcp server",
+}
+
+# Token → canonical phrase. Applied after stopword filtering so a bare acronym
+# token is collapsed into its phrase form — prevents ETL / etl process duplicates
+# when both the acronym and its full phrase appear in the same text.
+_TOKEN_ALIASES: dict[str, str] = {
+    "ETL": "etl process",
+    "Chatbots": "chatbot",  # plural token → singular canonical form
+}
 
 # Common false-positive tokens that match the regex but aren't useful keywords.
 # Rule: a word belongs here if it (a) isn't a technology/skill name, and
@@ -177,19 +214,43 @@ _KEYWORD_STOPWORDS = {
     "Translate", "Provide", "Enable", "Leverage", "Utilize", "Ensure",
     "Manage", "Lead", "Drive", "Grow", "Learn", "Use", "Run", "Help",
     "Feeling", "Hands-on",
+    # Additional sentence-initial verbs common in modern JD phrasing
+    "Bring", "Operate", "Prototype", "Synthesize", "Iterate", "Identify",
+    "Optimize", "Transform", "Influence", "Raise", "Serving", "Turning",
+    "Balancing", "Debugging", "Iterating", "Prototyping", "Partner",
+    "Thrive", "Combining", "Shaping", "Shipping", "Working",
     # Generic adjectives / adverbs in JD prose
     "Nice", "Modern", "Flexible", "Competitive", "Strong", "Clear",
     "Understanding", "Familiarity", "Direct", "Through",
+    # Qualifier adjectives that prefix real skills but aren't skills themselves
+    "Excellent", "Foundational", "Minimum", "Solid", "Profound", "Fluent",
+    "Structured", "Several", "Proficient", "Diverse", "Individual", "Various",
+    "Above-average", "Team-oriented", "Solution-oriented", "In-depth",
+    "Comprehensive", "Careful", "Provable",
+    # "Frameworks" alone is too generic — the actual framework name is the signal
+    "Frameworks",
+    # Hyphenated compound variants already covered by the base token
+    "Tensorflow-based", "Docker-based",
+    # Benefits / perks product names that survive translation
+    "Hansefit", "Quooker",
+    # Contact / apply section noise
+    "Please", "Contact", "Because", "Mobility",
     # Location / company names that leak in via capitalised tokens
     "Munich", "München", "Mannheim", "Deutschland", "Sendlinger", "Tor",
     "Goldman", "Sachs", "Decarbonization", "Partners",
+    # Company / product names (not transferable candidate skills)
+    "OpenAI",
+    # Role / title labels that appear in JD prose but aren't discrete skills
+    "CTO", "Scientist", "Founder", "Product",
+    # Company-invented terms / portmanteaus that aren't real skills
+    "Pythonista", "AI/ML",
     # Company-specific product / programme names (not transferable skills)
     "HUB",
     # Solo tokens that are subsumed by a multi-word phrase already in _PHRASES
     # (e.g. "Weights" and "Biases" are noise when "weights & biases" is captured)
     "Weights", "Biases",
     # Generic standalone words that add no signal without their partner token
-    "Services", "Web",
+    "Services", "Web", "Software",
     # Business model / product descriptors (not candidate skills)
     "Software-as-a-Service",
     # Tracker-appended metadata words
@@ -206,14 +267,55 @@ _KEYWORD_STOPWORDS = {
     # Generic labels that appear as tokens
     "Development", "Engineering", "Expertise", "Qualifications", "Language",
     "Tech-Leverage", "Berlin/Leipzig",
-    # Company names that appear as keywords
-    "Circula",
-    # Solo tokens subsumed by phrases or too generic alone
-    "System",  # "system design" is the phrase; "System" alone adds no signal
-    "Cloud",   # "cloud infrastructure" is the phrase
+    # Company / location names
+    "Circula", "BFS", "Riverty", "Bertelsmann", "Dortmund",
+    # Solo tokens subsumed by multi-word phrases already in _PHRASES
+    "System",   # "system design" is the phrase
+    "Cloud",    # "cloud infrastructure" is the phrase
+    "Deep",     # "deep learning" is the phrase
+    "Model",    # "model deployment" is the phrase
+    "Predictive",  # "predictive analytics" is the phrase
+    # Untranslated German abbreviations that may leak through LLM translation
+    "KI",       # Künstliche Intelligenz = AI (already matched)
+    # Generic JD labels and adjectives not representing skills
+    "Additionally", "Always", "Basic", "Business", "Completed", "Does",
+    "Evaluate", "Fluent", "Innovation", "Know-how", "Knowledge",
+    "More", "Nice-to-have", "Plus", "Tech-Skills", "Then", "Teamwork",
+    # Plural / inflected forms already covered by their base token or phrase
+    "Engineers",   # covered by "Engineer"
+    "Shaping",     # verb form, not a skill
+    "Thousands",   # from company description ("tausende")
+    # Partially-untranslated German compounds
+    "KI-based",    # = "AI-based", already covered by "AI"
+    # Composite job-title shorthands — not standalone skills
+    "ML/DL",
+    # Solo token subsumed by "prompt engineering" phrase
+    "Prompt",
+    # Hyphenated REST variant — CV uses "REST APIs" (space, not hyphen)
+    "REST-APIs",
     # Months (appear in date ranges inside JDs)
     "January", "February", "March", "April", "June", "July", "August",
     "September", "October", "November", "December",
+    # Tokens fully subsumed by multi-word phrases in _PHRASES
+    "Analytics",   # "predictive analytics" is the phrase
+    "Computer",    # "computer vision" is the phrase
+    "Data",        # "data science" / "data pipeline" are the phrases
+    "Face",        # "Hugging Face" is the phrase
+    "Hugging",     # "Hugging Face" is the phrase
+    "Learning",    # "machine learning" / "deep learning" are the phrases
+    "Machine",     # "machine learning" is the phrase
+    "Science",     # "data science" is the phrase
+    # Generic role / prose labels
+    "Act",         # sentence-initial verb
+    "Engineer",    # role title, not a discrete skill
+    "EU",          # regulatory body reference, not a matchable skill
+    "Experience",  # generic label
+    "Further",     # filler / transition word
+    "German",      # language requirement label, not a keyword to surface
+    "Germany",     # location
+    "IT",          # too generic (appears in "IT landscape" prose)
+    "Pure",        # filler adjective
+    "Work",        # generic label
 }
 
 
@@ -226,10 +328,16 @@ def extract_keywords(text: str) -> set[str]:
     tokens = {m.group(1) for m in _TOKEN_RE.finditer(text)}
     tokens = {t for t in tokens if t not in _KEYWORD_STOPWORDS and len(t) >= 2}
 
+    # Collapse bare acronym tokens into their canonical phrase form so that
+    # e.g. "ETL" and "etl process" don't both appear as separate keywords.
+    tokens = {_TOKEN_ALIASES.get(t, t) for t in tokens}
+
     lower = text.lower()
     for phrase in _PHRASES:
         if phrase in lower:
-            tokens.add(phrase)
+            # Normalise to canonical form so plural/variant forms match their base
+            canonical = _PHRASE_ALIASES.get(phrase, phrase)
+            tokens.add(canonical)
 
     return tokens
 
@@ -261,8 +369,15 @@ def match_resume_to_jd(
     result = MatchResult()
 
     # Keyword layer — always runs, independent of embeddings.
+    # JD keywords are extracted only from requirement/responsibility chunks so that
+    # benefits-section noise ("Coffee", "Parking", "Organic") doesn't pollute the
+    # matched/missing keyword lists. Falls back to full jd_text when no chunks exist.
     resume_kw = extract_keywords(resume_text)
-    jd_kw = extract_keywords(jd_text)
+    jd_signal_text = (
+        " ".join(c.text for c in jd_chunks if c.kind in ("requirement", "responsibility"))
+        or jd_text
+    )
+    jd_kw = extract_keywords(jd_signal_text)
     r_lower = _casefold_set(resume_kw)
     j_lower = _casefold_set(jd_kw)
 
@@ -321,8 +436,14 @@ def match_resume_to_jd(
         if m.match_type != "missing" or m.requirement_kind != "requirement":
             continue
         # If a keyword for this requirement IS in the resume, it's not truly missing.
+        # Two passes: (1) extracted tokens (handles camelCase/acronyms), (2) direct
+        # substring check on lowercased requirement text (catches lowercase keywords
+        # like "python" that the token regex skips because they aren't capitalised).
         req_kw = extract_keywords(m.requirement)
         if req_kw and any(k.casefold() in r_lower for k in req_kw):
+            continue
+        req_lower = m.requirement.lower()
+        if any(k in req_lower for k in r_lower if len(k) >= 4):
             continue
         critical.append(m.requirement)
     result.critical_missing = critical[:10]
@@ -344,6 +465,10 @@ def match_resume_to_jd(
                 continue
             # Education, publication, and header entries aren't rewritable bullets.
             if r_chunk.section in ("education", "header", "publications", "certifications", "languages"):
+                continue
+            # Skip very short chunks — these are job title lines or company names
+            # that slipped through as bullets, not actual achievement statements.
+            if len(r_chunk.text.split()) < 5:
                 continue
             sim = float(col[int(i_idx)])
             if not (REWRITE_BAND[0] <= sim <= REWRITE_BAND[1]):
@@ -397,15 +522,16 @@ def _compute_score_breakdown(
 
     req_score = avg_score_for_kind("requirement")
     resp_score = avg_score_for_kind("responsibility")
+    # When a JD uses "You'll thrive if..." or "In this role" phrasing, all candidate
+    # requirements land in responsibility chunks (not requirement). Fall back across
+    # the board so scores aren't artificially zeroed out.
+    effective_req = req_score if req_score > 0 else resp_score
     return {
-        "core_skills": req_score,
-        # Many JDs (especially startup ones) have no explicit "Responsibilities"
-        # section — all bullets are requirements. Fall back to req_score so the
-        # category doesn't misleadingly show 0.
+        "core_skills": effective_req,
         "responsibilities": resp_score if resp_score > 0 else req_score,
         "domain": avg_score_for_kind("domain"),
         "ats_keywords": ats_pct,
-        "seniority": req_score,
+        "seniority": effective_req,
     }
 
 

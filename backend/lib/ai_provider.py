@@ -171,6 +171,21 @@ async def _anthropic_stream(prompt: str, system: str, max_tokens: int) -> AsyncG
 
 # ── HuggingFace ──────────────────────────────────────────────────
 
+def _hf_raise(exc: Exception) -> None:
+    """Re-raise HuggingFace errors with the right semantics.
+
+    429 / 5xx → _ProviderError (transient, try next provider).
+    400        → RuntimeError  (bad request / model config — retrying won't help).
+    """
+    from huggingface_hub.utils import HfHubHTTPError
+    if isinstance(exc, HfHubHTTPError) and exc.response is not None:
+        if exc.response.status_code == 429 or exc.response.status_code >= 500:
+            raise _ProviderError(f"huggingface error: {exc!r}") from exc
+        # 400 "model not supported" — hard failure; don't burn the fallback chain.
+        raise RuntimeError(f"huggingface error: {exc!r}") from exc
+    raise _ProviderError(f"huggingface error: {exc!r}") from exc
+
+
 async def _huggingface_generate(prompt: str, system: str, max_tokens: int) -> str:
     from huggingface_hub import InferenceClient
     from huggingface_hub.utils import HfHubHTTPError
@@ -190,7 +205,8 @@ async def _huggingface_generate(prompt: str, system: str, max_tokens: int) -> st
         )
         return response.choices[0].message.content or ""
     except HfHubHTTPError as exc:
-        raise _ProviderError(f"huggingface error: {exc!r}") from exc
+        _hf_raise(exc)
+        raise  # unreachable — keeps type checker happy
 
 
 async def _huggingface_stream(prompt: str, system: str, max_tokens: int) -> AsyncGenerator[str, None]:
@@ -216,7 +232,8 @@ async def _huggingface_stream(prompt: str, system: str, max_tokens: int) -> Asyn
             if delta:
                 yield delta
     except HfHubHTTPError as exc:
-        raise _ProviderError(f"huggingface error: {exc!r}") from exc
+        _hf_raise(exc)
+        raise  # unreachable
 
 
 # ── Provider dispatch ────────────────────────────────────────────

@@ -95,8 +95,8 @@
 <table class="skills-table">
 {% for skill in skills %}
 <tr>
-  <td class="skill-label">{{ skill.category }}</td>
-  <td>{{ skill.items }}</td>
+  <td class="skill-label">{{ skill['category'] }}</td>
+  <td>{{ skill['items'] if skill['items'] is string else skill['items'] | join(', ') }}</td>
 </tr>
 {% endfor %}
 </table>
