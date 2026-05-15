@@ -107,6 +107,13 @@ async def list_startup_hunt_opportunities(request: Request):
     return rows
 
 
+@router.get("/opportunities/{opportunity_id}")
+async def get_startup_hunt_opportunity(request: Request, opportunity_id: str):
+    user_id = get_user_id(request)
+    sb = get_supabase()
+    return await _fetch_single_row(sb, "startup_hunt_opportunities", user_id, opportunity_id)
+
+
 @router.get("/contacts")
 async def list_startup_hunt_contacts(request: Request, opportunity_id: str | None = None):
     user_id = get_user_id(request)

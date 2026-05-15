@@ -1,5 +1,6 @@
 'use client'
 
+import React from 'react'
 import Link from 'next/link'
 import { useRouter } from 'next/navigation'
 import { useEffect, useState } from 'react'
@@ -148,10 +149,13 @@ export default function TrackerPage() {
   }
 
   async function deleteApp(id: string) {
+    if (!confirm('Remove this application? This cannot be undone.')) return
     const res = await apiFetch(`/api/tracker/${id}`, { method: 'DELETE' })
     if (res.ok) {
       setApplications((prev) => prev.filter((a) => a.id !== id))
       toast({ title: 'Application removed' })
+    } else {
+      toast({ title: 'Could not remove application', variant: 'destructive' })
     }
   }
 
@@ -434,8 +438,8 @@ export default function TrackerPage() {
                     const docsAreLoading = docsLoading[lead.id]
 
                     return (
-                      <>
-                        <TableRow key={lead.id} className="border-b border-slate-50 hover:bg-slate-50/50 transition-colors">
+                      <React.Fragment key={lead.id}>
+                        <TableRow className="border-b border-slate-50 hover:bg-slate-50/50 transition-colors">
                           <TableCell className="font-semibold text-slate-800">
                             {lead.company_website_url ? (
                               <Link href={lead.company_website_url} target="_blank" className="hover:text-indigo-600 hover:underline transition-colors">{lead.company_name}</Link>
@@ -600,7 +604,7 @@ export default function TrackerPage() {
                             </td>
                           </tr>
                         )}
-                      </>
+                      </React.Fragment>
                     )
                   })}
                 </TableBody>

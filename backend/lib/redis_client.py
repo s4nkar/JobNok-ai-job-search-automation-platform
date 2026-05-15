@@ -67,23 +67,23 @@ def _midnight_utc_seconds() -> int:
 async def check_rate_limit(user_id: str, tool: str, limit: int) -> tuple[bool, int]:
     """Check if user has exceeded their daily rate limit for a tool.
 
+    Uses INCR-first to avoid a GET→compare→INCR race condition where two
+    concurrent requests could both read count < limit and both be allowed.
+    TTL is set unconditionally after every increment so an EXPIRE failure
+    on the first increment never leaves the key without a TTL.
+
     Returns:
         (allowed: bool, remaining: int)
     """
     redis = _get_redis()
     key = f"rl:{user_id}:{tool}"
 
-    count_str = await redis.get(key)
-    count = int(count_str) if count_str else 0
-
-    if count >= limit:
-        return False, 0
-
     new_count = await redis.incr(key)
+    ttl_seconds = _midnight_utc_seconds()
+    await redis.expire(key, ttl_seconds)
 
-    # Set TTL only on first increment (so it resets at midnight UTC)
-    if new_count == 1:
-        await redis.expire(key, _midnight_utc_seconds())
+    if new_count > limit:
+        return False, 0
 
     return True, max(0, limit - new_count)
 

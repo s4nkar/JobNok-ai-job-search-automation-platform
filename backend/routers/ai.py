@@ -40,9 +40,29 @@ from models.schemas import CoverLetterRequest, InterviewPrepRequest, InterviewRe
 router = APIRouter()
 
 _TEMPLATES_DIR = Path(__file__).parent.parent / "lib" / "cv_templates"
-_jinja_env = Environment(loader=FileSystemLoader(str(_TEMPLATES_DIR)), autoescape=False)
+_jinja_env = Environment(loader=FileSystemLoader(str(_TEMPLATES_DIR)), autoescape=True)
 
 _BULLET_PREFIX = re.compile(r"^[\s•\-\*▪–]+")
+
+# Private/link-local IP ranges that must not be fetched (SSRF guard)
+_PRIVATE_NETS = re.compile(
+    r"^(10\.|172\.(1[6-9]|2\d|3[01])\.|192\.168\.|127\.|169\.254\.|::1$|fc|fd)",
+    re.IGNORECASE,
+)
+
+
+def _safe_photo_url(url: str | None) -> str | None:
+    """Return url only if it is a public https URL. Returns None otherwise."""
+    if not url:
+        return None
+    import urllib.parse
+    parsed = urllib.parse.urlparse(url)
+    if parsed.scheme != "https":
+        return None
+    host = parsed.hostname or ""
+    if _PRIVATE_NETS.match(host):
+        return None
+    return url
 
 TEMPLATE_REGISTRY: dict[str, dict] = {
     "standard":             {"label": "Standard",             "desc": "Clean, professional single-column layout",         "font": "Arial, sans-serif",          "columns": 1, "file": "template_standard.html"},
@@ -85,7 +105,10 @@ async def tailor_resume(
     if not allowed:
         raise _rl_error("Resume Tailor", settings.rate_limit_resume_per_day)
 
-    pdf_bytes = await resume.read()
+    _MAX_PDF_BYTES = 5 * 1024 * 1024  # 5 MB
+    pdf_bytes = await resume.read(_MAX_PDF_BYTES + 1)
+    if len(pdf_bytes) > _MAX_PDF_BYTES:
+        raise HTTPException(status_code=413, detail="PDF must be ≤ 5 MB")
     resume_hash = compute_resume_hash(pdf_bytes)
 
     # Cache hit: skip PyMuPDF re-parse. The cache survives 30 days, so subsequent
@@ -425,14 +448,16 @@ async def _apply_profile_overlay(cv_data: dict, profile: dict, profile_headline:
         cv_data["location"] = ", ".join(parts)
 
     photo_base64 = None
-    if template_id == "lebenslauf" and profile.get("cv_photo_url"):
-        try:
-            async with httpx.AsyncClient(timeout=8) as client:
-                r = await client.get(profile["cv_photo_url"])
-                if r.status_code == 200:
-                    photo_base64 = base64.b64encode(r.content).decode()
-        except Exception:
-            pass
+    if template_id == "lebenslauf":
+        safe_url = _safe_photo_url(profile.get("cv_photo_url"))
+        if safe_url:
+            try:
+                async with httpx.AsyncClient(timeout=8) as client:
+                    r = await client.get(safe_url)
+                    if r.status_code == 200:
+                        photo_base64 = base64.b64encode(r.content).decode()
+            except Exception:
+                pass
     cv_data["photo_base64"] = photo_base64
     cv_data["date_of_birth"] = profile.get("date_of_birth")
     cv_data["nationality"] = profile.get("nationality")
@@ -501,6 +526,9 @@ async def list_templates():
 async def structure_resume(request: Request, body: dict):
     """LLM-structure the cached resume into cv_data JSON. Called once when the editor loads."""
     user_id = get_user_id(request)
+    allowed, _ = await check_rate_limit(user_id, "resume", settings.rate_limit_resume_per_day)
+    if not allowed:
+        raise _rl_error("Resume Tailor", settings.rate_limit_resume_per_day)
 
     resume_text = await get_cached(f"resume_text:{user_id}")
     if not resume_text:
@@ -531,6 +559,9 @@ async def structure_resume(request: Request, body: dict):
 @router.post("/tailor/generate-pdf")
 async def generate_cv_pdf(request: Request, body: dict):
     user_id = get_user_id(request)
+    allowed, _ = await check_rate_limit(user_id, "resume", settings.rate_limit_resume_per_day)
+    if not allowed:
+        raise _rl_error("Resume Tailor", settings.rate_limit_resume_per_day)
 
     template_id = body.get("template_id", "standard")
     if template_id not in TEMPLATE_REGISTRY:
@@ -555,10 +586,11 @@ async def generate_cv_pdf(request: Request, body: dict):
             )
             profile = profile_res.data or {}
             photo_base64 = None
-            if profile.get("cv_photo_url"):
+            safe_url = _safe_photo_url(profile.get("cv_photo_url"))
+            if safe_url:
                 try:
                     async with httpx.AsyncClient(timeout=8) as client:
-                        r = await client.get(profile["cv_photo_url"])
+                        r = await client.get(safe_url)
                         if r.status_code == 200:
                             photo_base64 = base64.b64encode(r.content).decode()
                 except Exception:

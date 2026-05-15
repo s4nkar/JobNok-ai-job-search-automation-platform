@@ -43,10 +43,9 @@ function CoverLetterInner() {
 
   useEffect(() => {
     if (opportunityId) {
-      apiFetch('/api/startup-hunt/opportunities')
-        .then((r) => r.json())
-        .then((rows: StartupHuntSavedOpportunity[]) => {
-          const found = rows.find((r) => r.id === opportunityId)
+      apiFetch(`/api/startup-hunt/opportunities/${opportunityId}`)
+        .then((r) => r.ok ? r.json() : null)
+        .then((found: StartupHuntSavedOpportunity | null) => {
           if (found) {
             setLead(found)
             setValue('company', found.company_name)

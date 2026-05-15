@@ -187,53 +187,81 @@ def _hf_raise(exc: Exception) -> None:
 
 
 async def _huggingface_generate(prompt: str, system: str, max_tokens: int) -> str:
+    import asyncio
     from huggingface_hub import InferenceClient
     from huggingface_hub.utils import HfHubHTTPError
 
-    client = InferenceClient(provider="auto", api_key=settings.huggingface_api_key or None)
     messages = []
     if system:
         messages.append({"role": "system", "content": system})
     messages.append({"role": "user", "content": prompt})
 
-    try:
-        response = client.chat.completions.create(
-            model=settings.huggingface_model,
-            messages=messages,
-            max_tokens=min(max_tokens, settings.huggingface_max_tokens),
-            temperature=0.7,
-        )
-        return response.choices[0].message.content or ""
-    except HfHubHTTPError as exc:
-        _hf_raise(exc)
-        raise  # unreachable — keeps type checker happy
+    def _call() -> str:
+        client = InferenceClient(provider="auto", api_key=settings.huggingface_api_key or None)
+        try:
+            response = client.chat.completions.create(
+                model=settings.huggingface_model,
+                messages=messages,
+                max_tokens=min(max_tokens, settings.huggingface_max_tokens),
+                temperature=0.7,
+            )
+            return response.choices[0].message.content or ""
+        except HfHubHTTPError as exc:
+            _hf_raise(exc)
+            raise  # unreachable
+
+    return await asyncio.to_thread(_call)
 
 
 async def _huggingface_stream(prompt: str, system: str, max_tokens: int) -> AsyncGenerator[str, None]:
+    import asyncio
+    import queue as _queue
     from huggingface_hub import InferenceClient
     from huggingface_hub.utils import HfHubHTTPError
 
-    client = InferenceClient(provider="auto", api_key=settings.huggingface_api_key or None)
     messages = []
     if system:
         messages.append({"role": "system", "content": system})
     messages.append({"role": "user", "content": prompt})
 
-    try:
-        stream = client.chat.completions.create(
-            model=settings.huggingface_model,
-            messages=messages,
-            max_tokens=min(max_tokens, settings.huggingface_max_tokens),
-            temperature=0.7,
-            stream=True,
-        )
-        for chunk in stream:
-            delta = chunk.choices[0].delta.content
-            if delta:
-                yield delta
-    except HfHubHTTPError as exc:
-        _hf_raise(exc)
-        raise  # unreachable
+    # Run the blocking HF stream in a thread, bridging via a queue.
+    _SENTINEL = object()
+    q: _queue.Queue = _queue.Queue()
+
+    def _produce() -> None:
+        client = InferenceClient(provider="auto", api_key=settings.huggingface_api_key or None)
+        try:
+            stream = client.chat.completions.create(
+                model=settings.huggingface_model,
+                messages=messages,
+                max_tokens=min(max_tokens, settings.huggingface_max_tokens),
+                temperature=0.7,
+                stream=True,
+            )
+            for chunk in stream:
+                delta = chunk.choices[0].delta.content
+                if delta:
+                    q.put(delta)
+        except HfHubHTTPError as exc:
+            q.put(exc)
+        except Exception as exc:
+            q.put(exc)
+        finally:
+            q.put(_SENTINEL)
+
+    loop = asyncio.get_event_loop()
+    loop.run_in_executor(None, _produce)
+
+    while True:
+        item = await asyncio.to_thread(q.get)
+        if item is _SENTINEL:
+            break
+        if isinstance(item, HfHubHTTPError):
+            _hf_raise(item)
+            raise  # unreachable
+        if isinstance(item, Exception):
+            raise _ProviderError(f"huggingface stream error: {item!r}") from item
+        yield item
 
 
 # ── Provider dispatch ────────────────────────────────────────────
@@ -330,4 +358,4 @@ async def stream_text(prompt: str, system: str = "", max_tokens: int = 2048) -> 
             last_error = exc
             continue
 
-    yield f"\n\nAI provider error: all providers exhausted. Last error: {last_error!r}"
+    raise RuntimeError(f"All AI providers exhausted ({chain}). Last error: {last_error!r}")

@@ -92,10 +92,9 @@ function ResumeTailorInner() {
   useEffect(() => {
     if (!opportunityId) return
     setPrefilling(true)
-    apiFetch(`/api/startup-hunt/opportunities`)
-      .then((r) => r.json())
-      .then((rows: StartupHuntSavedOpportunity[]) => {
-        const found = rows.find((r) => r.id === opportunityId)
+    apiFetch(`/api/startup-hunt/opportunities/${opportunityId}`)
+      .then((r) => r.ok ? r.json() : null)
+      .then((found: StartupHuntSavedOpportunity | null) => {
         if (found) {
           setLead(found)
           setJd(buildJdFromOpportunity(found))
@@ -179,11 +178,6 @@ function ResumeTailorInner() {
 
   async function generatePdf() {
     if (!result) return
-    if (selectedTemplate === 'classic' && !classicProfileReady(profile)) {
-      toast({ title: 'Complete your profile first', description: 'Add photo, name, phone and city to use the Classic template.', variant: 'destructive' })
-      router.push('/profile')
-      return
-    }
     setGenerating(true)
     try {
       const res = await apiFetch('/api/ai/tailor/generate-pdf', {
