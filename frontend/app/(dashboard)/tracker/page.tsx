@@ -332,6 +332,13 @@ export default function TrackerPage() {
                         </TableCell>
                         <TableCell>
                           <div className="flex gap-1">
+                            <button
+                              onClick={() => router.push(`/cover-letter?company=${encodeURIComponent(app.company)}&role=${encodeURIComponent(app.role)}`)}
+                              title="Generate Cover Letter"
+                              className="h-7 w-7 rounded-lg flex items-center justify-center text-slate-400 hover:text-pink-600 hover:bg-pink-50 transition-colors"
+                            >
+                              <PenLine className="h-3.5 w-3.5" />
+                            </button>
                             <button onClick={() => openEdit(app)} className="h-7 w-7 rounded-lg flex items-center justify-center text-slate-400 hover:text-indigo-600 hover:bg-indigo-50 transition-colors">
                               <Pencil className="h-3.5 w-3.5" />
                             </button>

@@ -26,8 +26,11 @@ type FormData = z.infer<typeof schema>
 function CoverLetterInner() {
   const searchParams = useSearchParams()
   const opportunityId = searchParams.get('opportunity_id')
+  const trackerCompany = searchParams.get('company')
+  const trackerRole = searchParams.get('role')
 
   const [lead, setLead] = useState<StartupHuntSavedOpportunity | null>(null)
+  const [trackerApp, setTrackerApp] = useState<{ company: string; role: string } | null>(null)
   const [loading, setLoading] = useState(false)
   const [output, setOutput] = useState('')
   const [copied, setCopied] = useState(false)
@@ -39,18 +42,26 @@ function CoverLetterInner() {
   })
 
   useEffect(() => {
-    if (!opportunityId) return
-    apiFetch('/api/startup-hunt/opportunities')
-      .then((r) => r.json())
-      .then((rows: StartupHuntSavedOpportunity[]) => {
-        const found = rows.find((r) => r.id === opportunityId)
-        if (found) {
-          setLead(found)
-          setValue('company', found.company_name)
-          setValue('role', found.role_title)
-        }
-      })
-  }, [opportunityId, setValue])
+    if (opportunityId) {
+      apiFetch('/api/startup-hunt/opportunities')
+        .then((r) => r.json())
+        .then((rows: StartupHuntSavedOpportunity[]) => {
+          const found = rows.find((r) => r.id === opportunityId)
+          if (found) {
+            setLead(found)
+            setValue('company', found.company_name)
+            setValue('role', found.role_title)
+          }
+        })
+      return
+    }
+
+    if (trackerCompany && trackerRole) {
+      setTrackerApp({ company: trackerCompany, role: trackerRole })
+      setValue('company', trackerCompany)
+      setValue('role', trackerRole)
+    }
+  }, [opportunityId, trackerCompany, trackerRole, setValue])
 
   async function onSubmit(data: FormData) {
     setLoading(true)
@@ -128,6 +139,16 @@ function CoverLetterInner() {
           <Compass className="h-4 w-4 flex-shrink-0 text-orange-500" />
           <span>Pre-filled from <strong>{lead.company_name} — {lead.role_title}</strong>. Add your selling points below.</span>
           <button onClick={() => setLead(null)} className="ml-auto text-orange-400 hover:text-orange-700">
+            <X className="h-4 w-4" />
+          </button>
+        </div>
+      )}
+
+      {trackerApp && (
+        <div className="flex items-center gap-2.5 bg-indigo-50 border border-indigo-100 text-indigo-800 rounded-xl px-4 py-3 mb-4 text-sm">
+          <PenLine className="h-4 w-4 flex-shrink-0 text-indigo-500" />
+          <span>Pre-filled from your tracker: <strong>{trackerApp.company} — {trackerApp.role}</strong>. Add your selling points below.</span>
+          <button onClick={() => setTrackerApp(null)} className="ml-auto text-indigo-400 hover:text-indigo-700">
             <X className="h-4 w-4" />
           </button>
         </div>
