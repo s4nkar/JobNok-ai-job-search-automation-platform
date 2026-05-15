@@ -42,6 +42,28 @@ router = APIRouter()
 _TEMPLATES_DIR = Path(__file__).parent.parent / "lib" / "cv_templates"
 _jinja_env = Environment(loader=FileSystemLoader(str(_TEMPLATES_DIR)), autoescape=False)
 
+_BULLET_PREFIX = re.compile(r"^[\s•\-\*▪–]+")
+
+TEMPLATE_REGISTRY: dict[str, dict] = {
+    "standard":             {"label": "Standard",             "desc": "Clean, professional single-column layout",         "font": "Arial, sans-serif",          "columns": 1, "file": "template_standard.html"},
+    "modern":               {"label": "Modern",               "desc": "Two-column layout with sidebar for contact info",   "font": "Arial, sans-serif",          "columns": 2, "file": "template_modern.html"},
+    "creative":             {"label": "Creative",             "desc": "Timeline-based design with icons and visual elements","font": "Arial, sans-serif",         "columns": 1, "file": "template_creative.html"},
+    "classic":              {"label": "Classic",              "desc": "Traditional format with clean typography",          "font": "Times New Roman, serif",     "columns": 1, "file": "template_classic_new.html"},
+    "balanced":             {"label": "Balanced",             "desc": "Professional layout with clear section divisions",  "font": "Arial, sans-serif",          "columns": 1, "file": "template_balanced.html"},
+    "minimalist":           {"label": "Minimalist",           "desc": "Clean, modern design with subtle borders and spacing","font": "system-ui, sans-serif",    "columns": 1, "file": "template_minimalist.html"},
+    "professional":         {"label": "Professional",         "desc": "Executive-style layout with elegant formatting",    "font": "Arial, sans-serif",          "columns": 1, "file": "template_professional.html"},
+    "corporate":            {"label": "Corporate",            "desc": "Two-column corporate layout with header contact section","font": "Arial, sans-serif",     "columns": 2, "file": "template_corporate.html"},
+    "bold":                 {"label": "Bold",                 "desc": "Bold styling with clear hierarchy and modern design","font": "Arial, sans-serif",         "columns": 1, "file": "template_bold.html"},
+    "slate":                {"label": "Slate",                "desc": "Two-column slate accent layout with modern contrast","font": "Arial, sans-serif",         "columns": 2, "file": "template_slate.html"},
+    "professional_compact": {"label": "Professional Compact", "desc": "Centered header with ALL CAPS section titles and clean hierarchy","font": "Arial, sans-serif","columns": 1, "file": "template_professional_compact.html"},
+    "executive":            {"label": "Executive",            "desc": "Two-column sidebar layout with details panel",      "font": "Arial, sans-serif",          "columns": 2, "file": "template_executive.html"},
+    "insight":              {"label": "Insight",              "desc": "Executive sidebar layout with navy accents and reference cards","font": "Inter, sans-serif","columns": 2, "file": "template_insight.html"},
+    "atelier":              {"label": "Atelier",              "desc": "Editorial two-column layout inspired by artisan portfolios","font": "Georgia, serif",      "columns": 2, "file": "template_atelier.html"},
+    "elegant":              {"label": "Elegant",              "desc": "Refined single-column with accent separators and strong hierarchy","font": "Georgia, serif","columns": 1, "file": "template_elegant.html"},
+    "aqua":                 {"label": "Aqua",                 "desc": "Two-column layout with a soft header band and clear sectioning","font": "Arial, sans-serif","columns": 2, "file": "template_aqua.html"},
+    "lebenslauf":           {"label": "Lebenslauf (DE)",      "desc": "Traditional German CV with photo sidebar",          "font": "Arial, sans-serif",          "columns": 2, "file": "template_classic.html", "requires_photo": True},
+}
+
 
 def _rl_error(tool: str, limit: int) -> HTTPException:
     return HTTPException(
@@ -295,42 +317,9 @@ RESUME (for extracting target_role/target_company and grounding prose only):
         return {}
 
 
-# ── CV PDF Generation ─────────────────────────────────────────────
+# ── CV data helpers ───────────────────────────────────────────────
 
-@router.post("/tailor/generate-pdf")
-async def generate_cv_pdf(request: Request, body: dict):
-    user_id = get_user_id(request)
-
-    template_id = body.get("template_id", "modern")
-    if template_id not in ("modern", "classic"):
-        raise HTTPException(status_code=422, detail="template_id must be 'modern' or 'classic'")
-
-    resume_text = await get_cached(f"resume_text:{user_id}")
-    if not resume_text:
-        raise HTTPException(
-            status_code=400,
-            detail="No recent analysis found. Please run the Resume Tailor analysis first."
-        )
-
-    analysis = body.get("analysis") or {}
-    bullet_rewrites = {r["original"]: r["improved"] for r in (analysis.get("bullet_rewrites") or [])}
-    missing_kw = [m["keyword"] for m in (analysis.get("missing_keywords") or [])]
-
-    # Fetch user profile
-    sb = get_supabase()
-    profile_res = await asyncio.to_thread(
-        lambda: sb.table("profiles").select("*").eq("id", user_id).single().execute()
-    )
-    profile = profile_res.data or {}
-
-    # Pull tailored fields from analysis (produced by /tailor endpoint)
-    target_role = analysis.get("target_role") or ""
-    target_company = analysis.get("target_company") or ""
-    profile_headline = analysis.get("profile_headline") or ""
-    tailored_summary = analysis.get("tailored_summary") or ""
-
-    # Ask AI to structure the resume as JSON, applying rewrites
-    system_struct = """You are a professional CV writer. Parse the resume text into a structured JSON object.
+_SYSTEM_STRUCT = """You are a professional CV writer. Parse the resume text into a structured JSON object.
 
 CRITICAL RULES — violating any of these produces a broken CV:
 1. full_name: Extract the COMPLETE name (e.g. "Sankar Dev Santhosh", NOT just "Sankar"). Never truncate.
@@ -379,91 +368,43 @@ Return ONLY this JSON structure (no markdown, no extra text):
   "relocation": "string or null"
 }"""
 
-    rewrites_block = "\n".join(f'  ORIGINAL: {o}\n  IMPROVED: {i}' for o, i in bullet_rewrites.items()) if bullet_rewrites else "None"
-    kw_block = ", ".join(missing_kw) if missing_kw else "None"
 
-    tailoring_block = ""
-    if target_role or target_company:
-        tailoring_block += f"\nTARGET ROLE: {target_role} at {target_company}"
-    if profile_headline:
-        tailoring_block += f"\nTAILORED HEADLINE TO USE AS job_title: {profile_headline}"
-    if tailored_summary:
-        tailoring_block += f"\nTAILORED SUMMARY TO USE AS summary: {tailored_summary}"
-
-    prompt_struct = f"""Parse this resume into the required JSON format.
-{tailoring_block}
-
-BULLET REWRITES TO APPLY (replace originals with improved versions verbatim):
-{rewrites_block}
-
-MISSING KEYWORDS TO WEAVE IN WHERE NATURAL:
-{kw_block}
-
-RESUME TEXT:
-{resume_text[:6000]}"""
-
-    raw = await ai_provider.generate_text(prompt_struct, system_struct, max_tokens=4000)
-
-    try:
-        start = raw.find("{")
-        end = raw.rfind("}") + 1
-        cv_data = json.loads(raw[start:end])
-    except Exception:
-        raise HTTPException(status_code=500, detail="Failed to structure resume. Please try again.")
-
-    # Hard-override: tailored_summary is authoritative — never let the structuring
-    # LLM drift it by weaving in missing keywords or changing tone.
-    if tailored_summary:
-        cv_data["summary"] = tailored_summary
-
-    # Strip stray bullet prefix characters from all bullets arrays — LLMs occasionally
-    # prefix items with •, -, *, ▪ even when told not to, causing double-bullets in HTML.
-    _BULLET_PREFIX = re.compile(r"^[\s•\-\*▪–]+")
-    for section_key in ("featured_project", ):
+def _normalize_cv_data(cv_data: dict) -> None:
+    """Strip bullet prefixes and normalise skill items in-place."""
+    for section_key in ("featured_project",):
         if cv_data.get(section_key) and isinstance(cv_data[section_key].get("bullets"), list):
             cv_data[section_key]["bullets"] = [
                 _BULLET_PREFIX.sub("", b) for b in cv_data[section_key]["bullets"]
             ]
     for section_key in ("experience", "projects"):
-        for entry in (cv_data.get(section_key) or []):
+        for entry in cv_data.get(section_key) or []:
             if isinstance(entry.get("bullets"), list):
                 entry["bullets"] = [_BULLET_PREFIX.sub("", b) for b in entry["bullets"]]
-
-    # Normalise skill items — LLMs occasionally return an array, HTML, or bullet-prefixed
-    # lines instead of the requested comma-separated string. Normalise all of these to a
-    # plain string so the Jinja template can render {{ skill.items }} safely.
     if cv_data.get("skills"):
-        normalized_skills = []
+        normalised = []
         for s in cv_data["skills"]:
             items = s.get("items")
             if isinstance(items, list):
-                # Array → comma-separated string, strip any stray bullet prefixes
                 items = ", ".join(str(i).strip(" •·-–\t") for i in items if str(i).strip(" •·-–\t"))
             elif items is not None:
                 items = str(items)
-                # Strip HTML tags (LLM sometimes returns <ul><li>...</li></ul>)
                 items = re.sub(r"<[^>]+>", " ", items)
-                # Convert bullet-prefixed newlines to comma-separated
                 lines = [ln.strip(" •·-–\t") for ln in items.splitlines() if ln.strip(" •·-–\t")]
                 if len(lines) > 1:
                     items = ", ".join(lines)
                 items = items.strip()
             if items:
-                s = {**s, "items": items}
-                normalized_skills.append(s)
-        cv_data["skills"] = normalized_skills
+                normalised.append({**s, "items": items})
+        cv_data["skills"] = normalised
 
-    # Overlay profile contact fields (always authoritative for contact info)
-    # full_name: only override if profile has a proper full name (first + last)
+
+async def _apply_profile_overlay(cv_data: dict, profile: dict, profile_headline: str, template_id: str) -> None:
+    """Overlay authoritative profile contact fields onto cv_data in-place."""
     profile_name = (profile.get("full_name") or "").strip()
     if profile_name and " " in profile_name:
         cv_data["full_name"] = profile_name
-
-    # job_title/headline: analysis tailored headline wins; fall back to profile job_title
     if not profile_headline and profile.get("job_title"):
         cv_data["job_title"] = profile["job_title"]
-
-    # cv_email takes priority over email parsed from resume
     cv_email = profile.get("cv_email") or profile.get("email")
     if cv_email:
         cv_data["email"] = cv_email
@@ -477,16 +418,14 @@ RESUME TEXT:
         cv_data["website"] = profile["website_url"]
     if profile.get("work_authorization"):
         cv_data["work_authorization"] = profile["work_authorization"]
-
     if profile.get("address_city"):
         parts = [profile["address_city"]]
         if profile.get("address_country"):
             parts.append(profile["address_country"])
         cv_data["location"] = ", ".join(parts)
 
-    # Classic template: fetch and embed profile photo as base64
     photo_base64 = None
-    if template_id == "classic" and profile.get("cv_photo_url"):
+    if template_id == "lebenslauf" and profile.get("cv_photo_url"):
         try:
             async with httpx.AsyncClient(timeout=8) as client:
                 r = await client.get(profile["cv_photo_url"])
@@ -494,33 +433,176 @@ RESUME TEXT:
                     photo_base64 = base64.b64encode(r.content).decode()
         except Exception:
             pass
-
-    # Add classic-specific fields from profile
     cv_data["photo_base64"] = photo_base64
     cv_data["date_of_birth"] = profile.get("date_of_birth")
     cv_data["nationality"] = profile.get("nationality")
 
-    logger.warning(
-        "CV skills pre-render: %s",
-        json.dumps([{"category": s.get("category"), "items_type": type(s.get("items")).__name__, "items": s.get("items")} for s in (cv_data.get("skills") or [])]),
-    )
 
-    # Render template
-    template_file = "template_classic.html" if template_id == "classic" else "template_modern.html"
+async def _llm_structure_resume(resume_text: str, analysis: dict) -> dict:
+    """Call LLM once to parse resume text + analysis into structured cv_data JSON."""
+    bullet_rewrites = {r["original"]: r["improved"] for r in (analysis.get("bullet_rewrites") or [])}
+    missing_kw = [m["keyword"] for m in (analysis.get("missing_keywords") or [])]
+    target_role = analysis.get("target_role") or ""
+    target_company = analysis.get("target_company") or ""
+    profile_headline = analysis.get("profile_headline") or ""
+    tailored_summary = analysis.get("tailored_summary") or ""
+
+    tailoring_block = ""
+    if target_role or target_company:
+        tailoring_block += f"\nTARGET ROLE: {target_role} at {target_company}"
+    if profile_headline:
+        tailoring_block += f"\nTAILORED HEADLINE TO USE AS job_title: {profile_headline}"
+    if tailored_summary:
+        tailoring_block += f"\nTAILORED SUMMARY TO USE AS summary: {tailored_summary}"
+
+    rewrites_block = "\n".join(f'  ORIGINAL: {o}\n  IMPROVED: {i}' for o, i in bullet_rewrites.items()) if bullet_rewrites else "None"
+    kw_block = ", ".join(missing_kw) if missing_kw else "None"
+
+    prompt = f"""Parse this resume into the required JSON format.
+{tailoring_block}
+
+BULLET REWRITES TO APPLY (replace originals with improved versions verbatim):
+{rewrites_block}
+
+MISSING KEYWORDS TO WEAVE IN WHERE NATURAL:
+{kw_block}
+
+RESUME TEXT:
+{resume_text[:6000]}"""
+
+    raw = await ai_provider.generate_text(prompt, _SYSTEM_STRUCT, max_tokens=4000)
+    try:
+        start = raw.find("{")
+        end = raw.rfind("}") + 1
+        cv_data = json.loads(raw[start:end])
+    except Exception:
+        raise HTTPException(status_code=500, detail="Failed to structure resume. Please try again.")
+
+    if tailored_summary:
+        cv_data["summary"] = tailored_summary
+
+    return cv_data
+
+
+# ── CV PDF Generation ─────────────────────────────────────────────
+
+@router.get("/tailor/templates")
+async def list_templates():
+    """Return template registry metadata (no internal file paths)."""
+    return {
+        "templates": [
+            {"id": k, **{kk: vv for kk, vv in v.items() if kk != "file"}}
+            for k, v in TEMPLATE_REGISTRY.items()
+        ]
+    }
+
+
+@router.post("/tailor/structure-resume")
+async def structure_resume(request: Request, body: dict):
+    """LLM-structure the cached resume into cv_data JSON. Called once when the editor loads."""
+    user_id = get_user_id(request)
+
+    resume_text = await get_cached(f"resume_text:{user_id}")
+    if not resume_text:
+        raise HTTPException(
+            status_code=400,
+            detail="No recent analysis found. Please run the Resume Tailor analysis first.",
+        )
+
+    analysis = body.get("analysis") or {}
+    template_id = body.get("template_id", "standard")
+    if template_id not in TEMPLATE_REGISTRY:
+        template_id = "standard"
+
+    cv_data = await _llm_structure_resume(resume_text, analysis)
+    _normalize_cv_data(cv_data)
+
+    sb = get_supabase()
+    profile_res = await asyncio.to_thread(
+        lambda: sb.table("profiles").select("*").eq("id", user_id).single().execute()
+    )
+    profile = profile_res.data or {}
+    profile_headline = analysis.get("profile_headline") or ""
+    await _apply_profile_overlay(cv_data, profile, profile_headline, template_id)
+
+    return {"cv_data": cv_data}
+
+
+@router.post("/tailor/generate-pdf")
+async def generate_cv_pdf(request: Request, body: dict):
+    user_id = get_user_id(request)
+
+    template_id = body.get("template_id", "standard")
+    if template_id not in TEMPLATE_REGISTRY:
+        raise HTTPException(
+            status_code=422,
+            detail=f"Unknown template_id '{template_id}'. Valid: {', '.join(TEMPLATE_REGISTRY)}",
+        )
+
+    cv_data_override = body.get("cv_data")
+
+    if cv_data_override:
+        cv_data = dict(cv_data_override)
+        _normalize_cv_data(cv_data)
+        if template_id == "lebenslauf":
+            sb = get_supabase()
+            profile_res = await asyncio.to_thread(
+                lambda: sb.table("profiles")
+                .select("cv_photo_url,date_of_birth,nationality")
+                .eq("id", user_id)
+                .single()
+                .execute()
+            )
+            profile = profile_res.data or {}
+            photo_base64 = None
+            if profile.get("cv_photo_url"):
+                try:
+                    async with httpx.AsyncClient(timeout=8) as client:
+                        r = await client.get(profile["cv_photo_url"])
+                        if r.status_code == 200:
+                            photo_base64 = base64.b64encode(r.content).decode()
+                except Exception:
+                    pass
+            cv_data["photo_base64"] = photo_base64
+            cv_data["date_of_birth"] = profile.get("date_of_birth")
+            cv_data["nationality"] = profile.get("nationality")
+        else:
+            cv_data.setdefault("photo_base64", None)
+            cv_data.setdefault("date_of_birth", None)
+            cv_data.setdefault("nationality", None)
+    else:
+        resume_text = await get_cached(f"resume_text:{user_id}")
+        if not resume_text:
+            raise HTTPException(
+                status_code=400,
+                detail="No recent analysis found. Please run the Resume Tailor analysis first.",
+            )
+        analysis = body.get("analysis") or {}
+        cv_data = await _llm_structure_resume(resume_text, analysis)
+        _normalize_cv_data(cv_data)
+
+        sb = get_supabase()
+        profile_res = await asyncio.to_thread(
+            lambda: sb.table("profiles").select("*").eq("id", user_id).single().execute()
+        )
+        profile = profile_res.data or {}
+        profile_headline = analysis.get("profile_headline") or ""
+        await _apply_profile_overlay(cv_data, profile, profile_headline, template_id)
+
+    logger.info("CV render: template=%s name=%s", template_id, cv_data.get("full_name"))
+
+    template_file = TEMPLATE_REGISTRY[template_id]["file"]
     tmpl = _jinja_env.get_template(template_file)
     html_out = tmpl.render(**cv_data)
 
-    # WeasyPrint → PDF (run in thread to avoid blocking event loop)
-    pdf_bytes = await asyncio.to_thread(
-        lambda: WeasyHTML(string=html_out).write_pdf()
-    )
+    pdf_bytes = await asyncio.to_thread(lambda: WeasyHTML(string=html_out).write_pdf())
 
-    # Optionally save artifact
     opportunity_id = body.get("opportunity_id")
     if opportunity_id:
         try:
+            _sb = get_supabase()
             await asyncio.to_thread(
-                lambda: sb.table("opportunity_artifacts").insert({
+                lambda: _sb.table("opportunity_artifacts").insert({
                     "user_id": user_id,
                     "opportunity_id": opportunity_id,
                     "artifact_type": "resume_analysis",
@@ -528,7 +610,7 @@ RESUME TEXT:
                     "content": f"[Generated PDF — template: {template_id}]",
                     "metadata": {
                         "template_id": template_id,
-                        "match_score": analysis.get("match_score"),
+                        "match_score": (body.get("analysis") or {}).get("match_score"),
                     },
                 }).execute()
             )

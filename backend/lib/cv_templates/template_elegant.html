@@ -1,0 +1,132 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<style>
+  @page { margin: 18mm 22mm; size: A4; }
+  * { box-sizing: border-box; }
+  body { font-family: Georgia, "Times New Roman", serif; font-size: 10pt; color: #1c1c1c; line-height: 1.55; margin: 0; }
+
+  .header-inner { text-align: center; padding-bottom: 10px; }
+  h1 { font-size: 22pt; font-weight: bold; color: #111; margin: 0 0 4px; letter-spacing: 0.8px; }
+  .tagline { font-size: 10pt; font-style: italic; color: #5a3e2b; margin-bottom: 5px; }
+  .contact-line { font-size: 8.5pt; color: #555; font-family: Arial, sans-serif; }
+
+  .ornament { text-align: center; color: #b08040; font-size: 12pt; margin: 8px 0; letter-spacing: 6px; }
+
+  .section-title {
+    font-size: 9pt; font-weight: bold; text-transform: uppercase; letter-spacing: 3px;
+    color: #5a3e2b; text-align: center; margin: 14px 0 4px;
+  }
+  .section-rule { border: none; border-top: 1px solid #c9a86c; margin: 0 0 8px; }
+
+  .exp-row { display: table; width: 100%; }
+  .exp-left { display: table-cell; vertical-align: top; }
+  .exp-right { display: table-cell; text-align: right; white-space: nowrap; font-size: 8.5pt; color: #777; padding-left: 8px; vertical-align: top; font-family: Arial, sans-serif; }
+  .exp-title { font-weight: bold; font-size: 10pt; }
+  .exp-company { font-style: italic; font-size: 9.5pt; color: #5a3e2b; margin: 1px 0 4px; }
+  ul { margin: 3px 0 5px; padding-left: 16px; }
+  li { margin-bottom: 2px; font-size: 9.5pt; }
+
+  .skills-row { display: table; width: 100%; margin-bottom: 4px; font-family: Arial, sans-serif; }
+  .skill-cat { display: table-cell; font-weight: bold; width: 120px; font-size: 9pt; }
+  .skill-val { display: table-cell; font-size: 9pt; }
+
+  p { margin: 0 0 3px; }
+  .mb1 { margin-bottom: 8px; }
+</style>
+</head>
+<body>
+
+<div class="header-inner">
+  <h1>{{ full_name }}</h1>
+  {% if job_title %}<div class="tagline">{{ job_title }}</div>{% endif %}
+  <div class="contact-line">
+    {% set parts = [] %}
+    {% if email %}{% set _ = parts.append(email) %}{% endif %}
+    {% if phone %}{% set _ = parts.append(phone) %}{% endif %}
+    {% if location %}{% set _ = parts.append(location) %}{% endif %}
+    {% if linkedin %}{% set _ = parts.append(linkedin) %}{% endif %}
+    {% if github %}{% set _ = parts.append(github) %}{% endif %}
+    {{ parts | join('  ·  ') }}
+  </div>
+</div>
+<div class="ornament">✦ ✦ ✦</div>
+
+{% if summary %}
+<div class="section-title">Profile</div>
+<hr class="section-rule">
+<p style="font-size: 9.5pt; line-height: 1.6; text-align: justify; margin-bottom: 4px;">{{ summary }}</p>
+{% endif %}
+
+{% if experience %}
+<div class="section-title">Experience</div>
+<hr class="section-rule">
+{% for exp in experience %}
+<div class="mb1">
+  <div class="exp-row">
+    <div class="exp-left"><div class="exp-title">{{ exp.title }}</div><div class="exp-company">{{ exp.company }}{% if exp.location %}, {{ exp.location }}{% endif %}</div></div>
+    <div class="exp-right">{{ exp.period }}</div>
+  </div>
+  <ul>{% for b in exp.bullets %}<li>{{ b }}</li>{% endfor %}</ul>
+</div>
+{% endfor %}
+{% endif %}
+
+{% if education %}
+<div class="section-title">Education</div>
+<hr class="section-rule">
+{% for edu in education %}
+<div class="mb1">
+  <div class="exp-row">
+    <div class="exp-left"><div class="exp-title">{{ edu.degree }}</div><div class="exp-company">{{ edu.institution }}{% if edu.location %}, {{ edu.location }}{% endif %}</div></div>
+    <div class="exp-right">{{ edu.period }}</div>
+  </div>
+  {% if edu.details %}<p style="font-size: 9pt; margin-top: 2px;">{{ edu.details }}</p>{% endif %}
+</div>
+{% endfor %}
+{% endif %}
+
+{% if skills %}
+<div class="section-title">Skills</div>
+<hr class="section-rule">
+{% for skill in skills %}
+<div class="skills-row">
+  <div class="skill-cat">{{ skill['category'] }}</div>
+  <div class="skill-val">{{ skill['items'] if skill['items'] is string else skill['items'] | join(', ') }}</div>
+</div>
+{% endfor %}
+{% endif %}
+
+{% if projects %}
+<div class="section-title">Projects</div>
+<hr class="section-rule">
+{% for proj in projects %}
+<div class="mb1">
+  <div class="exp-title">{{ proj.name }}</div>
+  {% if proj.tech %}<div class="exp-company">{{ proj.tech }}</div>{% endif %}
+  <ul>{% for b in proj.bullets %}<li>{{ b }}</li>{% endfor %}</ul>
+</div>
+{% endfor %}
+{% endif %}
+
+{% if publications %}
+<div class="section-title">Publications</div>
+<hr class="section-rule">
+{% for pub in publications %}
+<div class="mb1">
+  <p style="font-style: italic; font-size: 9.5pt;">{{ pub.title }}</p>
+  <p style="font-size: 9pt; color: #555; font-family: Arial, sans-serif;">{{ pub.venue }}{% if pub.year %}, {{ pub.year }}{% endif %}</p>
+</div>
+{% endfor %}
+{% endif %}
+
+{% if languages or relocation %}
+<div class="section-title">Additional</div>
+<hr class="section-rule">
+{% if languages %}<p style="font-size: 9.5pt; margin-bottom: 3px;"><em>Languages:</em> {{ languages | join(', ') }}</p>{% endif %}
+{% if relocation %}<p style="font-size: 9.5pt;"><em>Relocation:</em> {{ relocation }}</p>{% endif %}
+{% endif %}
+
+</body>
+</html>

@@ -5,50 +5,49 @@
 <style>
   @page { margin: 0; size: A4; }
   * { box-sizing: border-box; margin: 0; padding: 0; }
-  body { font-family: Arial, Helvetica, sans-serif; font-size: 9pt; color: #1a1a1a; }
+  body { font-family: "Inter", Arial, Helvetica, sans-serif; font-size: 9pt; color: #1a1a1a; }
 
   .layout { width: 100%; border-collapse: collapse; }
-  .col-left { width: 33%; background: #f8f9fa; vertical-align: top; padding: 22px 16px 30px; border-right: 1px solid #e9ecef; }
-  .col-right { width: 67%; vertical-align: top; padding: 22px 22px 30px; }
+  .col-left { width: 34%; background: #0f2844; color: #cdd9e9; vertical-align: top; padding: 24px 16px 30px; }
+  .col-right { width: 66%; vertical-align: top; padding: 24px 22px 30px; background: #fff; }
 
-  /* Left sidebar */
-  h1 { font-size: 14pt; font-weight: bold; color: #1a1a1a; margin-bottom: 2px; line-height: 1.3; }
-  .tagline { font-size: 8pt; color: #495057; font-style: italic; margin-bottom: 14px; }
+  /* Sidebar */
+  .sidebar-name { font-size: 13pt; font-weight: bold; color: #fff; margin-bottom: 2px; line-height: 1.3; }
+  .sidebar-title { font-size: 8pt; color: #6b9ec9; margin-bottom: 16px; line-height: 1.4; }
+  .sidebar-section { font-size: 6.5pt; font-weight: bold; text-transform: uppercase; letter-spacing: 2px; color: #3a7ab5; border-bottom: 1px solid #1e4070; padding-bottom: 4px; margin: 14px 0 8px; }
 
-  .sidebar-section { font-size: 7pt; font-weight: bold; text-transform: uppercase; letter-spacing: 1.5px; color: #495057; border-bottom: 1.5px solid #dee2e6; padding-bottom: 3px; margin: 12px 0 7px; }
-  .sidebar-section:first-child { margin-top: 0; }
-  .contact-item { font-size: 7.5pt; color: #333; margin-bottom: 4px; word-break: break-all; line-height: 1.4; }
-  .contact-label { font-size: 6.5pt; color: #868e96; display: block; text-transform: uppercase; letter-spacing: 0.8px; margin-bottom: 1px; }
+  .contact-item { font-size: 7.5pt; color: #9ab8d4; margin-bottom: 5px; word-break: break-all; line-height: 1.4; }
+  .contact-label { font-size: 6pt; color: #3a7ab5; display: block; text-transform: uppercase; letter-spacing: 1px; margin-bottom: 1px; }
 
-  .skill-cat { font-size: 8.5pt; font-weight: bold; color: #1a1a1a; margin-bottom: 1px; }
-  .skill-items { font-size: 7.5pt; color: #555; margin-bottom: 6px; line-height: 1.4; }
+  .skill-cat { font-size: 8pt; font-weight: bold; color: #c8d9ec; margin-bottom: 2px; }
+  .skill-bar-bg { height: 3px; background: #1e4070; border-radius: 2px; margin-bottom: 6px; }
+  .skill-items { font-size: 7pt; color: #6b9ec9; margin-bottom: 6px; line-height: 1.4; }
 
-  .edu-degree { font-weight: bold; font-size: 8.5pt; }
-  .edu-school { font-style: italic; font-size: 7.5pt; color: #555; margin: 1px 0; }
-  .edu-period { font-size: 7pt; color: #888; }
-  .lang-item { font-size: 8pt; color: #333; margin-bottom: 3px; }
+  .ref-card { background: #162d4a; border-left: 3px solid #3a7ab5; padding: 6px 8px; margin-bottom: 6px; border-radius: 2px; }
+  .ref-name { font-size: 8pt; font-weight: bold; color: #fff; }
+  .ref-detail { font-size: 7pt; color: #6b9ec9; }
 
-  /* Right main content */
-  .section-title { font-size: 8.5pt; font-weight: bold; text-transform: uppercase; letter-spacing: 1px; color: #343a40; border-bottom: 1.5px solid #343a40; padding-bottom: 2px; margin: 14px 0 7px; }
+  /* Main */
+  .section-title { font-size: 8pt; font-weight: bold; text-transform: uppercase; letter-spacing: 1.5px; color: #0f2844; border-bottom: 2px solid #0f2844; padding-bottom: 2px; margin: 14px 0 8px; }
   .section-title:first-child { margin-top: 0; }
   .exp-row { display: table; width: 100%; }
   .exp-left { display: table-cell; vertical-align: top; }
-  .exp-right { display: table-cell; text-align: right; white-space: nowrap; font-size: 7.5pt; color: #868e96; padding-left: 8px; vertical-align: top; }
-  .exp-title { font-weight: bold; font-size: 9pt; }
-  .exp-company { font-style: italic; font-size: 8pt; color: #555; margin: 1px 0 3px; }
+  .exp-right { display: table-cell; text-align: right; white-space: nowrap; font-size: 7.5pt; color: #888; padding-left: 8px; vertical-align: top; }
+  .exp-title { font-weight: bold; font-size: 9pt; color: #0f2844; }
+  .exp-company { font-size: 8pt; color: #3a7ab5; font-style: italic; margin: 1px 0 3px; }
   ul { margin: 3px 0 5px; padding-left: 13px; }
   li { margin-bottom: 2px; font-size: 8.5pt; }
   .mb1 { margin-bottom: 8px; }
   p { margin: 0; }
-  .summary-text { font-size: 8.5pt; line-height: 1.55; color: #333; }
+  .lang-item { font-size: 7.5pt; color: #9ab8d4; margin-bottom: 3px; }
 </style>
 </head>
 <body>
 <table class="layout">
 <tr>
 <td class="col-left">
-  <h1>{{ full_name }}</h1>
-  {% if job_title %}<div class="tagline">{{ job_title }}</div>{% endif %}
+  <div class="sidebar-name">{{ full_name }}</div>
+  {% if job_title %}<div class="sidebar-title">{{ job_title }}</div>{% endif %}
 
   <div class="sidebar-section">Contact</div>
   {% if email %}<div class="contact-item"><span class="contact-label">Email</span>{{ email }}</div>{% endif %}
@@ -60,7 +59,7 @@
   {% if work_authorization %}<div class="contact-item"><span class="contact-label">Work Auth</span>{{ work_authorization }}</div>{% endif %}
 
   {% if skills %}
-  <div class="sidebar-section">Skills</div>
+  <div class="sidebar-section">Expertise</div>
   {% for skill in skills %}
   <div class="skill-cat">{{ skill['category'] }}</div>
   <div class="skill-items">{{ skill['items'] if skill['items'] is string else skill['items'] | join(', ') }}</div>
@@ -70,11 +69,10 @@
   {% if education %}
   <div class="sidebar-section">Education</div>
   {% for edu in education %}
-  <div style="margin-bottom: 8px;">
-    <div class="edu-degree">{{ edu.degree }}</div>
-    <div class="edu-school">{{ edu.institution }}{% if edu.location %}, {{ edu.location }}{% endif %}</div>
-    <div class="edu-period">{{ edu.period }}</div>
-    {% if edu.details %}<p style="font-size: 7pt; color: #555; margin-top: 2px;">{{ edu.details }}</p>{% endif %}
+  <div class="ref-card">
+    <div class="ref-name">{{ edu.degree }}</div>
+    <div class="ref-detail">{{ edu.institution }}</div>
+    <div class="ref-detail">{{ edu.period }}</div>
   </div>
   {% endfor %}
   {% endif %}
@@ -89,7 +87,7 @@
 <td class="col-right">
   {% if summary %}
   <div class="section-title">Profile</div>
-  <p class="summary-text">{{ summary }}</p>
+  <p style="font-size: 8.5pt; line-height: 1.6; margin-bottom: 4px; color: #333;">{{ summary }}</p>
   {% endif %}
 
   {% if experience %}
@@ -110,7 +108,7 @@
   {% for proj in projects %}
   <div class="mb1">
     <div class="exp-title">{{ proj.name }}</div>
-    {% if proj.tech %}<div class="exp-company">{{ proj.tech }}</div>{% endif %}
+    {% if proj.tech %}<div style="font-size: 8pt; color: #3a7ab5; font-style: italic; margin: 1px 0 3px;">{{ proj.tech }}</div>{% endif %}
     <ul>{% for b in proj.bullets %}<li>{{ b }}</li>{% endfor %}</ul>
   </div>
   {% endfor %}
@@ -120,7 +118,7 @@
   <div class="section-title">Publications</div>
   {% for pub in publications %}
   <div class="mb1">
-    <p style="font-weight: bold; font-size: 8.5pt;">{{ pub.title }}</p>
+    <p style="font-weight: bold; font-size: 8.5pt; color: #0f2844;">{{ pub.title }}</p>
     <p style="font-style: italic; font-size: 8pt; color: #555;">{{ pub.venue }}{% if pub.year %}, {{ pub.year }}{% endif %}</p>
   </div>
   {% endfor %}

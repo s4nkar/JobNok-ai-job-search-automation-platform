@@ -8,38 +8,32 @@
   body { font-family: Arial, Helvetica, sans-serif; font-size: 9pt; color: #1a1a1a; }
 
   .layout { width: 100%; border-collapse: collapse; }
-  .col-left { width: 33%; background: #f8f9fa; vertical-align: top; padding: 22px 16px 30px; border-right: 1px solid #e9ecef; }
-  .col-right { width: 67%; vertical-align: top; padding: 22px 22px 30px; }
+  .col-left { width: 32%; background: #475569; color: #e2e8f0; vertical-align: top; padding: 22px 16px 30px; }
+  .col-right { width: 68%; background: #fff; vertical-align: top; padding: 22px 22px 30px; }
 
   /* Left sidebar */
-  h1 { font-size: 14pt; font-weight: bold; color: #1a1a1a; margin-bottom: 2px; line-height: 1.3; }
-  .tagline { font-size: 8pt; color: #495057; font-style: italic; margin-bottom: 14px; }
+  .sidebar-name { font-size: 13pt; font-weight: bold; color: #fff; margin-bottom: 2px; line-height: 1.3; }
+  .sidebar-title { font-size: 8pt; color: #94a3b8; margin-bottom: 14px; line-height: 1.4; }
+  .sidebar-section { font-size: 6.5pt; font-weight: bold; text-transform: uppercase; letter-spacing: 1.5px; color: #94a3b8; border-bottom: 1px solid #64748b; padding-bottom: 3px; margin: 12px 0 7px; }
+  .contact-item { font-size: 7.5pt; color: #cbd5e1; margin-bottom: 4px; word-break: break-all; }
+  .contact-label { font-size: 6.5pt; color: #94a3b8; display: block; text-transform: uppercase; letter-spacing: 0.8px; margin-bottom: 1px; }
+  .skill-cat { font-size: 8pt; font-weight: bold; color: #e2e8f0; margin-bottom: 1px; }
+  .skill-items { font-size: 7pt; color: #94a3b8; margin-bottom: 5px; line-height: 1.4; }
+  .lang-item { font-size: 7.5pt; color: #cbd5e1; margin-bottom: 3px; }
 
-  .sidebar-section { font-size: 7pt; font-weight: bold; text-transform: uppercase; letter-spacing: 1.5px; color: #495057; border-bottom: 1.5px solid #dee2e6; padding-bottom: 3px; margin: 12px 0 7px; }
-  .sidebar-section:first-child { margin-top: 0; }
-  .contact-item { font-size: 7.5pt; color: #333; margin-bottom: 4px; word-break: break-all; line-height: 1.4; }
-  .contact-label { font-size: 6.5pt; color: #868e96; display: block; text-transform: uppercase; letter-spacing: 0.8px; margin-bottom: 1px; }
-
-  .skill-cat { font-size: 8.5pt; font-weight: bold; color: #1a1a1a; margin-bottom: 1px; }
-  .skill-items { font-size: 7.5pt; color: #555; margin-bottom: 6px; line-height: 1.4; }
-
-  .edu-degree { font-weight: bold; font-size: 8.5pt; }
-  .edu-school { font-style: italic; font-size: 7.5pt; color: #555; margin: 1px 0; }
-  .edu-period { font-size: 7pt; color: #888; }
-  .lang-item { font-size: 8pt; color: #333; margin-bottom: 3px; }
-
-  /* Right main content */
-  .section-title { font-size: 8.5pt; font-weight: bold; text-transform: uppercase; letter-spacing: 1px; color: #343a40; border-bottom: 1.5px solid #343a40; padding-bottom: 2px; margin: 14px 0 7px; }
-  .section-title:first-child { margin-top: 0; }
+  /* Right main */
+  .section-title { font-size: 8.5pt; font-weight: bold; text-transform: uppercase; letter-spacing: 1px; color: #475569; border-bottom: 2px solid #475569; padding-bottom: 2px; margin: 14px 0 7px; }
   .exp-row { display: table; width: 100%; }
   .exp-left { display: table-cell; vertical-align: top; }
-  .exp-right { display: table-cell; text-align: right; white-space: nowrap; font-size: 7.5pt; color: #868e96; padding-left: 8px; vertical-align: top; }
+  .exp-right { display: table-cell; text-align: right; white-space: nowrap; font-size: 7.5pt; color: #666; padding-left: 8px; vertical-align: top; }
   .exp-title { font-weight: bold; font-size: 9pt; }
-  .exp-company { font-style: italic; font-size: 8pt; color: #555; margin: 1px 0 3px; }
+  .exp-company { font-style: italic; font-size: 8pt; color: #475569; margin: 1px 0 3px; }
   ul { margin: 3px 0 5px; padding-left: 13px; }
   li { margin-bottom: 2px; font-size: 8.5pt; }
-  .mb1 { margin-bottom: 8px; }
+  .proj-title { font-weight: bold; font-size: 9pt; }
+  .proj-tech { font-style: italic; font-size: 7.5pt; color: #555; margin: 1px 0 3px; }
   p { margin: 0; }
+  .mb1 { margin-bottom: 7px; }
   .summary-text { font-size: 8.5pt; line-height: 1.55; color: #333; }
 </style>
 </head>
@@ -47,8 +41,8 @@
 <table class="layout">
 <tr>
 <td class="col-left">
-  <h1>{{ full_name }}</h1>
-  {% if job_title %}<div class="tagline">{{ job_title }}</div>{% endif %}
+  <div class="sidebar-name">{{ full_name }}</div>
+  {% if job_title %}<div class="sidebar-title">{{ job_title }}</div>{% endif %}
 
   <div class="sidebar-section">Contact</div>
   {% if email %}<div class="contact-item"><span class="contact-label">Email</span>{{ email }}</div>{% endif %}
@@ -67,18 +61,6 @@
   {% endfor %}
   {% endif %}
 
-  {% if education %}
-  <div class="sidebar-section">Education</div>
-  {% for edu in education %}
-  <div style="margin-bottom: 8px;">
-    <div class="edu-degree">{{ edu.degree }}</div>
-    <div class="edu-school">{{ edu.institution }}{% if edu.location %}, {{ edu.location }}{% endif %}</div>
-    <div class="edu-period">{{ edu.period }}</div>
-    {% if edu.details %}<p style="font-size: 7pt; color: #555; margin-top: 2px;">{{ edu.details }}</p>{% endif %}
-  </div>
-  {% endfor %}
-  {% endif %}
-
   {% if languages %}
   <div class="sidebar-section">Languages</div>
   {% for lang in languages %}<div class="lang-item">{{ lang }}</div>{% endfor %}
@@ -87,6 +69,7 @@
   {% if relocation %}<div class="sidebar-section">Relocation</div><div class="lang-item">{{ relocation }}</div>{% endif %}
 </td>
 <td class="col-right">
+
   {% if summary %}
   <div class="section-title">Profile</div>
   <p class="summary-text">{{ summary }}</p>
@@ -105,12 +88,25 @@
   {% endfor %}
   {% endif %}
 
+  {% if education %}
+  <div class="section-title">Education</div>
+  {% for edu in education %}
+  <div class="mb1">
+    <div class="exp-row">
+      <div class="exp-left"><div class="exp-title">{{ edu.degree }}</div><div class="exp-company">{{ edu.institution }}{% if edu.location %} · {{ edu.location }}{% endif %}</div></div>
+      <div class="exp-right">{{ edu.period }}</div>
+    </div>
+    {% if edu.details %}<p style="font-size: 8pt; margin-top: 2px;">{{ edu.details }}</p>{% endif %}
+  </div>
+  {% endfor %}
+  {% endif %}
+
   {% if projects %}
   <div class="section-title">Projects</div>
   {% for proj in projects %}
   <div class="mb1">
-    <div class="exp-title">{{ proj.name }}</div>
-    {% if proj.tech %}<div class="exp-company">{{ proj.tech }}</div>{% endif %}
+    <div class="proj-title">{{ proj.name }}</div>
+    {% if proj.tech %}<div class="proj-tech">{{ proj.tech }}</div>{% endif %}
     <ul>{% for b in proj.bullets %}<li>{{ b }}</li>{% endfor %}</ul>
   </div>
   {% endfor %}
@@ -125,6 +121,7 @@
   </div>
   {% endfor %}
   {% endif %}
+
 </td>
 </tr>
 </table>

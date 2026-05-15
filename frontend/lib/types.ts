@@ -112,6 +112,91 @@ export interface ResumeTailorResult {
   missing_keywords: Array<{ keyword: string; suggested_placement: string }>
   bullet_rewrites: Array<{ original: string; improved: string }>
   summary: string
+  target_role?: string
+  target_company?: string
+  profile_headline?: string
+  tailored_summary?: string
+  score_breakdown?: Record<string, number>
+  transferable_strengths?: string[]
+  critical_missing?: string[]
+  degraded?: boolean
+}
+
+export type TemplateId =
+  | 'standard' | 'modern' | 'creative' | 'classic' | 'balanced'
+  | 'minimalist' | 'professional' | 'corporate' | 'bold' | 'slate'
+  | 'professional_compact' | 'executive' | 'insight' | 'atelier'
+  | 'elegant' | 'aqua' | 'lebenslauf'
+
+export interface TemplateMeta {
+  id: TemplateId
+  label: string
+  desc: string
+  font: string
+  columns: 1 | 2
+  requires_photo?: boolean
+}
+
+export interface CvExperience {
+  title: string
+  company: string
+  location: string | null
+  period: string
+  bullets: string[]
+}
+
+export interface CvEducation {
+  degree: string
+  institution: string
+  location: string | null
+  period: string
+  details: string | null
+}
+
+export interface CvSkill {
+  category: string
+  items: string
+}
+
+export interface CvProject {
+  name: string
+  tech: string | null
+  bullets: string[]
+}
+
+export interface CvPublication {
+  title: string
+  venue: string
+  year: string | null
+}
+
+export interface CvFeaturedProject {
+  name: string
+  year: string | null
+  tech: string | null
+  bullets: string[]
+  results: string | null
+}
+
+export interface CvData {
+  full_name: string
+  job_title: string
+  location: string
+  email: string
+  phone: string | null
+  github: string | null
+  linkedin: string | null
+  website: string | null
+  work_authorization: string | null
+  summary: string
+  featured_project: CvFeaturedProject | null
+  experience: CvExperience[]
+  education: CvEducation[]
+  skills: CvSkill[]
+  projects: CvProject[]
+  publications: CvPublication[]
+  languages: string[]
+  relocation: string | null
 }
 
 export interface InterviewQuestion {

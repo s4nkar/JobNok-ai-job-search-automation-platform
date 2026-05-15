@@ -9,12 +9,12 @@ import { Label } from '@/components/ui/label'
 import { useToast } from '@/components/ui/use-toast'
 import {
   Upload, FileText, Loader2, CheckCircle, XCircle, ArrowRight,
-  Info, FileSearch, X, Compass, Download, LayoutTemplate, User, Lock,
-  Sparkles, AlertTriangle, BarChart3,
+  Info, FileSearch, X, Compass, Download, LayoutTemplate,
+  Sparkles, AlertTriangle, BarChart3, Pencil,
 } from 'lucide-react'
 import { apiFetch } from '@/lib/api'
 import { cn } from '@/lib/utils'
-import { StartupHuntSavedOpportunity, UserProfile } from '@/lib/types'
+import { StartupHuntSavedOpportunity } from '@/lib/types'
 
 interface TailorResult {
   match_score: number
@@ -70,17 +70,12 @@ function buildJdFromOpportunity(lead: StartupHuntSavedOpportunity): string {
   return parts.join('\n')
 }
 
-function classicProfileReady(p: UserProfile | null): boolean {
-  return !!(p?.full_name && p?.phone && (p?.address_city || p?.address_country) && p?.cv_photo_url)
-}
-
 function ResumeTailorInner() {
   const searchParams = useSearchParams()
   const router = useRouter()
   const opportunityId = searchParams.get('opportunity_id')
 
   const [lead, setLead] = useState<StartupHuntSavedOpportunity | null>(null)
-  const [profile, setProfile] = useState<UserProfile | null>(null)
   const [file, setFile] = useState<File | null>(null)
   const [jd, setJd] = useState('')
   const [loading, setLoading] = useState(false)
@@ -89,17 +84,12 @@ function ResumeTailorInner() {
   const [result, setResult] = useState<TailorResult | null>(null)
   const [error, setError] = useState<string | null>(null)
 
-  // PDF generation state
-  const [selectedTemplate, setSelectedTemplate] = useState<'modern' | 'classic'>('modern')
   const [generating, setGenerating] = useState(false)
 
   const fileRef = useRef<HTMLInputElement>(null)
   const { toast } = useToast()
 
   useEffect(() => {
-    // Load profile for classic template eligibility
-    apiFetch('/api/profile').then(r => r.json()).then(setProfile).catch(() => {})
-
     if (!opportunityId) return
     setPrefilling(true)
     apiFetch(`/api/startup-hunt/opportunities`)
@@ -200,7 +190,7 @@ function ResumeTailorInner() {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          template_id: selectedTemplate,
+          template_id: 'standard',
           analysis: result,
           opportunity_id: opportunityId || undefined,
         }),
@@ -214,7 +204,7 @@ function ResumeTailorInner() {
       const url = URL.createObjectURL(blob)
       const a = document.createElement('a')
       a.href = url
-      a.download = `tailored_cv_${selectedTemplate}.pdf`
+      a.download = `tailored_cv_standard.pdf`
       a.click()
       URL.revokeObjectURL(url)
       toast({ title: 'PDF downloaded!' })
@@ -231,8 +221,6 @@ function ResumeTailorInner() {
   const scoreBarColor = result
     ? result.match_score >= 70 ? 'bg-emerald-500' : result.match_score >= 40 ? 'bg-amber-500' : 'bg-red-500'
     : ''
-
-  const classicOk = classicProfileReady(profile)
 
   return (
     <div className="animate-fade-in">
@@ -527,92 +515,44 @@ function ResumeTailorInner() {
                 <p className="text-sm text-slate-600 leading-relaxed">{result.summary}</p>
               </div>
 
-              {/* ── Generate Tailored Resume ── */}
+              {/* ── Build Resume ── */}
               <div className="bg-white rounded-2xl border border-indigo-100 shadow-card p-5">
-                <div className="flex items-center gap-2 mb-4">
+                <div className="flex items-center gap-2 mb-3">
                   <LayoutTemplate className="h-4 w-4 text-indigo-500" />
-                  <p className="text-sm font-semibold text-slate-700">Generate Tailored Resume</p>
+                  <p className="text-sm font-semibold text-slate-700">Build Tailored Resume</p>
                 </div>
-                <p className="text-xs text-slate-500 mb-4">Rewrites are applied automatically. Choose a template and download your updated CV as a PDF.</p>
-
-                <div className="grid grid-cols-2 gap-3 mb-4">
-                  {/* Modern template */}
-                  <button
-                    onClick={() => setSelectedTemplate('modern')}
-                    className={cn(
-                      'text-left rounded-xl border-2 p-3 transition-all',
-                      selectedTemplate === 'modern' ? 'border-indigo-500 bg-indigo-50' : 'border-slate-200 hover:border-slate-300'
-                    )}
+                <p className="text-xs text-slate-500 mb-4">
+                  Open the editor to review pre-filled content, pick from 16 layouts, and download your PDF — or quick-download with the Standard layout.
+                </p>
+                <div className="flex gap-3">
+                  <Button
+                    onClick={() => {
+                      try {
+                        sessionStorage.setItem('resume_tailor_analysis', JSON.stringify(result))
+                        if (file) {
+                          const url = URL.createObjectURL(file)
+                          sessionStorage.setItem('resume_original_pdf_url', url)
+                        }
+                      } catch { /* sessionStorage full — editor will handle gracefully */ }
+                      router.push('/resume-tailor/editor')
+                    }}
+                    className="flex-1 h-10 gradient-brand text-white border-0 shadow-brand-sm hover:opacity-90 transition-opacity rounded-xl font-semibold text-sm"
                   >
-                    <div className="w-full h-20 rounded-lg bg-white border border-slate-200 mb-2 p-2 space-y-1 overflow-hidden">
-                      <div className="h-2 bg-slate-800 rounded w-2/3 mx-auto" />
-                      <div className="h-1 bg-slate-300 rounded w-1/2 mx-auto" />
-                      <div className="h-px bg-slate-300 w-full mt-1" />
-                      <div className="h-1 bg-slate-400 rounded w-1/3 mt-1" />
-                      <div className="space-y-0.5 mt-0.5">
-                        <div className="h-0.5 bg-slate-200 rounded" />
-                        <div className="h-0.5 bg-slate-200 rounded w-5/6" />
-                        <div className="h-0.5 bg-slate-200 rounded w-4/5" />
-                      </div>
-                    </div>
-                    <p className="text-xs font-semibold text-slate-700">Modern Single-Column</p>
-                    <p className="text-[10px] text-slate-400 mt-0.5">Clean, minimal — preferred by German tech companies</p>
-                  </button>
-
-                  {/* Classic template */}
-                  <button
-                    onClick={() => classicOk && setSelectedTemplate('classic')}
-                    className={cn(
-                      'text-left rounded-xl border-2 p-3 transition-all relative',
-                      !classicOk && 'opacity-60 cursor-not-allowed',
-                      classicOk && selectedTemplate === 'classic' ? 'border-indigo-500 bg-indigo-50' : 'border-slate-200',
-                      classicOk && 'hover:border-slate-300'
-                    )}
+                    <Pencil className="h-4 w-4 mr-2" /> Edit &amp; Build Resume
+                  </Button>
+                  <Button
+                    onClick={generatePdf}
+                    disabled={generating}
+                    variant="outline"
+                    className="h-10 rounded-xl text-sm border-slate-200 text-slate-600 hover:bg-slate-50"
                   >
-                    <div className="w-full h-20 rounded-lg border border-slate-200 mb-2 overflow-hidden flex">
-                      <div className="w-1/3 bg-slate-700 p-1 space-y-0.5">
-                        <div className="w-5 h-5 rounded-full bg-slate-500 mx-auto mb-1" />
-                        <div className="h-0.5 bg-slate-500 rounded" />
-                        <div className="h-0.5 bg-slate-500 rounded w-4/5" />
-                        <div className="h-0.5 bg-slate-600 rounded w-3/4 mt-1" />
-                        <div className="h-0.5 bg-slate-600 rounded" />
-                      </div>
-                      <div className="flex-1 bg-white p-1 space-y-0.5">
-                        <div className="h-1.5 bg-slate-700 rounded w-3/4 mb-1" />
-                        <div className="h-px bg-slate-300 rounded" />
-                        <div className="h-0.5 bg-slate-300 rounded" />
-                        <div className="h-0.5 bg-slate-300 rounded w-5/6" />
-                        <div className="h-0.5 bg-slate-300 rounded w-4/5" />
-                      </div>
-                    </div>
-                    <p className="text-xs font-semibold text-slate-700">Classic 2-Column</p>
-                    <p className="text-[10px] text-slate-400 mt-0.5">Traditional German Lebenslauf with photo</p>
-                    {!classicOk && (
-                      <div className="absolute top-2 right-2 flex items-center gap-1 bg-amber-100 text-amber-700 rounded-lg px-1.5 py-0.5">
-                        <Lock className="h-2.5 w-2.5" />
-                        <span className="text-[9px] font-semibold">Profile needed</span>
-                      </div>
-                    )}
-                  </button>
+                    {generating
+                      ? <Loader2 className="h-4 w-4 animate-spin" />
+                      : <Download className="h-4 w-4" />
+                    }
+                  </Button>
                 </div>
-
-                {!classicOk && (
-                  <div className="flex items-center gap-2 text-xs text-amber-700 bg-amber-50 border border-amber-100 rounded-lg px-3 py-2 mb-3">
-                    <User className="h-3.5 w-3.5 shrink-0" />
-                    <span>Classic template requires photo, name, phone and city. <button onClick={() => router.push('/profile')} className="underline font-semibold">Complete your profile →</button></span>
-                  </div>
-                )}
-
-                <Button
-                  onClick={generatePdf}
-                  disabled={generating}
-                  className="w-full h-10 gradient-brand text-white border-0 shadow-brand-sm hover:opacity-90 transition-opacity rounded-xl font-semibold text-sm"
-                >
-                  {generating
-                    ? <><Loader2 className="h-4 w-4 mr-2 animate-spin" /> Generating PDF…</>
-                    : <><Download className="h-4 w-4 mr-2" /> Generate & Download {selectedTemplate === 'classic' ? 'Classic' : 'Modern'} CV</>
-                  }
-                </Button>
+                <p className="text-[10px] text-slate-400 mt-2 text-center">Quick-download uses the Standard layout</p>
               </div>
             </>
           )}

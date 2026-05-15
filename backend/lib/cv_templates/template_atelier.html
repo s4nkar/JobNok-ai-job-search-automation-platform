@@ -1,0 +1,132 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<style>
+  @page { margin: 0; size: A4; }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { font-family: Georgia, "Times New Roman", serif; font-size: 9.5pt; color: #1a1a1a; }
+
+  .layout { width: 100%; border-collapse: collapse; }
+  .col-left { width: 36%; background: #faf8f5; vertical-align: top; padding: 24px 18px 30px; border-right: 2px solid #c8a96e; }
+  .col-right { width: 64%; vertical-align: top; padding: 24px 22px 30px; }
+
+  /* Left column — editorial */
+  h1 { font-size: 15pt; font-weight: bold; color: #2c1a0e; line-height: 1.25; margin-bottom: 3px; letter-spacing: 0.3px; }
+  .tagline { font-size: 8.5pt; font-style: italic; color: #7a5c35; margin-bottom: 12px; }
+
+  .left-section { font-size: 6.5pt; font-weight: bold; text-transform: uppercase; letter-spacing: 2.5px; color: #c8a96e; margin: 14px 0 6px; }
+  .left-section:first-child { margin-top: 0; }
+  .contact-item { font-size: 7.5pt; color: #4a3520; margin-bottom: 4px; font-family: Arial, sans-serif; word-break: break-all; }
+  .skill-cat { font-size: 8.5pt; font-weight: bold; color: #2c1a0e; margin-bottom: 1px; }
+  .skill-items { font-size: 7.5pt; color: #7a5c35; margin-bottom: 6px; line-height: 1.4; font-family: Arial, sans-serif; }
+  .edu-degree { font-weight: bold; font-size: 9pt; color: #2c1a0e; }
+  .edu-school { font-style: italic; font-size: 8pt; color: #7a5c35; margin: 1px 0; }
+  .edu-period { font-size: 7.5pt; color: #aaa; font-family: Arial, sans-serif; }
+  .lang-item { font-size: 8pt; color: #4a3520; margin-bottom: 3px; }
+
+  /* Right column */
+  .section-title { font-size: 7pt; font-weight: bold; text-transform: uppercase; letter-spacing: 3px; color: #c8a96e; margin: 16px 0 5px; }
+  .section-title:first-child { margin-top: 0; }
+  .section-rule { border: none; border-top: 0.5px solid #ddd; margin: 0 0 8px; }
+  .exp-row { display: table; width: 100%; }
+  .exp-left { display: table-cell; vertical-align: top; }
+  .exp-right { display: table-cell; text-align: right; white-space: nowrap; font-size: 8pt; color: #aaa; padding-left: 8px; vertical-align: top; font-family: Arial, sans-serif; }
+  .exp-title { font-weight: bold; font-size: 9.5pt; color: #2c1a0e; }
+  .exp-company { font-style: italic; font-size: 8.5pt; color: #7a5c35; margin: 1px 0 4px; }
+  ul { margin: 3px 0 5px; padding-left: 14px; }
+  li { margin-bottom: 2px; font-size: 9pt; }
+  .mb1 { margin-bottom: 9px; }
+  p { margin: 0; }
+</style>
+</head>
+<body>
+<table class="layout">
+<tr>
+<td class="col-left">
+  <h1>{{ full_name }}</h1>
+  {% if job_title %}<div class="tagline">{{ job_title }}</div>{% endif %}
+
+  <div class="left-section">Contact</div>
+  {% if email %}<div class="contact-item">{{ email }}</div>{% endif %}
+  {% if phone %}<div class="contact-item">{{ phone }}</div>{% endif %}
+  {% if location %}<div class="contact-item">{{ location }}</div>{% endif %}
+  {% if linkedin %}<div class="contact-item">{{ linkedin }}</div>{% endif %}
+  {% if github %}<div class="contact-item">{{ github }}</div>{% endif %}
+  {% if website %}<div class="contact-item">{{ website }}</div>{% endif %}
+
+  {% if skills %}
+  <div class="left-section">Skills</div>
+  {% for skill in skills %}
+  <div class="skill-cat">{{ skill['category'] }}</div>
+  <div class="skill-items">{{ skill['items'] if skill['items'] is string else skill['items'] | join(', ') }}</div>
+  {% endfor %}
+  {% endif %}
+
+  {% if education %}
+  <div class="left-section">Education</div>
+  {% for edu in education %}
+  <div style="margin-bottom: 9px;">
+    <div class="edu-degree">{{ edu.degree }}</div>
+    <div class="edu-school">{{ edu.institution }}{% if edu.location %}, {{ edu.location }}{% endif %}</div>
+    <div class="edu-period">{{ edu.period }}</div>
+  </div>
+  {% endfor %}
+  {% endif %}
+
+  {% if languages %}
+  <div class="left-section">Languages</div>
+  {% for lang in languages %}<div class="lang-item">{{ lang }}</div>{% endfor %}
+  {% endif %}
+
+  {% if work_authorization %}<div class="left-section">Work Auth</div><div class="lang-item">{{ work_authorization }}</div>{% endif %}
+  {% if relocation %}<div class="left-section">Relocation</div><div class="lang-item">{{ relocation }}</div>{% endif %}
+</td>
+<td class="col-right">
+  {% if summary %}
+  <div class="section-title">Profile</div>
+  <hr class="section-rule">
+  <p style="font-size: 9pt; line-height: 1.6; text-align: justify; margin-bottom: 4px;">{{ summary }}</p>
+  {% endif %}
+
+  {% if experience %}
+  <div class="section-title">Experience</div>
+  <hr class="section-rule">
+  {% for exp in experience %}
+  <div class="mb1">
+    <div class="exp-row">
+      <div class="exp-left"><div class="exp-title">{{ exp.title }}</div><div class="exp-company">{{ exp.company }}{% if exp.location %}, {{ exp.location }}{% endif %}</div></div>
+      <div class="exp-right">{{ exp.period }}</div>
+    </div>
+    <ul>{% for b in exp.bullets %}<li>{{ b }}</li>{% endfor %}</ul>
+  </div>
+  {% endfor %}
+  {% endif %}
+
+  {% if projects %}
+  <div class="section-title">Projects</div>
+  <hr class="section-rule">
+  {% for proj in projects %}
+  <div class="mb1">
+    <div class="exp-title">{{ proj.name }}</div>
+    {% if proj.tech %}<div class="exp-company">{{ proj.tech }}</div>{% endif %}
+    <ul>{% for b in proj.bullets %}<li>{{ b }}</li>{% endfor %}</ul>
+  </div>
+  {% endfor %}
+  {% endif %}
+
+  {% if publications %}
+  <div class="section-title">Publications</div>
+  <hr class="section-rule">
+  {% for pub in publications %}
+  <div class="mb1">
+    <p style="font-style: italic; font-size: 9pt;">{{ pub.title }}</p>
+    <p style="font-size: 8.5pt; color: #7a5c35; font-family: Arial, sans-serif;">{{ pub.venue }}{% if pub.year %}, {{ pub.year }}{% endif %}</p>
+  </div>
+  {% endfor %}
+  {% endif %}
+</td>
+</tr>
+</table>
+</body>
+</html>
