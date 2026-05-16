@@ -98,6 +98,19 @@
   <p style="font-size: 8.5pt; line-height: 1.55; margin-bottom: 4px;">{{ summary }}</p>
   {% endif %}
 
+  {% if featured_project %}
+  <div class="section-title">Featured Project</div>
+  <div class="mb1">
+    <div style="display:flex;justify-content:space-between;align-items:baseline;">
+      <div class="exp-title">{{ featured_project.name }}</div>
+      {% if featured_project.year %}<span style="font-size:8pt;color:#888;">{{ featured_project.year }}</span>{% endif %}
+    </div>
+    {% if featured_project.tech %}<div class="exp-company">{{ featured_project.tech }}</div>{% endif %}
+    <ul>{% for b in featured_project.bullets %}<li>{{ b }}</li>{% endfor %}</ul>
+    {% if featured_project.results %}<p style="font-size:8.5pt;font-weight:bold;margin-top:3px;">{{ featured_project.results }}</p>{% endif %}
+  </div>
+  {% endif %}
+
   {% if experience %}
   <div class="section-title">Experience</div>
   {% for exp in experience %}

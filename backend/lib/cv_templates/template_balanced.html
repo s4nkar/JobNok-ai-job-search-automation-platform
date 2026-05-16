@@ -56,6 +56,23 @@
 </div>
 {% endif %}
 
+{% if featured_project %}
+<div class="section-wrap">
+  <div class="section-label-col"><div class="section-label">Featured Project</div></div>
+  <div class="section-content">
+    <div class="mb1">
+      <div class="exp-row">
+        <div class="exp-left"><div class="exp-title">{{ featured_project.name }}</div></div>
+        {% if featured_project.year %}<div class="exp-right">{{ featured_project.year }}</div>{% endif %}
+      </div>
+      {% if featured_project.tech %}<div class="exp-company">{{ featured_project.tech }}</div>{% endif %}
+      <ul>{% for b in featured_project.bullets %}<li>{{ b }}</li>{% endfor %}</ul>
+      {% if featured_project.results %}<p style="font-size:8.5pt;font-weight:bold;margin-top:3px;">{{ featured_project.results }}</p>{% endif %}
+    </div>
+  </div>
+</div>
+{% endif %}
+
 {% if experience %}
 <div class="section-wrap">
   <div class="section-label-col"><div class="section-label">Experience</div></div>

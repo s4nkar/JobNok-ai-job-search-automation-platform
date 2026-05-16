@@ -1,6 +1,6 @@
 'use client'
 
-import { useState, useEffect, useCallback, Suspense } from 'react'
+import { useState, useEffect, useCallback, useRef, Suspense } from 'react'
 import { useRouter } from 'next/navigation'
 import { apiFetch } from '@/lib/api'
 import {
@@ -16,7 +16,7 @@ import { cn } from '@/lib/utils'
 import {
   ArrowLeft, Download, Loader2, Plus, Trash2, ChevronDown, ChevronUp,
   FileText, User, Briefcase, GraduationCap, Wrench, FolderOpen, BookOpen,
-  Languages, AlertTriangle, Star, Lock,
+  Languages, AlertTriangle, Star, Lock, Eye, EyeOff,
 } from 'lucide-react'
 
 // ── Template thumbnails ───────────────────────────────────────────
@@ -150,6 +150,7 @@ function EditorInner() {
   const { toast } = useToast()
 
   const [originalPdfUrl, setOriginalPdfUrl] = useState<string | null>(null)
+  const [showOriginalPdf, setShowOriginalPdf] = useState(false)
   const [cvData, setCvData] = useState<CvData | null>(null)
   const [templates, setTemplates] = useState<TemplateMeta[]>([])
   const [selectedTemplate, setSelectedTemplate] = useState<TemplateId>('standard')
@@ -157,6 +158,9 @@ function EditorInner() {
   const [generating, setGenerating] = useState(false)
   const [sessionError, setSessionError] = useState(false)
   const [profileOkForLebenslauf, setProfileOkForLebenslauf] = useState(false)
+  const [previewHtml, setPreviewHtml] = useState<string | null>(null)
+  const [previewLoading, setPreviewLoading] = useState(false)
+  const previewDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null)
 
   // Load session data + template list + structure resume + profile check
   useEffect(() => {
@@ -193,6 +197,36 @@ function EditorInner() {
       setSessionError(true)
     }).finally(() => setLoading(false))
   }, [toast])
+
+  // Debounced live preview fetch
+  useEffect(() => {
+    if (!cvData) return
+    if (previewDebounceRef.current) clearTimeout(previewDebounceRef.current)
+    const controller = new AbortController()
+    previewDebounceRef.current = setTimeout(async () => {
+      setPreviewLoading(true)
+      try {
+        const res = await apiFetch('/api/ai/tailor/preview-html', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ template_id: selectedTemplate, cv_data: cvData }),
+          signal: controller.signal,
+        })
+        if (res.ok) {
+          const html = await res.text()
+          setPreviewHtml(html)
+        }
+      } catch (e) {
+        if ((e as Error).name !== 'AbortError') { /* silent — user can still download */ }
+      } finally {
+        if (!controller.signal.aborted) setPreviewLoading(false)
+      }
+    }, 1500)
+    return () => {
+      if (previewDebounceRef.current) clearTimeout(previewDebounceRef.current)
+      controller.abort()
+    }
+  }, [cvData, selectedTemplate])
 
   const set = useCallback(<K extends keyof CvData>(key: K, value: CvData[K]) => {
     setCvData(prev => prev ? { ...prev, [key]: value } : prev)
@@ -832,11 +866,46 @@ function EditorInner() {
 
         </div>
 
-        {/* ── RIGHT: Template picker + original PDF ── */}
-        <div className="space-y-4 sticky top-4">
+        {/* ── RIGHT: Live preview + template picker ── */}
+        <div className="space-y-4 sticky top-4" style={{ maxHeight: 'calc(100vh - 140px)', overflowY: 'auto' }}>
 
-          {/* Original PDF reference */}
-          {originalPdfUrl && (
+          {/* Live preview */}
+          <div className="bg-white rounded-2xl border border-slate-100 shadow-card overflow-hidden">
+            <div className="px-4 py-2.5 border-b border-slate-100 flex items-center gap-2">
+              <Eye className="h-4 w-4 text-slate-400" />
+              <span className="text-xs font-semibold text-slate-600 flex-1">Live Preview</span>
+              {previewLoading && <Loader2 className="h-3.5 w-3.5 animate-spin text-indigo-400" />}
+              {originalPdfUrl && (
+                <button
+                  onClick={() => setShowOriginalPdf(v => !v)}
+                  className="flex items-center gap-1 text-[10px] text-slate-400 hover:text-slate-600 transition-colors"
+                  title="Toggle original PDF reference"
+                >
+                  {showOriginalPdf ? <EyeOff className="h-3 w-3" /> : <FileText className="h-3 w-3" />}
+                  {showOriginalPdf ? 'Hide original' : 'Original PDF'}
+                </button>
+              )}
+            </div>
+            {previewHtml ? (
+              <iframe
+                srcDoc={previewHtml}
+                className="w-full border-0"
+                style={{ height: '680px' }}
+                title="Resume live preview"
+                sandbox=""
+              />
+            ) : (
+              <div className="flex flex-col items-center justify-center gap-2 text-slate-400" style={{ height: '680px' }}>
+                {previewLoading
+                  ? <><Loader2 className="h-6 w-6 animate-spin text-indigo-400" /><span className="text-xs">Rendering preview…</span></>
+                  : <><Eye className="h-6 w-6" /><span className="text-xs">Preview will appear here</span></>
+                }
+              </div>
+            )}
+          </div>
+
+          {/* Original PDF (collapsible reference) */}
+          {originalPdfUrl && showOriginalPdf && (
             <div className="bg-white rounded-2xl border border-slate-100 shadow-card overflow-hidden">
               <div className="px-4 py-2.5 border-b border-slate-100 flex items-center gap-2">
                 <FileText className="h-4 w-4 text-slate-400" />

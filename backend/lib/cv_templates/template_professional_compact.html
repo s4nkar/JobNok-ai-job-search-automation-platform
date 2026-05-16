@@ -56,6 +56,16 @@
 <p style="font-size: 8.5pt; line-height: 1.5; margin-bottom: 3px;">{{ summary }}</p>
 {% endif %}
 
+{% if featured_project %}
+<div class="section-title">Featured Project</div>
+<hr class="section-rule">
+<div class="mb1">
+  <div style="font-weight: bold; font-size: 9pt;">{{ featured_project.name }}{% if featured_project.tech %} <span style="font-weight: normal; font-style: italic; color: #555; font-size: 8.5pt;">· {{ featured_project.tech }}</span>{% endif %}{% if featured_project.year %} <span style="font-weight: normal; color: #777; font-size: 8.5pt;">{{ featured_project.year }}</span>{% endif %}</div>
+  <ul>{% for b in featured_project.bullets %}<li>{{ b }}</li>{% endfor %}</ul>
+  {% if featured_project.results %}<p style="font-size:8.5pt;font-weight:bold;margin-top:2px;">{{ featured_project.results }}</p>{% endif %}
+</div>
+{% endif %}
+
 {% if experience %}
 <div class="section-title">Experience</div>
 <hr class="section-rule">

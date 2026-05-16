@@ -17,7 +17,7 @@ import fitz  # PyMuPDF
 import httpx
 import numpy as np
 from fastapi import APIRouter, Request, HTTPException, UploadFile, File, Form
-from fastapi.responses import StreamingResponse, Response
+from fastapi.responses import StreamingResponse, Response, HTMLResponse
 from jinja2 import Environment, FileSystemLoader
 from weasyprint import HTML as WeasyHTML
 
@@ -300,9 +300,9 @@ Hard rules:
   * PRESERVE every number, percentage, and metric from the original
   * NEVER add tools, methods, or domains absent from the original
   * Adjust only verb / framing / emphasis — the evidence must stay identical
-- profile_headline: lead with the exact job title from the JD, then 2–3 of the candidate's REAL skills most relevant to THIS SPECIFIC ROLE. Prefer specific technical skills (e.g. RAG, NLP, LangChain, Transformers) over generic acronyms (AI, ML) — use MATCHED KEYWORDS as signal but don't be limited to them; draw from resume skills when they clearly overlap the JD's domain. Never add skills the resume doesn't show.
+- profile_headline: lead with the exact job title from the JD, then 2–3 of the candidate's REAL skills most relevant to THIS SPECIFIC ROLE. Prefer specific technical skills (e.g. RAG, NLP, LangChain, Transformers, EU AI Act) over generic acronyms — NEVER use "AI", "ML", or "Machine Learning" as a standalone headline segment; they are redundant when the job title already implies them. Draw from MATCHED KEYWORDS and resume skills when they clearly overlap the JD's domain. Never add skills the resume doesn't show.
 - tailored_summary TONE AND CONTENT — strict CV style, not cover letter style:
-  * Write in third person or nominative style. NO first-person pronouns ("I am", "I have", "My experience").
+  * Write in NOMINATIVE STYLE ONLY — no pronouns at all. Do NOT use "I", "my", "their", "they", "this candidate", "the candidate". Start directly with a noun phrase: "Applied AI Engineer with 3+ years…".
   * NO cover-letter phrases: "I am confident", "I am excited", "I look forward to", "I believe".
   * NO vague filler: "drive innovation", "leveraging expertise", "improve complex workflows", "passionate about".
   * Lead with years of experience and core specialty, e.g. "Applied AI Engineer with 3+ years of experience building..."
@@ -353,6 +353,8 @@ CRITICAL RULES — violating any of these produces a broken CV:
 6. If a TAILORED HEADLINE is provided, use it as job_title. If a TAILORED SUMMARY is provided, use it as summary — copy it VERBATIM, do NOT modify it to weave in keywords.
 7. bullets: Each string in ANY bullets array MUST NOT start with a bullet character (•, -, *, ▪, –). The template adds its own markers. Strip any such prefix before including the text.
 8. publications venue: Preserve the COMPLETE venue string verbatim, including any ranking qualifiers (e.g. "Q1-ranked", "Scopus indexed", "SJR"). Never truncate the venue name.
+9. featured_project: If the resume contains a section labelled "FEATURED PROJECT", "HIGHLIGHT PROJECT", or similar, you MUST extract it into the `featured_project` field. NEVER leave featured_project null if the resume shows one. Do NOT duplicate it in the `projects` array.
+10. missing keywords: For any tool or library in the MISSING KEYWORDS list that is clearly implied by the candidate's existing tech stack (e.g. Pandas/NumPy implied by PyTorch/ML work), add it to the most relevant existing skill category's items string. Only do this for standard foundational tools — never invent specialised domain experience.
 
 Return ONLY this JSON structure (no markdown, no extra text):
 {
@@ -489,8 +491,10 @@ async def _llm_structure_resume(resume_text: str, analysis: dict) -> dict:
 BULLET REWRITES TO APPLY (replace originals with improved versions verbatim):
 {rewrites_block}
 
-MISSING KEYWORDS TO WEAVE IN WHERE NATURAL:
+MISSING KEYWORDS — add foundational tools (e.g. Pandas, NumPy, SciKit-learn) to the relevant skills category if implied by existing tech stack. Do NOT invent domain experience:
 {kw_block}
+
+IMPORTANT: If the resume has a "FEATURED PROJECT" section, it MUST be in featured_project (not in projects).
 
 RESUME TEXT:
 {resume_text[:6000]}"""
@@ -654,6 +658,71 @@ async def generate_cv_pdf(request: Request, body: dict):
         media_type="application/pdf",
         headers={"Content-Disposition": f'attachment; filename="tailored_cv_{template_id}.pdf"'},
     )
+
+
+@router.post("/tailor/preview-html")
+async def preview_cv_html(request: Request, body: dict):
+    """Render CV template to HTML for live preview — no PDF conversion, no rate limit."""
+    user_id = get_user_id(request)
+
+    template_id = body.get("template_id", "standard")
+    if template_id not in TEMPLATE_REGISTRY:
+        raise HTTPException(
+            status_code=422,
+            detail=f"Unknown template_id '{template_id}'. Valid: {', '.join(TEMPLATE_REGISTRY)}",
+        )
+
+    cv_data_override = body.get("cv_data")
+    if not cv_data_override:
+        raise HTTPException(status_code=400, detail="cv_data is required for preview.")
+
+    cv_data = dict(cv_data_override)
+    _normalize_cv_data(cv_data)
+
+    if template_id == "lebenslauf":
+        lebenslauf_cache_key = f"lebenslauf_profile:{user_id}"
+        cached_profile = await get_cached(lebenslauf_cache_key)
+        if cached_profile:
+            lp = json.loads(cached_profile)
+        else:
+            sb = get_supabase()
+            profile_res = await asyncio.to_thread(
+                lambda: sb.table("profiles")
+                .select("cv_photo_url,date_of_birth,nationality")
+                .eq("id", user_id)
+                .single()
+                .execute()
+            )
+            profile = profile_res.data or {}
+            photo_base64 = ""
+            safe_url = _safe_photo_url(profile.get("cv_photo_url"))
+            if safe_url:
+                try:
+                    async with httpx.AsyncClient(timeout=8) as client:
+                        r = await client.get(safe_url)
+                        if r.status_code == 200:
+                            photo_base64 = base64.b64encode(r.content).decode()
+                except Exception:
+                    pass
+            lp = {
+                "photo_base64": photo_base64 or None,
+                "date_of_birth": profile.get("date_of_birth"),
+                "nationality": profile.get("nationality"),
+            }
+            await set_cached(lebenslauf_cache_key, json.dumps(lp), ttl_seconds=3600)
+        cv_data["photo_base64"] = lp["photo_base64"]
+        cv_data["date_of_birth"] = lp["date_of_birth"]
+        cv_data["nationality"] = lp["nationality"]
+    else:
+        cv_data.setdefault("photo_base64", None)
+        cv_data.setdefault("date_of_birth", None)
+        cv_data.setdefault("nationality", None)
+
+    template_file = TEMPLATE_REGISTRY[template_id]["file"]
+    tmpl = _jinja_env.get_template(template_file)
+    html_out = tmpl.render(**cv_data)
+
+    return HTMLResponse(content=html_out)
 
 
 # ── Cover Letter ──────────────────────────────────────────────────
