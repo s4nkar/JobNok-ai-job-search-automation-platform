@@ -493,6 +493,92 @@ create index if not exists opportunity_artifacts_opportunity_idx
   on public.opportunity_artifacts(opportunity_id);
 
 -- ============================================================
+-- STARTUP SCOUT COMPANIES
+-- Company-first discovery: user inputs → discovered startups
+-- ============================================================
+create table if not exists public.startup_scout_companies (
+  id              uuid primary key default uuid_generate_v4(),
+  user_id         uuid not null references public.profiles(id) on delete cascade,
+  name            text not null,
+  description     text,
+  what_they_do    text,
+  funding_stage   text,
+  size_range      text,
+  location        text,
+  website         text,
+  linkedin_url    text,
+  source          text not null default 'web_scrape',
+  crawl_status    text not null default 'pending',
+  created_at      timestamptz not null default now(),
+  updated_at      timestamptz not null default now(),
+  constraint startup_scout_crawl_status_check
+    check (crawl_status in ('pending', 'crawling', 'enriched', 'partial', 'failed'))
+);
+
+alter table public.startup_scout_companies enable row level security;
+
+create policy "Users can view own scout companies"
+  on public.startup_scout_companies for select
+  using (auth.uid() = user_id);
+
+create policy "Users can insert own scout companies"
+  on public.startup_scout_companies for insert
+  with check (auth.uid() = user_id);
+
+create policy "Users can update own scout companies"
+  on public.startup_scout_companies for update
+  using (auth.uid() = user_id);
+
+create policy "Users can delete own scout companies"
+  on public.startup_scout_companies for delete
+  using (auth.uid() = user_id);
+
+create index if not exists startup_scout_companies_user_idx
+  on public.startup_scout_companies(user_id);
+create index if not exists startup_scout_companies_status_idx
+  on public.startup_scout_companies(crawl_status);
+
+create trigger startup_scout_companies_updated_at
+  before update on public.startup_scout_companies
+  for each row execute procedure public.set_updated_at();
+
+-- ============================================================
+-- STARTUP SCOUT CONTACTS
+-- Enriched contacts per company (Google crawl or Apollo fallback)
+-- ============================================================
+create table if not exists public.startup_scout_contacts (
+  id              uuid primary key default uuid_generate_v4(),
+  company_id      uuid not null references public.startup_scout_companies(id) on delete cascade,
+  user_id         uuid not null references public.profiles(id) on delete cascade,
+  name            text,
+  title           text,
+  email           text,
+  linkedin_url    text,
+  source          text,
+  confidence      numeric,
+  created_at      timestamptz not null default now()
+);
+
+alter table public.startup_scout_contacts enable row level security;
+
+create policy "Users can view own scout contacts"
+  on public.startup_scout_contacts for select
+  using (auth.uid() = user_id);
+
+create policy "Users can insert own scout contacts"
+  on public.startup_scout_contacts for insert
+  with check (auth.uid() = user_id);
+
+create policy "Users can delete own scout contacts"
+  on public.startup_scout_contacts for delete
+  using (auth.uid() = user_id);
+
+create index if not exists startup_scout_contacts_user_idx
+  on public.startup_scout_contacts(user_id);
+create index if not exists startup_scout_contacts_company_idx
+  on public.startup_scout_contacts(company_id);
+
+-- ============================================================
 -- LINKEDIN CACHE
 -- Shared cache — no RLS (profile data is public on LinkedIn)
 -- ============================================================
@@ -530,6 +616,8 @@ declare
     'startup_hunt_opportunities',
     'startup_hunt_contacts',
     'opportunity_artifacts',
+    'startup_scout_companies',
+    'startup_scout_contacts',
     'linkedin_cache'
   ];
 begin
