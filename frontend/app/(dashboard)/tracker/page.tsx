@@ -3,7 +3,7 @@
 import React from 'react'
 import Link from 'next/link'
 import { useRouter } from 'next/navigation'
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { useForm } from 'react-hook-form'
 import { zodResolver } from '@hookform/resolvers/zod'
 import { z } from 'zod'
@@ -36,8 +36,9 @@ import { useToast } from '@/components/ui/use-toast'
 import {
   Plus, Pencil, Trash2, Briefcase, Loader2, AlertCircle, TrendingUp, CheckCircle,
   Clock, ExternalLink, Compass, Mail, MapPin, MoreHorizontal, FileSearch, PenLine,
-  MessageSquare, ChevronDown, ChevronUp, FileText,
+  MessageSquare, ChevronDown, ChevronUp, FileText, Radar, Users, Globe, Linkedin, StopCircle,
 } from 'lucide-react'
+import { ScoutCompany, ScoutContact, ScoutCrawlStatus } from '@/lib/types'
 import { apiFetch } from '@/lib/api'
 
 const schema = z.object({
@@ -69,11 +70,28 @@ const ARTIFACT_META: Record<string, { label: string; icon: React.ElementType; co
   interview_prep: { label: 'Interview Prep', icon: MessageSquare, color: 'text-teal-600', tool: 'interview-prep' },
 }
 
+const SCOUT_STATUS_META: Record<ScoutCrawlStatus, { label: string; classes: string }> = {
+  pending:  { label: 'Pending',   classes: 'bg-slate-100 text-slate-600' },
+  crawling: { label: 'Crawling…', classes: 'bg-yellow-100 text-yellow-700' },
+  enriched: { label: 'Enriched',  classes: 'bg-emerald-100 text-emerald-700' },
+  partial:  { label: 'Partial',   classes: 'bg-orange-100 text-orange-700' },
+  failed:   { label: 'Failed',    classes: 'bg-red-100 text-red-600' },
+}
+
 export default function TrackerPage() {
   const router = useRouter()
-  const [tab, setTab] = useState<'applications' | 'leads'>('applications')
+  const [tab, setTab] = useState<'applications' | 'leads' | 'scout'>('applications')
   const [applications, setApplications] = useState<JobApplication[]>([])
   const [leads, setLeads] = useState<StartupHuntSavedOpportunity[]>([])
+  const [scoutCompanies, setScoutCompanies] = useState<ScoutCompany[]>([])
+  const [scoutLoading, setScoutLoading] = useState(false)
+  const [crawlingIds, setCrawlingIds] = useState<Set<string>>(new Set())
+  const [stoppingIds, setStoppingIds] = useState<Set<string>>(new Set())
+  const [expandedContacts, setExpandedContacts] = useState<Record<string, boolean>>({})
+  const [contactsCache, setContactsCache] = useState<Record<string, ScoutContact[]>>({})
+  const [contactsLoading, setContactsLoading] = useState<Record<string, boolean>>({})
+  const scoutLoadedRef = useRef(false)
+  const crawlIntervalsRef = useRef<Record<string, ReturnType<typeof setInterval>>>({})
   const [appsLoading, setAppsLoading] = useState(true)
   const [leadsLoading, setLeadsLoading] = useState(true)
   const [showForm, setShowForm] = useState(false)
@@ -96,7 +114,20 @@ export default function TrackerPage() {
   useEffect(() => {
     fetchApplications()
     fetchLeads()
+    // Scout tab is lazy-loaded on first open (see tab effect below)
+    return () => {
+      // Clean up any running poll intervals on unmount
+      Object.values(crawlIntervalsRef.current).forEach(clearInterval)
+    }
   }, [])
+
+  // Lazy-load scout companies on first switch to the scout tab
+  useEffect(() => {
+    if (tab === 'scout' && !scoutLoadedRef.current) {
+      scoutLoadedRef.current = true
+      fetchScoutCompanies()
+    }
+  }, [tab])
 
   async function fetchApplications() {
     setAppsLoading(true)
@@ -114,6 +145,101 @@ export default function TrackerPage() {
     if (leadsRes.ok) setLeads(await leadsRes.json())
     if (countsRes.ok) setArtifactCounts(await countsRes.json())
     setLeadsLoading(false)
+  }
+
+  async function fetchScoutCompanies() {
+    setScoutLoading(true)
+    const res = await apiFetch('/api/startup-scout/companies')
+    if (res.ok) setScoutCompanies(await res.json())
+    setScoutLoading(false)
+  }
+
+  function _clearCrawlInterval(id: string) {
+    if (crawlIntervalsRef.current[id]) {
+      clearInterval(crawlIntervalsRef.current[id])
+      delete crawlIntervalsRef.current[id]
+    }
+  }
+
+  async function startCrawl(company: ScoutCompany) {
+    setCrawlingIds((prev) => new Set([...prev, company.id]))
+    setScoutCompanies((prev) =>
+      prev.map((c) => c.id === company.id ? { ...c, crawl_status: 'crawling' } : c)
+    )
+    // Invalidate any cached contacts so the drawer re-fetches after crawl
+    setContactsCache((prev) => { const n = { ...prev }; delete n[company.id]; return n })
+
+    const res = await apiFetch(`/api/startup-scout/companies/${company.id}/crawl`, { method: 'POST' })
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}))
+      toast({ title: 'Crawl failed to start', description: err.detail || 'Try again.', variant: 'destructive' })
+      setScoutCompanies((prev) =>
+        prev.map((c) => c.id === company.id ? { ...c, crawl_status: 'pending' } : c)
+      )
+      setCrawlingIds((prev) => { const n = new Set(prev); n.delete(company.id); return n })
+      return
+    }
+
+    // Poll every 4s until status leaves 'crawling'
+    crawlIntervalsRef.current[company.id] = setInterval(async () => {
+      const r = await apiFetch(`/api/startup-scout/companies/${company.id}`)
+      if (r.ok) {
+        const updated: ScoutCompany = await r.json()
+        setScoutCompanies((prev) => prev.map((c) => c.id === updated.id ? updated : c))
+        if (updated.crawl_status !== 'crawling') {
+          _clearCrawlInterval(company.id)
+          setCrawlingIds((prev) => { const n = new Set(prev); n.delete(company.id); return n })
+          setStoppingIds((prev) => { const n = new Set(prev); n.delete(company.id); return n })
+          toast({
+            title: updated.crawl_status === 'enriched' ? 'Contacts found!' : 'Crawl done',
+            description: `${company.name} — ${updated.crawl_status}`,
+          })
+        }
+      } else {
+        _clearCrawlInterval(company.id)
+        setCrawlingIds((prev) => { const n = new Set(prev); n.delete(company.id); return n })
+        setStoppingIds((prev) => { const n = new Set(prev); n.delete(company.id); return n })
+      }
+    }, 4000)
+  }
+
+  async function stopCrawl(company: ScoutCompany) {
+    setStoppingIds((prev) => new Set([...prev, company.id]))
+    const res = await apiFetch(`/api/startup-scout/companies/${company.id}/stop`, { method: 'POST' })
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}))
+      toast({ title: 'Could not stop crawl', description: err.detail || 'Try again.', variant: 'destructive' })
+      setStoppingIds((prev) => { const n = new Set(prev); n.delete(company.id); return n })
+    }
+    // Poll continues — backend will update status once it halts naturally
+  }
+
+  async function deleteScoutCompany(id: string) {
+    if (!confirm('Remove this company? This cannot be undone.')) return
+    _clearCrawlInterval(id)
+    const res = await apiFetch(`/api/startup-scout/companies/${id}`, { method: 'DELETE' })
+    if (res.ok) {
+      setScoutCompanies((prev) => prev.filter((c) => c.id !== id))
+      setCrawlingIds((prev) => { const n = new Set(prev); n.delete(id); return n })
+      setStoppingIds((prev) => { const n = new Set(prev); n.delete(id); return n })
+      toast({ title: 'Company removed' })
+    } else {
+      toast({ title: 'Could not remove company', variant: 'destructive' })
+    }
+  }
+
+  async function toggleContacts(companyId: string) {
+    const nowOpen = !expandedContacts[companyId]
+    setExpandedContacts((prev) => ({ ...prev, [companyId]: nowOpen }))
+    if (nowOpen && !contactsCache[companyId]) {
+      setContactsLoading((prev) => ({ ...prev, [companyId]: true }))
+      const res = await apiFetch(`/api/startup-scout/companies/${companyId}/contacts`)
+      if (res.ok) {
+        const data = await res.json()
+        setContactsCache((prev) => ({ ...prev, [companyId]: data }))
+      }
+      setContactsLoading((prev) => ({ ...prev, [companyId]: false }))
+    }
   }
 
   function openCreate() {
@@ -242,11 +368,14 @@ export default function TrackerPage() {
 
       {/* Tabs */}
       <div className="flex gap-1 bg-slate-100 rounded-xl p-1 w-fit mb-6">
-        {([['applications', Briefcase, 'Applications', applications.length, 'bg-indigo-100 text-indigo-700'],
-           ['leads', Compass, 'Startup Leads', leads.length, 'bg-orange-100 text-orange-700']] as const).map(([id, Icon, label, count, badgeClass]) => (
+        {([
+          ['applications', Briefcase, 'Applications', applications.length, 'bg-indigo-100 text-indigo-700'],
+          ['leads', Compass, 'Startup Leads', leads.length, 'bg-orange-100 text-orange-700'],
+          ['scout', Radar, 'Startup Scout', scoutCompanies.length, 'bg-cyan-100 text-cyan-700'],
+        ] as const).map(([id, Icon, label, count, badgeClass]) => (
           <button
             key={id}
-            onClick={() => setTab(id as 'applications' | 'leads')}
+            onClick={() => setTab(id as 'applications' | 'leads' | 'scout')}
             className={cn(
               'flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-semibold transition-colors',
               tab === id ? 'bg-white text-slate-900 shadow-sm' : 'text-slate-500 hover:text-slate-700'
@@ -599,6 +728,216 @@ export default function TrackerPage() {
                                       )
                                     })}
                                   </div>
+                                </div>
+                              )}
+                            </td>
+                          </tr>
+                        )}
+                      </React.Fragment>
+                    )
+                  })}
+                </TableBody>
+              </Table>
+            )}
+          </div>
+        </>
+      )}
+
+      {/* ─── STARTUP SCOUT TAB ─── */}
+      {tab === 'scout' && (
+        <>
+          <div className="grid grid-cols-3 gap-4 mb-6">
+            {[
+              { label: 'Saved', value: scoutCompanies.filter((c) => c.crawl_status === 'pending').length, classes: 'bg-slate-100 text-slate-600' },
+              { label: 'Enriched', value: scoutCompanies.filter((c) => c.crawl_status === 'enriched').length, classes: 'bg-emerald-100 text-emerald-600' },
+              { label: 'Partial / Failed', value: scoutCompanies.filter((c) => ['partial', 'failed'].includes(c.crawl_status)).length, classes: 'bg-orange-100 text-orange-600' },
+            ].map(({ label, value, classes }) => (
+              <div key={label} className="bg-white rounded-2xl border border-slate-100 shadow-card p-5 flex items-center gap-4">
+                <div className={cn('w-10 h-10 rounded-xl flex items-center justify-center flex-shrink-0 text-sm font-bold', classes)}>{value}</div>
+                <div>
+                  <p className="text-2xl font-bold text-slate-900 leading-none">{value}</p>
+                  <p className="text-xs text-slate-500 mt-1">{label}</p>
+                </div>
+              </div>
+            ))}
+          </div>
+
+          <div className="bg-white rounded-2xl border border-slate-100 shadow-card overflow-hidden">
+            {scoutLoading ? (
+              <div className="flex items-center justify-center h-48">
+                <div className="flex flex-col items-center gap-3">
+                  <Loader2 className="h-8 w-8 animate-spin text-cyan-400" />
+                  <p className="text-sm text-slate-400">Loading scout companies…</p>
+                </div>
+              </div>
+            ) : scoutCompanies.length === 0 ? (
+              <div className="flex flex-col items-center justify-center h-56">
+                <div className="w-14 h-14 rounded-2xl bg-cyan-50 flex items-center justify-center mb-4">
+                  <Radar className="h-7 w-7 text-cyan-200" />
+                </div>
+                <p className="font-medium text-slate-600">No companies saved yet</p>
+                <p className="text-sm text-slate-400 mt-1">
+                  <button onClick={() => router.push('/startup-scout')} className="text-cyan-600 hover:underline font-medium">
+                    Go to Startup Scout
+                  </button>
+                  {' '}to discover and save startups.
+                </p>
+              </div>
+            ) : (
+              <Table>
+                <TableHeader>
+                  <TableRow className="bg-slate-50/50 border-b border-slate-100 hover:bg-slate-50/50">
+                    {['Company', 'Stage', 'Location', 'Status', 'Contacts', 'Added'].map((h) => (
+                      <TableHead key={h} className="text-xs font-semibold text-slate-500 uppercase tracking-wider">{h}</TableHead>
+                    ))}
+                    <TableHead className="w-28" />
+                  </TableRow>
+                </TableHeader>
+                <TableBody>
+                  {scoutCompanies.map((company) => {
+                    const statusMeta = SCOUT_STATUS_META[company.crawl_status]
+                    const isCrawling = company.crawl_status === 'crawling' || crawlingIds.has(company.id)
+                    const isStopping = stoppingIds.has(company.id)
+                    const canCrawl = ['pending', 'partial', 'failed'].includes(company.crawl_status) && !crawlingIds.has(company.id)
+                    const contactsOpen = Boolean(expandedContacts[company.id])
+                    const contacts = contactsCache[company.id] || []
+                    const contactsAreLoading = contactsLoading[company.id]
+                    const hasContacts = company.crawl_status === 'enriched' || company.crawl_status === 'partial'
+
+                    return (
+                      <React.Fragment key={company.id}>
+                        <TableRow className="border-b border-slate-50 hover:bg-slate-50/50 transition-colors">
+                          <TableCell className="font-semibold text-slate-800">
+                            {company.website ? (
+                              <Link href={company.website} target="_blank" className="hover:text-cyan-600 hover:underline transition-colors">
+                                {company.name}
+                              </Link>
+                            ) : company.name}
+                            {company.description && (
+                              <p className="text-xs text-slate-400 font-normal mt-0.5 max-w-[220px] truncate">{company.description}</p>
+                            )}
+                          </TableCell>
+                          <TableCell>
+                            {company.funding_stage ? (
+                              <span className="inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-semibold bg-blue-50 text-blue-700 border border-blue-100">
+                                {company.funding_stage}
+                              </span>
+                            ) : <span className="text-slate-300 text-sm">—</span>}
+                          </TableCell>
+                          <TableCell>
+                            {company.location ? (
+                              <span className="flex items-center gap-1 text-xs text-slate-500">
+                                <MapPin className="h-3 w-3 flex-shrink-0" />{company.location}
+                              </span>
+                            ) : <span className="text-slate-300 text-sm">—</span>}
+                          </TableCell>
+                          <TableCell>
+                            <span className={cn('inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-xs font-semibold', statusMeta.classes)}>
+                              {isCrawling && <Loader2 className="h-2.5 w-2.5 animate-spin" />}
+                              {statusMeta.label}
+                            </span>
+                          </TableCell>
+                          <TableCell>
+                            {hasContacts ? (
+                              <button
+                                onClick={() => toggleContacts(company.id)}
+                                className={cn(
+                                  'flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-semibold border transition-colors',
+                                  contactsOpen
+                                    ? 'bg-cyan-50 text-cyan-700 border-cyan-200 hover:bg-cyan-100'
+                                    : 'bg-slate-50 text-slate-500 border-slate-200 hover:bg-slate-100'
+                                )}
+                              >
+                                <Users className="h-3 w-3" />
+                                {contactsOpen ? 'Hide' : 'View'}
+                                {contactsOpen ? <ChevronUp className="h-3 w-3" /> : <ChevronDown className="h-3 w-3" />}
+                              </button>
+                            ) : (
+                              <span className="text-slate-300 text-xs">—</span>
+                            )}
+                          </TableCell>
+                          <TableCell className="text-xs text-slate-400">{formatDate(company.created_at)}</TableCell>
+                          <TableCell>
+                            <div className="flex gap-1 justify-end">
+                              {isCrawling && (
+                                <button
+                                  onClick={() => stopCrawl(company)}
+                                  disabled={isStopping}
+                                  className="h-7 px-2.5 rounded-lg flex items-center gap-1 text-xs font-semibold text-red-700 bg-red-50 hover:bg-red-100 border border-red-200 transition-colors disabled:opacity-50"
+                                >
+                                  {isStopping
+                                    ? <Loader2 className="h-3 w-3 animate-spin" />
+                                    : <StopCircle className="h-3 w-3" />}
+                                  {isStopping ? 'Stopping…' : 'Stop'}
+                                </button>
+                              )}
+                              {canCrawl && (
+                                <button
+                                  onClick={() => startCrawl(company)}
+                                  className="h-7 px-2.5 rounded-lg flex items-center gap-1 text-xs font-semibold text-cyan-700 bg-cyan-50 hover:bg-cyan-100 border border-cyan-200 transition-colors"
+                                >
+                                  <Radar className="h-3 w-3" />
+                                  {company.crawl_status === 'pending' ? 'Start Crawl' : 'Re-crawl'}
+                                </button>
+                              )}
+                              {company.website && (
+                                <Link href={company.website} target="_blank">
+                                  <button className="h-7 w-7 rounded-lg flex items-center justify-center text-slate-400 hover:text-slate-700 hover:bg-slate-100 transition-colors">
+                                    <Globe className="h-3.5 w-3.5" />
+                                  </button>
+                                </Link>
+                              )}
+                              <button
+                                onClick={() => deleteScoutCompany(company.id)}
+                                className="h-7 w-7 rounded-lg flex items-center justify-center text-slate-400 hover:text-red-500 hover:bg-red-50 transition-colors"
+                              >
+                                <Trash2 className="h-3.5 w-3.5" />
+                              </button>
+                            </div>
+                          </TableCell>
+                        </TableRow>
+
+                        {/* Contacts panel */}
+                        {contactsOpen && (
+                          <tr key={`${company.id}-contacts`} className="bg-slate-50/60 border-b border-slate-100">
+                            <td colSpan={7} className="px-5 py-4">
+                              {contactsAreLoading ? (
+                                <div className="flex items-center gap-2 text-sm text-slate-400">
+                                  <Loader2 className="h-3.5 w-3.5 animate-spin" /> Loading contacts…
+                                </div>
+                              ) : contacts.length === 0 ? (
+                                <p className="text-sm text-slate-400">No contacts found. Try re-crawling.</p>
+                              ) : (
+                                <div className="grid grid-cols-2 gap-3">
+                                  {contacts.map((contact) => (
+                                    <div key={contact.id} className="bg-white rounded-xl border border-slate-200 p-3 flex items-start gap-3">
+                                      <div className="w-8 h-8 rounded-full bg-cyan-100 flex items-center justify-center flex-shrink-0 text-xs font-bold text-cyan-700">
+                                        {(contact.name || '?')[0].toUpperCase()}
+                                      </div>
+                                      <div className="min-w-0 flex-1">
+                                        <p className="text-sm font-semibold text-slate-800 truncate">{contact.name}</p>
+                                        {contact.title && <p className="text-xs text-slate-500 truncate">{contact.title}</p>}
+                                        <div className="flex items-center gap-2 mt-1.5 flex-wrap">
+                                          {contact.email && (
+                                            <a href={`mailto:${contact.email}`} className="text-xs text-indigo-600 hover:underline truncate">
+                                              {contact.email}
+                                            </a>
+                                          )}
+                                          {contact.linkedin_url && (
+                                            <Link href={contact.linkedin_url} target="_blank" className="flex items-center gap-0.5 text-xs text-blue-600 hover:underline">
+                                              <Linkedin className="h-3 w-3" /> LinkedIn
+                                            </Link>
+                                          )}
+                                          <span className={cn(
+                                            'inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-semibold',
+                                            contact.source === 'apollo' ? 'bg-violet-50 text-violet-700' : 'bg-slate-100 text-slate-500'
+                                          )}>
+                                            {contact.source}
+                                          </span>
+                                        </div>
+                                      </div>
+                                    </div>
+                                  ))}
                                 </div>
                               )}
                             </td>

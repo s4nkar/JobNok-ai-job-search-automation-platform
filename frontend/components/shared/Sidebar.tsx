@@ -7,7 +7,7 @@ import { cn } from '@/lib/utils'
 import { createClient } from '@/lib/supabase/client'
 import {
   FileText, Linkedin, FileSearch, PenLine, MessageSquare,
-  Briefcase, Compass, DollarSign, Mail, Search, LogOut,
+  Briefcase, Compass, DollarSign, Mail, Radar, LogOut,
   Zap, Settings, ChevronLeft, ChevronRight, Check, X,
 } from 'lucide-react'
 import { useToast } from '@/components/ui/use-toast'
@@ -20,7 +20,7 @@ const navItems = [
   { href: '/cover-letter',       label: 'Cover Letter',       icon: PenLine },
   { href: '/interview-prep',     label: 'Interview Prep',     icon: MessageSquare },
   { href: '/tracker',            label: 'Follow-Up Tracker',  icon: Briefcase },
-  { href: '/recent-job-search',  label: 'Recent Job Search',  icon: Search },
+  { href: '/startup-scout',      label: 'Startup Scout',      icon: Radar },
   { href: '/startup-hunt',       label: 'Startup Hunt',       icon: Compass },
   { href: '/salary',             label: 'Salary Research',    icon: DollarSign },
   { href: '/bulk-email',         label: 'Bulk Email',         icon: Mail },

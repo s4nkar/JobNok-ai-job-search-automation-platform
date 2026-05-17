@@ -48,11 +48,13 @@ async def get_profile(request: Request):
         token = request.headers.get("Authorization", "").removeprefix("Bearer ").strip()
         claims = verify_jwt(token)
         email = claims.get("email") or f"{user_id}@unknown.local"
-        ins = await asyncio.to_thread(
+        await asyncio.to_thread(
             lambda: sb.table("profiles")
             .upsert({"id": user_id, "email": email}, on_conflict="id")
-            .select()
             .execute()
+        )
+        ins = await asyncio.to_thread(
+            lambda: sb.table("profiles").select("*").eq("id", user_id).limit(1).execute()
         )
         row = (ins.data or [None])[0]
     if not row:
