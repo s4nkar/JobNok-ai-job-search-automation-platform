@@ -1,0 +1,435 @@
+export type TemplateCategory =
+  | 'Cold DM - Recruiter'
+  | 'Cold DM - Hiring Manager'
+  | 'Follow-Up'
+  | 'Referral Ask'
+  | 'Email Outreach'
+  | 'Custom'
+
+export const TEMPLATE_CATEGORIES: TemplateCategory[] = [
+  'Cold DM - Recruiter',
+  'Cold DM - Hiring Manager',
+  'Follow-Up',
+  'Referral Ask',
+  'Email Outreach',
+  'Custom',
+]
+
+export interface Template {
+  id: string
+  user_id: string
+  name: string
+  category: TemplateCategory
+  content: string
+  placeholders: string[]
+  use_count: number
+  created_at: string
+  is_prebuilt?: boolean
+}
+
+export type ApplicationStatus =
+  | 'Applied'
+  | 'Phone Screen'
+  | 'Interview'
+  | 'Offer'
+  | 'Rejected'
+  | 'Withdrawn'
+
+export const APPLICATION_STATUSES: ApplicationStatus[] = [
+  'Applied',
+  'Phone Screen',
+  'Interview',
+  'Offer',
+  'Rejected',
+  'Withdrawn',
+]
+
+export const STATUS_COLORS: Record<ApplicationStatus, string> = {
+  Applied:       'bg-blue-100 text-blue-800',
+  'Phone Screen': 'bg-yellow-100 text-yellow-800',
+  Interview:     'bg-purple-100 text-purple-800',
+  Offer:         'bg-green-100 text-green-800',
+  Rejected:      'bg-red-100 text-red-800',
+  Withdrawn:     'bg-gray-100 text-gray-800',
+}
+
+export interface JobApplication {
+  id: string
+  user_id: string
+  company: string
+  role: string
+  applied_at: string
+  status: ApplicationStatus
+  follow_up_date: string | null
+  notes: string | null
+  salary_min: number | null
+  salary_max: number | null
+  created_at: string
+  updated_at: string
+}
+
+export type CampaignStatus = 'draft' | 'queued' | 'sending' | 'completed' | 'paused' | 'failed'
+export type RecipientStatus = 'queued' | 'sending' | 'sent' | 'failed'
+
+export interface EmailCampaign {
+  id: string
+  user_id: string
+  name: string
+  subject: string
+  body: string
+  status: CampaignStatus
+  delay_seconds: number
+  created_at: string
+}
+
+export interface EmailRecipient {
+  id: string
+  campaign_id: string
+  email: string
+  name: string
+  variables: Record<string, string>
+  status: RecipientStatus
+  sent_at: string | null
+  error: string | null
+}
+
+export interface LinkedInProfile {
+  name?: string
+  headline?: string
+  current_role?: string
+  current_company?: string
+  location?: string
+  about?: string
+  recent_experience?: string
+  skills?: string[]
+  education?: string
+  profile_url: string
+}
+
+export interface ResumeTailorResult {
+  match_score: number
+  matched_keywords: string[]
+  missing_keywords: Array<{ keyword: string; suggested_placement: string }>
+  bullet_rewrites: Array<{ original: string; improved: string }>
+  summary: string
+  target_role?: string
+  target_company?: string
+  profile_headline?: string
+  tailored_summary?: string
+  score_breakdown?: Record<string, number>
+  transferable_strengths?: string[]
+  critical_missing?: string[]
+  degraded?: boolean
+}
+
+export type TemplateId =
+  | 'standard' | 'modern' | 'creative' | 'classic' | 'balanced'
+  | 'minimalist' | 'professional' | 'corporate' | 'bold' | 'slate'
+  | 'professional_compact' | 'executive' | 'insight' | 'atelier'
+  | 'elegant' | 'aqua' | 'lebenslauf'
+
+export interface TemplateMeta {
+  id: TemplateId
+  label: string
+  desc: string
+  font: string
+  columns: 1 | 2
+  requires_photo?: boolean
+}
+
+export interface CvExperience {
+  title: string
+  company: string
+  location: string | null
+  period: string
+  bullets: string[]
+}
+
+export interface CvEducation {
+  degree: string
+  institution: string
+  location: string | null
+  period: string
+  details: string | null
+}
+
+export interface CvSkill {
+  category: string
+  items: string
+}
+
+export interface CvProject {
+  name: string
+  tech: string | null
+  bullets: string[]
+}
+
+export interface CvPublication {
+  title: string
+  venue: string
+  year: string | null
+}
+
+export interface CvFeaturedProject {
+  name: string
+  year: string | null
+  tech: string | null
+  bullets: string[]
+  results: string | null
+}
+
+export interface CvData {
+  full_name: string
+  job_title: string
+  location: string
+  email: string
+  phone: string | null
+  github: string | null
+  linkedin: string | null
+  website: string | null
+  work_authorization: string | null
+  summary: string
+  featured_project: CvFeaturedProject | null
+  experience: CvExperience[]
+  education: CvEducation[]
+  skills: CvSkill[]
+  projects: CvProject[]
+  publications: CvPublication[]
+  languages: string[]
+  relocation: string | null
+}
+
+export interface InterviewQuestion {
+  question: string
+  framework: string
+  answer_framework: string
+  tips: string[]
+}
+
+export interface SalaryResearchResult {
+  job_title: string
+  location: string
+  median_salary: string
+  salary_range: { min: string; max: string }
+  factors: string[]
+  negotiation_points: string[]
+  data_sources: string[]
+}
+
+export type JobSearchApplicationStatus = 'saved' | 'applied' | 'skipped'
+
+export interface JobCitation {
+  source_name: string
+  canonical_url: string
+  job_url: string
+  posted_at: string | null
+  evidence: string[]
+  extraction_note: string
+}
+
+export interface JobSearchResult {
+  source_name: string
+  provider_type: string
+  external_job_id: string | null
+  company: string
+  role: string
+  location: string
+  job_url: string
+  job_url_canonical: string
+  posted_at: string | null
+  applied: boolean
+  application_status: JobSearchApplicationStatus | null
+  tracked_application_id: string | null
+  citation: JobCitation
+}
+
+export interface JobSearchResponse {
+  results: JobSearchResult[]
+  parsed_preferences: {
+    keywords: string[]
+    languages: string[]
+    company_stage: string | null
+    notes: string[]
+  }
+  configured_source_count: number
+}
+
+export interface JobSearchApplication {
+  id: string
+  user_id: string
+  job_url: string
+  job_url_canonical: string
+  source_name: string
+  external_job_id: string | null
+  company: string
+  role: string
+  location: string
+  posted_at: string | null
+  discovered_at: string
+  applied_at: string | null
+  application_status: JobSearchApplicationStatus
+  tracker_application_id: string | null
+  citation_payload: JobCitation
+  search_context: Record<string, unknown>
+  created_at: string
+  updated_at: string
+}
+
+export type StartupHuntOpportunityStatus = 'saved' | 'applied' | 'contacted' | 'skipped'
+export type StartupHuntOpportunityKind = 'job' | 'outreach_lead'
+
+export interface StartupHuntContact {
+  name: string
+  title: string
+  contact_type: string
+  email: string | null
+  email_confidence: string
+  linkedin_url: string | null
+  source: string
+  provider_chain?: string[]
+}
+
+export interface StartupHuntCompanyProfile {
+  stage: string | null
+  company_size: string | null
+  country: string | null
+  city: string | null
+  english_friendly: boolean
+  ai_relevance: string | null
+  relocation_support: string | null
+  company_website_url: string | null
+  company_careers_url: string | null
+  source_tags: string[]
+}
+
+export interface StartupHuntResult {
+  company_name: string
+  company_domain: string | null
+  company_website_url: string | null
+  company_careers_url: string | null
+  role_title: string
+  location: string
+  country: string | null
+  source_name: string
+  source_type: string
+  direct_apply_url: string | null
+  canonical_job_url: string | null
+  portal_job_url: string | null
+  posted_at: string | null
+  opportunity_kind: StartupHuntOpportunityKind
+  score_total: number
+  score_labels: string[]
+  score_reasons: string[]
+  citation: JobCitation
+  company: StartupHuntCompanyProfile
+  contacts: StartupHuntContact[]
+  saved: boolean
+  saved_status: StartupHuntOpportunityStatus | null
+  saved_opportunity_id: string | null
+  source_bucket?: string
+}
+
+export type OpportunityArtifactType = 'resume_analysis' | 'cover_letter' | 'interview_prep'
+
+export interface OpportunityArtifact {
+  id: string
+  user_id: string
+  opportunity_id: string | null
+  artifact_type: OpportunityArtifactType
+  tool_used: string
+  content: string
+  metadata: Record<string, unknown>
+  created_at: string
+}
+
+export interface StartupHuntSavedOpportunity {
+  id: string
+  company_name: string
+  company_domain: string | null
+  company_website_url: string | null
+  company_careers_url: string | null
+  role_title: string
+  location: string
+  country: string | null
+  source_name: string
+  source_type: string
+  direct_apply_url: string | null
+  canonical_job_url: string | null
+  portal_job_url: string | null
+  opportunity_kind: StartupHuntOpportunityKind
+  opportunity_status: StartupHuntOpportunityStatus
+  score_total: number
+  score_labels: string[]
+  score_reasons: string[]
+  tracker_application_id: string | null
+  company_id: string | null
+  citation_payload: Record<string, unknown>
+  company_payload: Record<string, unknown>
+  search_context: Record<string, unknown>
+  created_at: string
+  updated_at: string
+}
+
+export interface UserProfile {
+  id: string
+  email: string
+  full_name: string | null
+  avatar_url: string | null
+  plan: string
+  created_at: string
+  // CV-specific fields
+  job_title: string | null
+  phone: string | null
+  address_street: string | null
+  address_city: string | null
+  address_postal_code: string | null
+  address_country: string | null
+  date_of_birth: string | null
+  nationality: string | null
+  linkedin_url: string | null
+  github_url: string | null
+  website_url: string | null
+  work_authorization: string | null
+  cv_photo_url: string | null
+  cv_email: string | null
+}
+
+export interface StartupHuntResponse {
+  results: StartupHuntResult[]
+  overflow_results: StartupHuntResult[]
+  filtered_out: Array<{
+    company_name: string
+    role_title: string
+    source_name: string
+    source_bucket: string
+    reason: string
+  }>
+  parsed_strategy: {
+    keywords: string[]
+    languages: string[]
+    company_stage: string | null
+    preferred_cities: string[]
+    hidden_gem_signals: string[]
+    contact_focus: string[]
+  }
+  configured_source_count: number
+  source_result_counts: Record<string, number>
+  source_diagnostics: Record<string, {
+    bucket: string
+    requested_limit: number
+    enabled: boolean
+    available: boolean
+    configured: boolean
+    active_sources: number
+    raw_count: number
+    accepted_count: number
+    status: 'inactive' | 'ok' | 'filtered' | 'empty' | 'error'
+    message: string
+    sources: Array<{
+      name: string
+      type: string
+      error: string | null
+      raw_count: number
+    }>
+  }>
+}

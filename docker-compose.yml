@@ -1,0 +1,127 @@
+services:
+  nginx:
+    image: nginx:alpine
+    ports:
+      - "80:80"
+    volumes:
+      - ./nginx/nginx.conf:/etc/nginx/nginx.conf:ro
+    depends_on:
+      fastapi:
+        condition: service_healthy
+      nextjs:
+        condition: service_healthy
+    networks:
+      - frontend-net
+      - backend-net
+    restart: unless-stopped
+
+  fastapi:
+    build:
+      context: ./backend
+    env_file:
+      - ./backend/.env
+    expose:
+      - "8000"
+    depends_on:
+      redis:
+        condition: service_healthy
+    networks:
+      - backend-net
+    healthcheck:
+      test: [ "CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/api/health')" ]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
+    deploy:
+      resources:
+        limits:
+          memory: 512M
+          cpus: "1.0"
+    restart: unless-stopped
+
+  celery:
+    build:
+      context: ./backend
+    command: celery -A workers.email_worker worker --loglevel=info
+    env_file:
+      - ./backend/.env
+    depends_on:
+      redis:
+        condition: service_healthy
+    networks:
+      - backend-net
+    deploy:
+      resources:
+        limits:
+          memory: 512M
+          cpus: "1.0"
+    restart: unless-stopped
+
+  nextjs:
+    build:
+      context: ./frontend
+      args:
+        NEXT_PUBLIC_SUPABASE_URL: ${NEXT_PUBLIC_SUPABASE_URL}
+        NEXT_PUBLIC_SUPABASE_ANON_KEY: ${NEXT_PUBLIC_SUPABASE_ANON_KEY}
+        NEXT_PUBLIC_APP_URL: ${NEXT_PUBLIC_APP_URL}
+        NEXT_PUBLIC_RATE_LIMIT_LINKEDIN: ${NEXT_PUBLIC_RATE_LIMIT_LINKEDIN}
+        NEXT_PUBLIC_RATE_LIMIT_RESUME: ${NEXT_PUBLIC_RATE_LIMIT_RESUME}
+        NEXT_PUBLIC_RATE_LIMIT_COVER_LETTER: ${NEXT_PUBLIC_RATE_LIMIT_COVER_LETTER}
+        NEXT_PUBLIC_RATE_LIMIT_INTERVIEW: ${NEXT_PUBLIC_RATE_LIMIT_INTERVIEW}
+        NEXT_PUBLIC_RATE_LIMIT_SALARY: ${NEXT_PUBLIC_RATE_LIMIT_SALARY}
+        NEXT_PUBLIC_RATE_LIMIT_JOB_SEARCH: ${NEXT_PUBLIC_RATE_LIMIT_JOB_SEARCH}
+        NEXT_PUBLIC_RATE_LIMIT_STARTUP_HUNT: ${NEXT_PUBLIC_RATE_LIMIT_STARTUP_HUNT}
+        NEXT_PUBLIC_RATE_LIMIT_BULK_CAMPAIGN: ${NEXT_PUBLIC_RATE_LIMIT_BULK_CAMPAIGN}
+        NEXT_PUBLIC_RATE_LIMIT_BULK_MONTH: ${NEXT_PUBLIC_RATE_LIMIT_BULK_MONTH}
+        NEXT_PUBLIC_BULK_EMAIL_MIN_DELAY: ${NEXT_PUBLIC_BULK_EMAIL_MIN_DELAY}
+        NEXT_PUBLIC_BULK_EMAIL_DEFAULT_DELAY: ${NEXT_PUBLIC_BULK_EMAIL_DEFAULT_DELAY}
+        NEXT_PUBLIC_LINKEDIN_CACHE_TTL_DAYS: ${NEXT_PUBLIC_LINKEDIN_CACHE_TTL_DAYS}
+    env_file:
+      - ./frontend/.env.local
+    environment:
+      BACKEND_URL: http://fastapi:8000
+    expose:
+      - "3000"
+    networks:
+      - frontend-net
+      - backend-net
+    healthcheck:
+      test: [ "CMD-SHELL", "node -e \"fetch('http://localhost:3000/api/health').then(r => process.exit(r.ok ? 0 : 1)).catch(() => process.exit(1))\"" ]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 40s
+    deploy:
+      resources:
+        limits:
+          memory: 512M
+          cpus: "1.0"
+    restart: unless-stopped
+
+  redis:
+    image: redis:7-alpine
+    command: redis-server --requirepass ${REDIS_PASSWORD} --appendonly yes
+    expose:
+      - "6379"
+    volumes:
+      - redis_data:/data
+    networks:
+      - backend-net
+    healthcheck:
+      test: [ "CMD", "redis-cli", "-a", "${REDIS_PASSWORD}", "ping" ]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+    deploy:
+      resources:
+        limits:
+          memory: 256M
+    restart: unless-stopped
+
+volumes:
+  redis_data:
+
+networks:
+  frontend-net:
+  backend-net:

@@ -1,0 +1,10 @@
+FROM node:20-alpine
+
+WORKDIR /app
+
+COPY package.json package-lock.json ./
+RUN npm ci
+
+# Source is mounted at runtime via docker-compose.dev.yml — no COPY . .
+EXPOSE 3000
+CMD ["npm", "run", "dev"]

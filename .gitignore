@@ -1,0 +1,64 @@
+# Dependencies
+node_modules/
+.pnp
+.pnp.js
+
+# Next.js
+frontend/.next/
+frontend/out/
+frontend/build/
+
+# Python
+backend/__pycache__/
+backend/**/__pycache__/
+backend/*.pyc
+backend/*.pyo
+backend/.venv/
+backend/venv/
+backend/.pytest_cache/
+backend/celerybeat-schedule
+backend/celerybeat.pid
+
+# Environment
+.env
+.env.local
+.env.development.local
+.env.test.local
+.env.production.local
+frontend/.env
+frontend/.env.local
+backend/.env
+
+# Logs
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# OS
+.DS_Store
+Thumbs.db
+
+# IDEs
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Uploads (temp)
+backend/uploads/
+
+# Coverage
+coverage/
+.coverage
+htmlcov/
+
+# Build artifacts
+dist/
+*.egg-info/
+
+# claude
+.claude
+.codex
+claude.md
+agents.md
