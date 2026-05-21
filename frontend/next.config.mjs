@@ -1,6 +1,12 @@
 /** @type {import('next').NextConfig} */
 const nextConfig = {
   output: 'standalone',
+  // Increase proxy timeout for slow backend endpoints (startup-scout runs multiple DDG queries
+  // with inter-query gaps; limit=200 can take up to ~90 s). Only affects the dev rewrite
+  // proxy — in production Nginx handles /api/* with its own timeout settings.
+  experimental: {
+    proxyTimeout: 180_000, // 180 s in ms
+  },
   images: {
     remotePatterns: [
       { protocol: 'https', hostname: '**.supabase.co' },

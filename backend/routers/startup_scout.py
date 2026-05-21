@@ -31,6 +31,7 @@ class ScoutSearchRequest(BaseModel):
     funding_stages: list[str] = []
     industry: str = ""
     size_range: str = ""
+    limit: int = 50
 
 
 class SaveCompanyRequest(BaseModel):
@@ -180,13 +181,15 @@ async def scout_search(req: ScoutSearchRequest, request: Request):
     if not req.location.strip():
         raise HTTPException(status_code=422, detail="location is required")
 
-    companies = await search_startups(
+    result = await search_startups(
         location=req.location.strip(),
         funding_stages=req.funding_stages,
         industry=req.industry.strip(),
         size_range=req.size_range.strip(),
+        limit=req.limit,
     )
-    return {"companies": companies, "count": len(companies)}
+    companies = result["companies"]
+    return {"companies": companies, "count": len(companies), "meta": result["meta"]}
 
 
 @router.post("/companies")
