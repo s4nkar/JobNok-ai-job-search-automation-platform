@@ -952,9 +952,16 @@ _ROLE_PATTERN = re.compile(
     re.I,
 )
 
+# Name patterns — NOTE: (?-i:...) disables case-insensitivity for the name
+# capture group so that [A-Z] only matches uppercase and [a-z] only lowercase.
+# Without this, re.I makes [A-Z][a-z]+ match *any* word (e.g. "at", "of", "and"),
+# causing sentence fragments to be extracted as fake contacts.
+# Each name-word must be at least 3 chars ([A-Z][a-z]{2,} = 3 total minimum).
+# This prevents "Co" from "Co-Founder" ever being captured as a surname, while
+# still allowing real 3-char names like "Kim", "Lee", "Roy", "Ana", "Max".
 _NAME_ROLE_PATTERNS = [
     re.compile(
-        r"\b([A-Z][a-z]+ (?:[A-Z][a-z]+ ){0,1}[A-Z][a-z]+)"
+        r"\b((?-i:[A-Z][a-z]{2,}(?: (?:[A-Z][a-z]{2,})){0,2}))"
         r"[\s,\-–]+(?:is\s+)?(?:the\s+)?(?:a\s+)?"
         r"(founder|co-founder|ceo|cto|chief executive|chief technology"
         r"|vp engineering|head of engineering)",
@@ -963,13 +970,67 @@ _NAME_ROLE_PATTERNS = [
     re.compile(
         r"(founder|co-founder|ceo|cto|chief executive|chief technology"
         r"|vp engineering|head of engineering)"
-        r"\s+(?:is\s+|and\s+ceo\s+is\s+)?([A-Z][a-z]+ (?:[A-Z][a-z]+ ){0,1}[A-Z][a-z]+)",
+        r"\s+(?:is\s+|and\s+ceo\s+is\s+)?((?-i:[A-Z][a-z]{2,}(?: (?:[A-Z][a-z]{2,})){0,2}))",
         re.I,
     ),
 ]
 
+# Words that are never part of a real person name — used to reject fragments
+_NAME_STOPWORDS: frozenset[str] = frozenset({
+    "at", "in", "of", "as", "and", "or", "the", "a", "an", "to", "with",
+    "by", "for", "is", "was", "are", "its", "his", "her", "our", "their",
+    "we", "he", "she", "they", "it", "this", "that", "from", "on", "into",
+    "between", "software", "engineer", "engineering", "technology", "product",
+    "design", "lead", "senior", "junior", "based", "via", "roam",
+    # Business/funding keywords — never a person's first or last name
+    "funding", "venture", "capital", "startup", "series", "angel",
+    "growth", "revenue", "acquisition", "merger",
+    # Platform/directory names that appear at the start of DDG snippets and
+    # get mis-captured as part of a person's name (e.g. "Crunchbase Mauritz Andreae")
+    "crunchbase", "linkedin", "wellfound", "angellist", "dealroom",
+    "techcrunch", "bloomberg", "reuters", "forbes", "wired",
+    # UI labels that appear as snippet prefixes (e.g. "Profile Duncan Blythe")
+    "profile", "overview", "about", "bio", "page", "team",
+})
 
-def _extract_names_from_snippet(text: str) -> list[dict[str, Any]]:
+# Lowercase name particles that are valid mid-word in European names.
+# e.g. "Jan van der Berg", "Florian von Hardenberg", "Pierre de la Rosa"
+# These must NOT be treated as uppercase-required words.
+_NAME_PARTICLES: frozenset[str] = frozenset({
+    "van", "de", "du", "von", "der", "den", "het", "le", "la", "di",
+    "da", "dos", "del", "della", "lo", "el", "bin", "binte", "al",
+})
+
+
+def _is_valid_person_name(name: str) -> bool:
+    """Return True only if *name* looks like a real person name.
+
+    Rules:
+    - 2 to 5 words (allows "Jan van der Berg")
+    - First and last word must start with uppercase
+    - Middle words may be lowercase particles (van, de, von, …)
+    - No word may be a known stopword / generic role word
+    - No bare single letter (initials with dot like "J." are allowed)
+    """
+    words = name.split()
+    if not (2 <= len(words) <= 5):
+        return False
+    # First and last word must start with real uppercase
+    if not words[0][0].isupper() or not words[-1][0].isupper():
+        return False
+    for word in words:
+        w = word.lower().rstrip(".")
+        # Particles are allowed in middle positions — skip stopword check
+        if w in _NAME_PARTICLES:
+            continue
+        if w in _NAME_STOPWORDS:
+            return False
+        if len(word) == 1:
+            return False
+    return True
+
+
+def _extract_names_from_snippet(text: str, source_url: str = "") -> list[dict[str, Any]]:
     contacts = []
     seen_names: set[str] = set()
     for pattern in _NAME_ROLE_PATTERNS:
@@ -980,7 +1041,9 @@ def _extract_names_from_snippet(text: str) -> list[dict[str, Any]]:
             else:
                 name, role = g[0], g[1]
             name = name.strip()
-            if name in seen_names or len(name.split()) < 2:
+            if name in seen_names:
+                continue
+            if not _is_valid_person_name(name):
                 continue
             seen_names.add(name)
             contacts.append({
@@ -989,60 +1052,358 @@ def _extract_names_from_snippet(text: str) -> list[dict[str, Any]]:
                 "email": None,
                 "linkedin_url": None,
                 "source": "web_scrape",
+                "source_url": source_url or None,
                 "confidence": 0.5,
             })
     return contacts
 
 
-def _parse_linkedin_person(item: dict[str, str]) -> dict[str, Any] | None:
+def _parse_linkedin_person(
+    item: dict[str, str],
+    company_lower: str = "",
+) -> dict[str, Any] | None:
+    """Parse a DDG result whose href is a linkedin.com/in/ profile URL.
+
+    LinkedIn page titles follow the pattern:
+      "First Last - Role at Company | LinkedIn"
+
+    Two guards against bad results:
+
+    1. Multi-profile concatenation: DDG occasionally fuses several "People also
+       viewed" entries into one result. We detect this by splitting on the
+       literal string "LinkedIn" where it appears mid-title (i.e. not at the
+       end) and keep only the first segment.
+       e.g. "Selin K - COO | LinkedInArvind Jain - CEO" → "Selin K - COO"
+
+    2. Relevance: LinkedIn headlines ("Co-Founder at Glean") don't always name
+       the target company — but the DDG *body* snippet usually does, because it
+       includes a more verbose excerpt of the profile page.  We reject profiles
+       whose body doesn't mention the company name.
+    """
     url = item.get("href", "")
     if "linkedin.com/in/" not in url:
         return None
-    title = item.get("title") or item.get("body") or ""
-    parts = re.split(r" [-–|] ", title, maxsplit=2)
-    name = parts[0].strip() if parts else ""
-    role = re.sub(r"\s+at\s+.+", "", parts[1], flags=re.I).strip() if len(parts) > 1 else ""
-    if not name or len(name) < 2:
+
+    title = item.get("title") or ""
+    body  = item.get("body")  or ""
+
+    # Guard 1: strip concatenated multi-profile data.
+    # Split on "LinkedIn" followed immediately by an uppercase letter (next name).
+    # e.g. "...| LinkedInArvind..." → keep everything before that split point.
+    title = re.split(r"LinkedIn(?=[A-Z])", title)[0]
+    # Strip the normal trailing "| LinkedIn" suffix
+    title = re.sub(r"\s*\|\s*LinkedIn\s*$", "", title, flags=re.I).strip()
+
+    parts    = re.split(r"\s+[-–]\s+", title, maxsplit=1)
+    name     = parts[0].strip() if parts else ""
+    role_raw = parts[1].strip() if len(parts) > 1 else ""
+
+    # Guard A: role explicitly names a DIFFERENT company.
+    # e.g. "Co Founder / CEO of Luna Medical Technology" when searching for LF1.
+    # We check role_raw BEFORE stripping so we still have the full "at/of Company" text.
+    # LinkedIn headlines always put "at Company" or "of Company" to identify employer.
+    if role_raw and company_lower:
+        other_co_m = re.search(r'\b(?:at|of)\s+([A-Z][a-zA-Z\s&]{2,40})', role_raw)
+        if other_co_m:
+            mentioned = other_co_m.group(1).strip().lower()
+            # Only reject if the mentioned entity is clearly NOT our target company
+            if mentioned and company_lower not in mentioned:
+                log.debug(
+                    "_parse_linkedin_person: role names different company %r, skipping %s",
+                    other_co_m.group(1)[:40], url[:80],
+                )
+                return None
+
+    # Strip "at Company", "of Company", and "@ Company" suffixes from the role:
+    #   "Head of ML at DeepMetis"  →  "Head of ML"
+    #   "Co-Founder of Luna Med"   →  "Co-Founder"  (after the guard above already rejected bad ones)
+    #   "Head of ML @ DeepMetis"   →  "Head of ML"
+    role = re.sub(r"(?:\s+(?:at|of)\s+|\s*@\s*).+$", "", role_raw, flags=re.I).strip()
+    # If what's left is just the company name (no actual role info), clear it
+    if company_lower and role.lower() == company_lower:
+        role = ""
+
+    # Minimal name validation: 2+ words, first word starts uppercase
+    name_words = name.split()
+    if len(name_words) < 2 or not name_words[0][0].isupper():
         return None
+    # Reject if the "name" is actually a job title
+    if re.search(r"\b(engineer|developer|manager|director|head|vp|lead|president|officer)\b", name, re.I):
+        return None
+
+    # Guard B: title-first relevance check for short company names.
+    #
+    # For short names (≤4 chars, e.g. "LF1"), the body is unreliable — LinkedIn's
+    # own sidebar widgets ("People also at LF1", "Similar profiles at LF1") get
+    # indexed by DDG and appear in the body of completely unrelated profiles.
+    #
+    # The page *title* ("Elliott Spelman - Co-Founder, CEO, Polycam") is always
+    # the person's own LinkedIn headline — it's set by the user and reliably
+    # identifies their actual employer.  If the company doesn't appear in the title,
+    # the person isn't primarily associated with it.
+    #
+    # For longer names we fall back to the body-only check (title doesn't always
+    # repeat the company name for longer names where it's unambiguous in the query).
+    if company_lower:
+        if len(company_lower) <= 4:
+            if not re.search(r'\b' + re.escape(company_lower) + r'\b', title.lower()):
+                log.debug(
+                    "_parse_linkedin_person: short company %r not in profile title, skipping %s",
+                    company_lower, url[:80],
+                )
+                return None
+        elif company_lower not in body.lower():
+            log.debug("_parse_linkedin_person: body missing %r, skipping %s", company_lower, url[:80])
+            return None
+
     return {
         "name": name[:200],
         "title": role[:200],
         "email": None,
         "linkedin_url": url,
         "source": "web_scrape",
-        "confidence": 0.65,
+        "source_url": url,
+        "confidence": 0.75,
     }
 
 
 async def web_search_contacts(company_name: str) -> list[dict[str, Any]]:
-    """Phase B step 1 — find founders/CEOs via Bing search."""
-    safe_name = company_name.replace('"', "").strip()
+    """Phase B step 1 — find founders/CEOs for a specific company via DDG.
 
-    query_general = f'"{safe_name}" founder OR "co-founder" OR CEO OR CTO OR "VP Engineering"'
-    query_linkedin = f'"{safe_name}" site:linkedin.com/in founder OR CEO OR CTO OR engineer'
+    Two queries per company:
+      1. General web — looks for name+role mentions in any page
+      2. LinkedIn    — looks for linkedin.com/in profiles tied to this company
 
-    general_results = await _ddg_search(query_general, max_results=10)
+    Both queries use parenthesised OR so DDG doesn't escape the company-name
+    filter (e.g. '"LF1" (founder OR CEO)' vs '"LF1" founder OR CEO' which DDG
+    reads as '"LF1" founder' OR 'CEO' — returning random global CEO profiles).
+
+    After fetching, every result is checked for the company name in the snippet
+    before any contact is extracted.  This is the primary guard against unrelated
+    people leaking into the results (e.g. a LinkedIn CEO profile that happened to
+    rank for a short ambiguous company name like "LF1").
+    """
+    safe_name    = company_name.replace('"', "").strip()
+    company_lower = safe_name.lower()
+
+    # Parenthesised OR — keeps role alternatives inside the quoted-name context
+    query_general   = f'"{safe_name}" (founder OR "co-founder" OR CEO OR CTO OR "VP Engineering")'
+    query_linkedin  = f'site:linkedin.com/in "{safe_name}" (founder OR CEO OR CTO OR engineer)'
+    # Crunchbase team pages reliably list founders + titles in the snippet
+    query_crunchbase = f'site:crunchbase.com "{safe_name}" founder CEO team'
+
+    general_results   = await _ddg_search(query_general,    max_results=10)
     await asyncio.sleep(1.0)
-    linkedin_results = await _ddg_search(query_linkedin, max_results=10)
+    linkedin_results  = await _ddg_search(query_linkedin,   max_results=10)
+    await asyncio.sleep(1.0)
+    crunchbase_results = await _ddg_search(query_crunchbase, max_results=5)
 
     contacts: list[dict[str, Any]] = []
     seen_names: set[str] = set()
 
+    # ── Snippet relevance check (shared logic) ────────────────────────────────
+    # For short company names (≤4 chars) use word-boundary matching to prevent
+    # "lf1" from matching inside unrelated technical text or parameter names.
+    def _snippet_contains_company(text: str) -> bool:
+        t = text.lower()
+        if len(company_lower) <= 4:
+            return bool(re.search(r'\b' + re.escape(company_lower) + r'\b', t))
+        return company_lower in t
+
+    # ── General results ───────────────────────────────────────────────────────
+    # The quoted company name is in the query, so DDG should include it in
+    # snippets. Reject results where it doesn't appear (catches name collisions
+    # for common words — e.g. "here" as a company name).
     for item in general_results:
         text = f"{item.get('title', '')} {item.get('body', '')}"
-        for c in _extract_names_from_snippet(text):
+        if not _snippet_contains_company(text):
+            log.debug("web_search_contacts: snippet missing company name, skipping: %s", item.get("href", "")[:80])
+            continue
+        source_url = item.get("href", "")
+        for c in _extract_names_from_snippet(text, source_url=source_url):
             if c["name"] not in seen_names:
                 seen_names.add(c["name"])
                 contacts.append(c)
 
+    # ── LinkedIn results ──────────────────────────────────────────────────────
+    # LinkedIn snippets show the person's headline ("Co-Founder at Acme"),
+    # not a page body that repeats the company name — do NOT filter by company
+    # name here. The query already scopes results to the company via the quoted
+    # name; we trust the query rather than the snippet text.
     for item in linkedin_results:
-        c = _parse_linkedin_person(item)
+        c = _parse_linkedin_person(item, company_lower=company_lower)
         if c and c["name"] not in seen_names:
             seen_names.add(c["name"])
             contacts.append(c)
 
-    log.info("web_search_contacts: %d contacts for %r", len(contacts), safe_name)
+    # ── Crunchbase results ────────────────────────────────────────────────────
+    # Crunchbase organization snippets often include founder/CEO names inline.
+    # Apply the same company-name filter as general results — Crunchbase
+    # snippets reliably contain the company name since we searched for it.
+    for item in crunchbase_results:
+        text = f"{item.get('title', '')} {item.get('body', '')}"
+        if not _snippet_contains_company(text):
+            continue
+        source_url = item.get("href", "")
+        for c in _extract_names_from_snippet(text, source_url=source_url):
+            if c["name"] not in seen_names:
+                seen_names.add(c["name"])
+                contacts.append(c)
+
+    log.info("web_search_contacts: %d relevant contacts for %r", len(contacts), safe_name)
     return contacts
+
+
+# Domains that are unreliable as professional identity verification sources.
+# YouTube videos, Reddit threads, and social media posts sometimes mention a person's
+# name alongside a company name, but they don't confirm a professional relationship
+# the way LinkedIn, Crunchbase, a company website, or a news article would.
+_VERIFY_SKIP_DOMAINS: frozenset[str] = frozenset({
+    "youtube.com", "youtu.be",
+    "reddit.com", "twitter.com", "x.com",
+    "facebook.com", "instagram.com", "tiktok.com",
+    "pinterest.com", "tumblr.com", "quora.com",
+})
+
+
+async def verify_contact(
+    contact_name: str,
+    company_name: str,
+    original_source_url: str = "",
+) -> tuple[bool, str | None]:
+    """Stage 2 — cross-check a contact against an independent professional web source.
+
+    Searches DDG for '"ContactName" "CompanyName"' and returns (is_verified, url)
+    where url is the independent page that confirmed the association.
+
+    Rules:
+    - Must NOT be the original source URL (prevents a page from verifying itself)
+    - Must NOT be from an unreliable domain (YouTube, Reddit, social media)
+    - Both name and company must appear in the same snippet
+    """
+    safe_name    = contact_name.replace('"', "").strip()
+    safe_company = company_name.replace('"', "").strip()
+    if not safe_name or not safe_company:
+        return False, None
+
+    query = f'"{safe_name}" "{safe_company}"'
+    try:
+        results = await _ddg_search(query, max_results=8)
+    except Exception as exc:
+        log.warning("verify_contact DDG error for %r/%r: %s", safe_name, safe_company, exc)
+        return False, None
+
+    name_lower    = safe_name.lower()
+    company_lower = safe_company.lower()
+
+    for r in results:
+        url = r.get("href", "")
+
+        # Must be an independent source — skip if it's the same page we found them on
+        if original_source_url and url.rstrip("/") == original_source_url.rstrip("/"):
+            continue
+
+        # Skip unreliable domains — YouTube videos / Reddit posts are not professional
+        # identity verification, even when they mention both name and company
+        domain = _extract_domain(url) or ""
+        if domain in _VERIFY_SKIP_DOMAINS:
+            log.debug("verify_contact: skipping unreliable domain %s for %r", domain, safe_name)
+            continue
+
+        # Both name and company must appear in the same snippet
+        text = f"{r.get('title', '')} {r.get('body', '')}".lower()
+        if name_lower in text and company_lower in text:
+            log.debug(
+                "verify_contact: confirmed %r at %r via %s",
+                safe_name, safe_company, url,
+            )
+            return True, url
+
+    log.debug("verify_contact: no corroboration for %r at %r", safe_name, safe_company)
+    return False, None
+
+
+def _linkedin_title_matches_name(result_title: str, contact_name: str) -> bool:
+    """Return True if the DDG result title plausibly refers to this person.
+
+    LinkedIn page titles look like "First Last - Role at Company | LinkedIn".
+    We require that at least the last name (or first name if it's distinctive
+    enough — ≥4 chars) appears in the title.  This blocks DDG from returning
+    someone else's profile (e.g. Mohamed Belja when we searched Mauritz Andreae).
+    """
+    title_lower = result_title.lower()
+    name_words  = [w for w in contact_name.lower().split() if len(w) >= 3]
+    if not name_words:
+        return False
+    # Last name must match; if first name ≥4 chars, both must match
+    last  = name_words[-1]
+    first = name_words[0]
+    if last not in title_lower:
+        return False
+    if len(first) >= 4 and first not in title_lower:
+        return False
+    return True
+
+
+async def enrich_linkedin_url(contact_name: str, company_name: str) -> str | None:
+    """Stage 1.5 — find a LinkedIn profile URL for a contact discovered via web/Crunchbase.
+
+    Contacts scraped from Crunchbase snippets or general web results often have no
+    LinkedIn URL because we found them from a text snippet, not a LinkedIn search result.
+    This function does a targeted per-person search to fill that gap.
+
+    Two queries tried in order:
+      1. '"Name" "Company" site:linkedin.com/in'  — most precise; requires company in snippet
+      2. '"Name" site:linkedin.com/in'            — broader fallback for profiles where the
+                                                     company name isn't in the DDG-indexed headline
+
+    Both queries validate the result title to ensure the returned profile is actually
+    for this person (prevents DDG from returning an unrelated "People also viewed" profile).
+    """
+    safe_name    = contact_name.replace('"', "").strip()
+    safe_company = company_name.replace('"', "").strip()
+    if not safe_name:
+        return None
+
+    # Query 1: name + company — most targeted
+    q1 = f'"{safe_name}" "{safe_company}" site:linkedin.com/in'
+    results1 = await _ddg_search(q1, max_results=5)
+    for r in results1:
+        url   = r.get("href", "")
+        title = r.get("title", "")
+        if "linkedin.com/in/" not in url:
+            continue
+        if not _linkedin_title_matches_name(title, safe_name):
+            log.debug(
+                "enrich_linkedin_url: title mismatch for %r — got %r, skipping",
+                safe_name, title[:80],
+            )
+            continue
+        log.debug("enrich_linkedin_url: found %r → %s", safe_name, url[:80])
+        return url
+
+    await asyncio.sleep(1.0)
+
+    # Query 2: name only — catches profiles where company name isn't in DDG's indexed headline.
+    # Still requires a title match to prevent returning unrelated profiles.
+    q2 = f'"{safe_name}" site:linkedin.com/in'
+    results2 = await _ddg_search(q2, max_results=5)
+    for r in results2:
+        url   = r.get("href", "")
+        title = r.get("title", "")
+        if "linkedin.com/in/" not in url:
+            continue
+        if not _linkedin_title_matches_name(title, safe_name):
+            log.debug(
+                "enrich_linkedin_url: fallback title mismatch for %r — got %r, skipping",
+                safe_name, title[:80],
+            )
+            continue
+        log.debug("enrich_linkedin_url: fallback found %r → %s", safe_name, url[:80])
+        return url
+
+    log.debug("enrich_linkedin_url: no LinkedIn found for %r at %r", safe_name, safe_company)
+    return None
 
 
 async def apollo_search_contacts(company_name: str) -> list[dict[str, Any]]:

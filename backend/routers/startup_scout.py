@@ -1,4 +1,4 @@
-"""Startup Scout REST endpoints — company discovery + contact enrichment."""
+"""Startup Scout REST endpoints for company discovery and contact enrichment."""
 
 from __future__ import annotations
 
@@ -9,7 +9,13 @@ from fastapi import APIRouter, BackgroundTasks, HTTPException, Request
 from pydantic import BaseModel, field_validator
 
 from lib.redis_client import check_rate_limit
-from lib.startup_scout import apollo_search_contacts, search_startups, web_search_contacts
+from lib.startup_scout import (
+    apollo_search_contacts,
+    enrich_linkedin_url,
+    search_startups,
+    verify_contact,
+    web_search_contacts,
+)
 from lib.supabase_client import get_supabase, get_user_id
 from routers.startup_hunt import _ensure_profile_exists
 
@@ -18,13 +24,12 @@ router = APIRouter()
 
 RATE_LIMIT_SCOUT_SEARCH_PER_DAY = 20
 RATE_LIMIT_SCOUT_CRAWL_PER_DAY = 30
+MIN_VERIFIED_CONTACTS = 2
 
 # In-process cancel flags keyed by company_id.
 # Set to True by the /stop endpoint; _run_crawl checks between each contact save.
 _cancel_flags: dict[str, bool] = {}
 
-
-# ── Request models ───────────────────────────────────────────────────────────
 
 class ScoutSearchRequest(BaseModel):
     location: str
@@ -47,13 +52,11 @@ class SaveCompanyRequest(BaseModel):
 
     @field_validator("website")
     @classmethod
-    def validate_website(cls, v: str) -> str:
-        if v and not v.startswith(("http://", "https://")):
+    def validate_website(cls, value: str) -> str:
+        if value and not value.startswith(("http://", "https://")):
             raise ValueError("website must be an http or https URL")
-        return v
+        return value
 
-
-# ── Helpers ──────────────────────────────────────────────────────────────────
 
 async def _rate_check(user_id: str, action: str, limit: int) -> None:
     try:
@@ -82,34 +85,181 @@ async def _get_company_or_404(sb, company_id: str, user_id: str) -> dict:
     return row
 
 
-async def _save_contact(sb, company_id: str, user_id: str, c: dict) -> None:
+async def _save_contact(sb, company_id: str, user_id: str, contact: dict) -> None:
     row = {
         "company_id": company_id,
         "user_id": user_id,
-        "name": c.get("name"),
-        "title": c.get("title"),
-        "email": c.get("email"),
-        "linkedin_url": c.get("linkedin_url"),
-        "source": c.get("source"),
-        "confidence": float(c.get("confidence") or 0),
+        "name": contact.get("name"),
+        "title": contact.get("title"),
+        "email": contact.get("email"),
+        "linkedin_url": contact.get("linkedin_url"),
+        "source": contact.get("source"),
+        "source_url": contact.get("source_url") or None,
+        "confidence": float(contact.get("confidence") or 0),
     }
-    await asyncio.to_thread(
-        lambda: sb.table("startup_scout_contacts").insert(row).execute()
+    try:
+        await asyncio.to_thread(
+            lambda: sb.table("startup_scout_contacts").insert(row).execute()
+        )
+    except Exception:
+        # source_url / is_verified columns may not exist yet (migration not run).
+        # Retry with only the baseline columns so contacts are never lost.
+        baseline = {k: v for k, v in row.items() if k not in ("source_url",)}
+        await asyncio.to_thread(
+            lambda: sb.table("startup_scout_contacts").insert(baseline).execute()
+        )
+
+
+async def _load_saved_contacts(sb, company_id: str) -> list[dict]:
+    res = await asyncio.to_thread(
+        lambda: sb.table("startup_scout_contacts")
+        .select("*")
+        .eq("company_id", company_id)
+        .execute()
+    )
+    return res.data or []
+
+
+async def _enrich_missing_linkedin(sb, company_id: str, company_name: str) -> None:
+    res = await asyncio.to_thread(
+        lambda: sb.table("startup_scout_contacts")
+        .select("id, name, linkedin_url")
+        .eq("company_id", company_id)
+        .execute()
+    )
+    needs_linkedin = [
+        row for row in (res.data or [])
+        if not row.get("linkedin_url") and row.get("name")
+    ]
+    log.info(
+        "Stage 1.5: enriching LinkedIn for %d contacts without a URL",
+        len(needs_linkedin),
     )
 
+    for row in needs_linkedin:
+        if _cancel_flags.get(company_id):
+            break
+        await asyncio.sleep(1.5)
+        linkedin_url = await enrich_linkedin_url(row["name"], company_name)
+        if not linkedin_url:
+            continue
+        try:
+            await asyncio.to_thread(
+                lambda url=linkedin_url, rid=row["id"]: (
+                    sb.table("startup_scout_contacts")
+                    .update({"linkedin_url": url})
+                    .eq("id", rid)
+                    .execute()
+                )
+            )
+            log.info("Stage 1.5: linked %s -> %s", row["name"], linkedin_url[:80])
+        except Exception as enrich_exc:
+            log.warning(
+                "Stage 1.5 LinkedIn update failed for %s: %s",
+                row["name"], enrich_exc,
+            )
 
-# ── Background crawl task ────────────────────────────────────────────────────
+
+async def _verify_saved_contacts(sb, company_id: str, company_name: str) -> int:
+    saved_rows = await _load_saved_contacts(sb, company_id)
+    log.info("Stage 2: verifying %d contacts for %r", len(saved_rows), company_name)
+
+    for row in saved_rows:
+        if _cancel_flags.get(company_id):
+            break
+        contact_name = row.get("name") or ""
+        if not contact_name:
+            continue
+
+        await asyncio.sleep(1.5)
+        is_verified, verification_url = await verify_contact(
+            contact_name=contact_name,
+            company_name=company_name,
+            original_source_url=row.get("source_url") or "",
+        )
+
+        try:
+            await asyncio.to_thread(
+                lambda verified=is_verified, url=verification_url, rid=row["id"]: (
+                    sb.table("startup_scout_contacts")
+                    .update({"is_verified": verified, "verification_url": url})
+                    .eq("id", rid)
+                    .execute()
+                )
+            )
+        except Exception as verify_exc:
+            # Gracefully skip if column doesn't exist yet (pre-migration).
+            log.warning(
+                "Stage 2 update failed for contact %s (run migration?): %s",
+                row["id"], verify_exc,
+            )
+
+    refreshed_rows = await _load_saved_contacts(sb, company_id)
+    verified_count = sum(1 for row in refreshed_rows if row.get("is_verified") is True)
+    log.info("Stage 2: %d verified contacts for %r", verified_count, company_name)
+    return verified_count
+
+
+async def _supplement_with_apollo(
+    sb,
+    company_id: str,
+    user_id: str,
+    company_name: str,
+) -> int:
+    existing_rows = await _load_saved_contacts(sb, company_id)
+    seen_names = {
+        (row.get("name") or "").strip().lower()
+        for row in existing_rows
+        if (row.get("name") or "").strip()
+    }
+    seen_linkedin_urls = {
+        (row.get("linkedin_url") or "").strip().rstrip("/").lower()
+        for row in existing_rows
+        if (row.get("linkedin_url") or "").strip()
+    }
+    seen_emails = {
+        (row.get("email") or "").strip().lower()
+        for row in existing_rows
+        if (row.get("email") or "").strip()
+    }
+
+    apollo_contacts = await apollo_search_contacts(company_name)
+    imported = 0
+    for contact in apollo_contacts:
+        if _cancel_flags.get(company_id):
+            break
+
+        name_key = (contact.get("name") or "").strip().lower()
+        linkedin_key = (contact.get("linkedin_url") or "").strip().rstrip("/").lower()
+        email_key = (contact.get("email") or "").strip().lower()
+
+        is_duplicate = (
+            (name_key and name_key in seen_names)
+            or (linkedin_key and linkedin_key in seen_linkedin_urls)
+            or (email_key and email_key in seen_emails)
+        )
+        if is_duplicate:
+            continue
+
+        await _save_contact(sb, company_id, user_id, contact)
+        imported += 1
+
+        if name_key:
+            seen_names.add(name_key)
+        if linkedin_key:
+            seen_linkedin_urls.add(linkedin_key)
+        if email_key:
+            seen_emails.add(email_key)
+
+    log.info("Apollo supplement: imported %d new contacts for %r", imported, company_name)
+    return imported
+
 
 async def _run_crawl(company_id: str, user_id: str, company_name: str) -> None:
-    """Crawl contacts for a company, saving each one immediately.
-
-    Checks _cancel_flags[company_id] between each save so the /stop endpoint
-    can halt the crawl mid-way while preserving contacts already written.
-    """
+    """Crawl contacts for a company, saving each one immediately."""
     sb = get_supabase()
     _cancel_flags.pop(company_id, None)
 
-    # Mark as crawling
     await asyncio.to_thread(
         lambda: sb.table("startup_scout_companies")
         .update({"crawl_status": "crawling"})
@@ -118,7 +268,6 @@ async def _run_crawl(company_id: str, user_id: str, company_name: str) -> None:
         .execute()
     )
 
-    # Delete any contacts from a previous crawl (fresh start)
     await asyncio.to_thread(
         lambda: sb.table("startup_scout_contacts")
         .delete()
@@ -130,22 +279,42 @@ async def _run_crawl(company_id: str, user_id: str, company_name: str) -> None:
     crawl_errored = False
 
     try:
-        # Phase 1: web search (DuckDuckGo/Bing, no API key)
         web_contacts = await web_search_contacts(company_name)
-        for c in web_contacts:
+        for contact in web_contacts:
             if _cancel_flags.get(company_id):
                 break
-            await _save_contact(sb, company_id, user_id, c)
+            await _save_contact(sb, company_id, user_id, contact)
             contacts_saved += 1
 
-        # Phase 2: Apollo fallback — only if web found nothing and not cancelled
         if contacts_saved == 0 and not _cancel_flags.get(company_id):
             apollo_contacts = await apollo_search_contacts(company_name)
-            for c in apollo_contacts:
+            for contact in apollo_contacts:
                 if _cancel_flags.get(company_id):
                     break
-                await _save_contact(sb, company_id, user_id, c)
+                await _save_contact(sb, company_id, user_id, contact)
                 contacts_saved += 1
+
+        verified_contacts = 0
+        if contacts_saved > 0 and not _cancel_flags.get(company_id):
+            await _enrich_missing_linkedin(sb, company_id, company_name)
+            verified_contacts = await _verify_saved_contacts(sb, company_id, company_name)
+
+        if (
+            contacts_saved > 0
+            and verified_contacts < MIN_VERIFIED_CONTACTS
+            and not _cancel_flags.get(company_id)
+        ):
+            log.info(
+                "Apollo supplement: only %d verified contacts for %r, fetching Apollo",
+                verified_contacts, company_name,
+            )
+            imported_count = await _supplement_with_apollo(
+                sb, company_id, user_id, company_name
+            )
+            contacts_saved += imported_count
+            if imported_count > 0 and not _cancel_flags.get(company_id):
+                await _enrich_missing_linkedin(sb, company_id, company_name)
+                await _verify_saved_contacts(sb, company_id, company_name)
 
     except Exception as exc:
         log.warning("Crawl error for company %s: %s", company_name, exc)
@@ -169,8 +338,6 @@ async def _run_crawl(company_id: str, user_id: str, company_name: str) -> None:
         .execute()
     )
 
-
-# ── Endpoints ────────────────────────────────────────────────────────────────
 
 @router.post("/search")
 async def scout_search(req: ScoutSearchRequest, request: Request):
@@ -249,7 +416,6 @@ async def get_company(company_id: str, request: Request):
 async def delete_company(company_id: str, request: Request):
     """Delete a saved company (cascades to contacts)."""
     user_id = get_user_id(request)
-    # Cancel any running crawl first
     _cancel_flags[company_id] = True
     sb = get_supabase()
     res = await asyncio.to_thread(
@@ -286,11 +452,7 @@ async def start_crawl(
 
 @router.post("/companies/{company_id}/stop")
 async def stop_crawl(company_id: str, request: Request):
-    """Signal a running crawl to stop after its current contact.
-
-    Contacts saved before the stop signal are preserved.
-    Status will be set to 'enriched' or 'partial' by _run_crawl when it exits.
-    """
+    """Signal a running crawl to stop after its current contact."""
     user_id = get_user_id(request)
     sb = get_supabase()
     company = await _get_company_or_404(sb, company_id, user_id)
