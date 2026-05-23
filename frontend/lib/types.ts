@@ -423,7 +423,10 @@ export interface ScoutContact {
   title: string | null
   email: string | null
   linkedin_url: string | null
-  source: 'google' | 'apollo' | string
+  source: 'google' | 'apollo' | 'web_scrape' | string
+  source_url: string | null        // URL where this contact was found — shown as citation
+  is_verified: boolean             // true when Stage 2 cross-check confirmed the person
+  verification_url: string | null  // independent source that confirmed the association
   confidence: number | null
   created_at: string
 }
