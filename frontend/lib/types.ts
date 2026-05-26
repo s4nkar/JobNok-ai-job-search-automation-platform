@@ -394,6 +394,43 @@ export interface UserProfile {
   cv_email: string | null
 }
 
+// ── Startup Scout ────────────────────────────────────────────────────────────
+
+export type ScoutCrawlStatus = 'pending' | 'crawling' | 'enriched' | 'partial' | 'failed'
+
+export interface ScoutCompany {
+  id: string
+  user_id: string
+  name: string
+  description: string | null
+  what_they_do: string | null
+  funding_stage: string | null
+  size_range: string | null
+  location: string | null
+  website: string | null
+  linkedin_url: string | null
+  source: string
+  crawl_status: ScoutCrawlStatus
+  created_at: string
+  updated_at: string
+}
+
+export interface ScoutContact {
+  id: string
+  company_id: string
+  user_id: string
+  name: string | null
+  title: string | null
+  email: string | null
+  linkedin_url: string | null
+  source: 'google' | 'apollo' | 'web_scrape' | string
+  source_url: string | null        // URL where this contact was found — shown as citation
+  is_verified: boolean             // true when Stage 2 cross-check confirmed the person
+  verification_url: string | null  // independent source that confirmed the association
+  confidence: number | null
+  created_at: string
+}
+
 export interface StartupHuntResponse {
   results: StartupHuntResult[]
   overflow_results: StartupHuntResult[]
