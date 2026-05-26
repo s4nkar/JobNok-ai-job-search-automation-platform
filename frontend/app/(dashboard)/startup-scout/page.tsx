@@ -80,6 +80,10 @@ const SOURCE_PILL: Record<string, string> = {
   Seedtable: 'bg-rose-50   text-rose-600   ring-rose-200',
   'Y Combinator': 'bg-amber-50  text-amber-600  ring-amber-200',
   Tracxn: 'bg-cyan-50   text-cyan-600   ring-cyan-200',
+  'Crunchbase API': 'bg-blue-50   text-blue-700   ring-blue-300',
+  TheirStack: 'bg-indigo-50 text-indigo-600 ring-indigo-200',
+  Startupdetector: 'bg-lime-50   text-lime-700   ring-lime-200',
+  F6S: 'bg-fuchsia-50 text-fuchsia-600 ring-fuchsia-200',
 }
 
 const SOURCE_DOT: Record<string, string> = {
@@ -90,6 +94,10 @@ const SOURCE_DOT: Record<string, string> = {
   Seedtable: 'bg-rose-500',
   'Y Combinator': 'bg-amber-500',
   Tracxn: 'bg-cyan-500',
+  'Crunchbase API': 'bg-blue-600',
+  TheirStack: 'bg-indigo-500',
+  Startupdetector: 'bg-lime-600',
+  F6S: 'bg-fuchsia-500',
 }
 
 const STAGE_PILL: Record<string, string> = {

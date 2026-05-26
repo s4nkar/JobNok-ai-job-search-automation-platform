@@ -112,6 +112,10 @@ class Settings(BaseSettings):
     startup_hunt_contact_enrichment_provider: str = ""
     apollo_api_key: str = ""
     people_data_labs_api_key: str = ""
+    # Crunchbase Basic API (free tier: 200 searches/month).
+    # Used by Startup Scout Phase A for structured EU company discovery.
+    # Get from: https://www.crunchbase.com/api
+    crunchbase_api_key: str = ""
 
     # ── Bulk Email ───────────────────────────────────────────────────────────
     # Minimum delay between individual emails to avoid spam flags (seconds)

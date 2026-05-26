@@ -206,20 +206,33 @@ _NON_STARTUP_DESC_RE = re.compile(
     re.I,
 )
 # Titles that clearly identify a non-startup (accelerator, academy, fund, etc.)
+#
+# Design principle: prefer false-negatives (letting a VC through) over
+# false-positives (blocking a real startup).  Startups named "Greentech Ventures"
+# or "Flagship Capital" must not be silently dropped — the description-level
+# filters (_NON_STARTUP_DESC_RE) will catch actual VCs through their text.
 _NON_STARTUP_TITLE_RE = re.compile(
-    r"\b(bootcamp|startup\s+academy|founders?\s+fund\b|innovation\s+agency"
+    r"\b(bootcamp|startup\s+academy|innovation\s+agency"
     r"|coworking|maker\s*space|ecosystem\b|incubator\b|accelerator\b"
     r"|startup\s+map\b|startup\s+group\b|startup\s+hub\b"
-    r"|research\s+cent(?:er|re)\b"                            # e.g. "Research Center for …"
+    r"|research\s+cent(?:er|re)\b"                            # "Research Center for …"
     r"|cent(?:er|re)\s+for\s+(?:artificial\s+intelligence"   # "Center for Artificial Intelligence"
     r"|machine\s+learning|robotics|data\s+science|autonomous)"
     r"|innovation\s+park\b"                                   # "Innovation Park AI"
     r"|\bforschungszentrum\b"                                 # German "research centre"
     r"|\binstitut(?:e|)\s+f[oü]r\b"                          # "Institute for / Institut für"
     r"|\bartificial\s+intelligence\s+institute\b"             # "China Germany AI Institute"
-    r"|\bgründerfonds\b|\bfonds\b"                            # German "Fonds" = fund (HTGF)
-    # VC / investment names: title ENDS with these fund-marker words
-    r"|\s+(?:capital|ventures?|fund|investors?)\s*$)",        # "TVM Capital", "Alpha Intelligence Capital"
+    # German fund types — only unambiguous fund-specific compound terms,
+    # NOT bare "fonds" which appears in many legitimate German startup names.
+    r"|\bgründerfonds\b|\bstaatsfonds\b|\binvestmentfonds\b"
+    # Explicit VC/fund phrases that never appear in startup names
+    r"|\bfounders?\s+fund\b"                                  # "Founders Fund" (specific VC)
+    r"|\bventure\s+capital\s+(?:fund|firm|group|partners?)\b" # "XYZ Venture Capital Fund"
+    r"|\bgrowth\s+(?:equity|capital)\s+(?:fund|firm|partners?)\b"
+    # Bare acronym + fund-category — blocks "TVM Capital", "HV Ventures", "EQT AB"
+    # but NOT "Greentech Ventures" (descriptive prefix) or "Cherry Ventures" (name).
+    # Pattern: 1–5 uppercase letters (abbreviation only) followed by fund-type word.
+    r"|^[A-Z]{1,5}\s+(?:Capital|Ventures?|Fund|Partners?)\s*$",
     re.I,
 )
 # Description patterns that identify non-startups not caught by the title regex
@@ -240,6 +253,93 @@ _GEO_NAMES: frozenset[str] = frozenset({
 })
 
 MAX_PLATFORMS = 8  # kept for _select_platforms (used by future features); not used in search_startups
+
+# ── API source constants ──────────────────────────────────────────────────────
+
+CRUNCHBASE_API_BASE = "https://api.crunchbase.com/api/v4"
+
+# Crunchbase API v4 funding-stage identifiers → human-readable label.
+# Embedded into the synthesised body string so _detect_funding_stage can parse it.
+_CB_API_STAGE_MAP: dict[str, str] = {
+    "angel":               "Angel",
+    "pre_seed":            "Pre-Seed",
+    "seed":                "Seed",
+    "early_stage_venture": "Series A",   # CB uses this for Series A
+    "late_stage_venture":  "Series B",   # CB uses this for Series B+
+    "series_a":            "Series A",
+    "series_b":            "Series B",
+    "series_c":            "Series C",
+    "series_d":            "Series D",
+    "series_e":            "Series E",
+    "ipo":                 "IPO",
+}
+
+# Crunchbase num_employees_enum values → human-readable band for _detect_employee_range.
+_CB_API_EMPLOYEE_MAP: dict[str, str] = {
+    "c_00001_00010": "1-10",
+    "c_00011_00050": "11-50",
+    "c_00051_00100": "51-100",
+    "c_00101_00250": "101-250",
+    "c_00251_00500": "251-500",
+    "c_00501_01000": "501-1000",
+    "c_01001_05000": "1001-5000",
+    "c_05001_10000": "5001-10000",
+}
+
+# Our funding-stage values → TheirStack API stage identifiers.
+_TS_STAGE_MAP: dict[str, str] = {
+    "pre-seed": "pre_seed",
+    "seed":     "seed",
+    "series-a": "series_a",
+    "series-b": "series_b",
+    "series-c": "series_c",
+}
+
+# Location keyword → ISO-2 country codes for TheirStack company_country_code_or filter.
+# Keys are lowercase; values are lists so one keyword can expand to multiple countries
+# (e.g. "dach" → DE + AT + CH, "europe" → all EU member states).
+_LOCATION_TO_COUNTRY_CODES: dict[str, list[str]] = {
+    # ── DACH ─────────────────────────────────────────────────────────────────
+    "germany": ["DE"],     "deutschland": ["DE"],
+    "berlin":  ["DE"],     "munich":      ["DE"],   "münchen":    ["DE"],
+    "hamburg": ["DE"],     "frankfurt":   ["DE"],   "cologne":    ["DE"],
+    "köln":    ["DE"],     "düsseldorf":  ["DE"],   "stuttgart":  ["DE"],
+    "dach":    ["DE", "AT", "CH"],
+    "austria": ["AT"],     "vienna":      ["AT"],   "wien":       ["AT"],
+    "switzerland": ["CH"], "zurich":      ["CH"],   "zürich":     ["CH"],
+    # ── Western Europe ───────────────────────────────────────────────────────
+    "france":      ["FR"], "paris":       ["FR"],
+    "netherlands": ["NL"], "amsterdam":   ["NL"],
+    "belgium":     ["BE"], "brussels":    ["BE"],
+    "ireland":     ["IE"], "dublin":      ["IE"],
+    # ── Northern Europe ──────────────────────────────────────────────────────
+    "sweden":    ["SE"],   "stockholm":   ["SE"],
+    "denmark":   ["DK"],   "copenhagen":  ["DK"],
+    "finland":   ["FI"],   "helsinki":    ["FI"],
+    "norway":    ["NO"],   "oslo":        ["NO"],
+    # ── Southern Europe ──────────────────────────────────────────────────────
+    "spain":    ["ES"],    "madrid":      ["ES"],   "barcelona":  ["ES"],
+    "portugal": ["PT"],    "lisbon":      ["PT"],
+    "italy":    ["IT"],    "milan":       ["IT"],   "rome":       ["IT"],
+    # ── Eastern Europe ───────────────────────────────────────────────────────
+    "poland":  ["PL"],     "warsaw":      ["PL"],   "krakow":     ["PL"],
+    "czech":   ["CZ"],     "prague":      ["CZ"],
+    # ── UK ───────────────────────────────────────────────────────────────────
+    "uk":      ["GB"],  "united kingdom": ["GB"],  "great britain": ["GB"],
+    "london":  ["GB"],     "manchester":  ["GB"],   "edinburgh":  ["GB"],
+    # ── Europe broad (all major EU + EEA) ────────────────────────────────────
+    "europe": ["DE", "FR", "NL", "SE", "PL", "AT", "CH", "ES", "PT",
+               "IE", "BE", "DK", "FI", "NO", "IT", "GB", "CZ", "RO"],
+    # ── United States ────────────────────────────────────────────────────────
+    "us":            ["US"],  "usa":          ["US"],  "united states": ["US"],
+    "san francisco": ["US"],  "sf":           ["US"],  "new york":      ["US"],
+    "nyc":           ["US"],  "boston":       ["US"],  "seattle":       ["US"],
+    "austin":        ["US"],  "los angeles":  ["US"],
+    # ── Asia ─────────────────────────────────────────────────────────────────
+    "india":     ["IN"],   "bangalore":   ["IN"],   "bengaluru":  ["IN"],
+    "mumbai":    ["IN"],   "delhi":       ["IN"],   "hyderabad":  ["IN"],
+    "singapore": ["SG"],
+}
 
 
 # ── HTML helpers ──────────────────────────────────────────────────────────────
@@ -288,6 +388,238 @@ async def _ddg_search(query: str, max_results: int = 15) -> list[dict[str, str]]
             results.append({"href": href, "title": title, "body": body})
 
     log.debug("DDG: %d results for %r", len(results), query[:60])
+    return results
+
+
+# ── Location → country code helper ───────────────────────────────────────────
+
+def _location_to_country_codes(location: str) -> list[str]:
+    """Map a free-text location to ISO-2 country code(s) for TheirStack filtering.
+
+    Tries an exact lowercase match first, then a substring scan (minimum 4-char
+    key length to avoid false matches on short abbreviations like "de" or "nl").
+    Returns [] for unknown locations so the API call is not filtered by country.
+    """
+    loc = location.strip().lower()
+    if loc in _LOCATION_TO_COUNTRY_CODES:
+        return list(_LOCATION_TO_COUNTRY_CODES[loc])
+    for key, codes in _LOCATION_TO_COUNTRY_CODES.items():
+        if len(key) >= 4 and key in loc:
+            return list(codes)
+    return []
+
+
+# ── Crunchbase REST API v4 ────────────────────────────────────────────────────
+
+async def _crunchbase_api_search(
+    location: str,
+    industry: str,
+    funding_stages: list[str],
+    limit: int = 25,
+) -> list[dict[str, str]]:
+    """Search Crunchbase REST API v4 for company profiles.
+
+    Requires CRUNCHBASE_API_KEY (Basic free tier: 200 searches/month).
+    Returns results as {href, title, body} dicts — same format as _ddg_search —
+    so they feed directly into _parse_company / _ingest without extra plumbing.
+
+    The Crunchbase API is far more reliable than DDG site: queries for EU cities:
+    it has full location awareness and structured funding-stage filters.
+    """
+    if not settings.crunchbase_api_key:
+        return []
+
+    # Build free-text search query: "Berlin AI seed startup"
+    _STAGE_LABEL: dict[str, str] = {
+        "pre-seed": "pre-seed", "seed": "seed",
+        "series-a": "series A", "series-b": "series B", "series-c": "series C",
+    }
+    q_parts = [p for p in [location, industry] if p]
+    if funding_stages:
+        q_parts.append(" ".join(_STAGE_LABEL.get(s, s) for s in funding_stages[:2]))
+    q_parts.append("startup")
+    q_text = " ".join(q_parts)
+
+    # Funding-stage predicates (Crunchbase v4 identifiers)
+    _STAGE_TO_CB: dict[str, str] = {
+        "pre-seed": "pre_seed", "seed": "seed",
+        "series-a": "series_a", "series-b": "series_b", "series-c": "series_c",
+    }
+    cb_stages = [_STAGE_TO_CB[s] for s in funding_stages if s in _STAGE_TO_CB]
+
+    predicates: list[dict] = [
+        {"type": "predicate", "field_id": "facet_ids",
+         "operator_id": "includes", "values": ["company"]},
+    ]
+    if cb_stages:
+        predicates.append({
+            "type": "predicate", "field_id": "funding_stage",
+            "operator_id": "includes", "values": cb_stages,
+        })
+
+    payload = {
+        "field_ids": [
+            "identifier", "short_description",
+            "location_identifiers", "funding_stage",
+            "num_employees_enum", "website_url",
+        ],
+        "query": predicates,
+        "limit": min(limit, 25),  # Crunchbase Basic API max per request
+    }
+
+    try:
+        async with httpx.AsyncClient(timeout=15.0) as client:
+            resp = await client.post(
+                f"{CRUNCHBASE_API_BASE}/searches/organizations",
+                params={"user_key": settings.crunchbase_api_key, "q": q_text},
+                json=payload,
+            )
+            resp.raise_for_status()
+            data = resp.json()
+    except Exception as exc:
+        log.warning("Crunchbase API error: %s: %s", type(exc).__name__, exc)
+        return []
+
+    entities = data.get("entities") or []
+    loc_lower = location.strip().lower()
+    results: list[dict[str, str]] = []
+
+    for entity in entities:
+        props = entity.get("properties") or {}
+        identifier = props.get("identifier") or {}
+        name = identifier.get("value") or ""
+        slug = identifier.get("permalink") or ""
+        if not name or not slug:
+            continue
+
+        href = f"https://www.crunchbase.com/organization/{slug}"
+
+        # Location post-filter: skip if the API returned a company clearly outside
+        # the requested region.  We only filter when the response contains location
+        # data AND it clearly doesn't overlap with the user's query.
+        loc_ids: list[dict] = props.get("location_identifiers") or []
+        loc_text = " ".join(
+            (li.get("value") or "") for li in loc_ids if isinstance(li, dict)
+        ).lower()
+        if loc_text and loc_lower and len(loc_lower) > 3:
+            # Accept if any word from user's location appears in CB's location text
+            user_words = [w for w in loc_lower.split() if len(w) >= 4]
+            if user_words and not any(w in loc_text for w in user_words):
+                log.debug("CB API location filter: skipping %r (loc_text=%r)", name, loc_text[:60])
+                continue
+
+        # Build body in a format _detect_funding_stage / _detect_employee_range can parse.
+        stage_raw   = (props.get("funding_stage") or "").lower()
+        stage_human = _CB_API_STAGE_MAP.get(stage_raw, "")
+        size_raw    = (props.get("num_employees_enum") or "").lower()
+        size_human  = _CB_API_EMPLOYEE_MAP.get(size_raw, "")
+        desc        = (props.get("short_description") or "").strip()
+        body = " ".join(p for p in [stage_human, loc_text, size_human, desc] if p)
+
+        results.append({"href": href, "title": name, "body": body})
+
+    log.info("Crunchbase API: %d results for q=%r", len(results), q_text[:60])
+    return results
+
+
+# ── TheirStack company search ─────────────────────────────────────────────────
+
+async def _theirstack_company_search(
+    location: str,
+    funding_stages: list[str],
+    industry: str = "",
+    limit: int = 25,
+) -> list[dict[str, str]]:
+    """Search TheirStack company database for EU/global startups.
+
+    Requires THEIRSTACK_API_KEY (already in config from startup_hunt).
+    Uses POST /v1/companies/search — separate from the jobs search used by
+    startup_hunt.  Filters by country code derived from the location string.
+
+    Returns results as {href, title, body} dicts for _parse_company / _ingest.
+    """
+    if not settings.theirstack_api_key:
+        return []
+
+    country_codes = _location_to_country_codes(location)
+    ts_stages     = [_TS_STAGE_MAP[s] for s in funding_stages if s in _TS_STAGE_MAP]
+
+    request_body: dict[str, Any] = {
+        "limit": min(limit, 25),
+        "page":  0,
+        # Prefer companies with recent funding activity
+        "order_by": [{"desc": True, "field": "total_funding"}],
+        # Cap at 1000 employees — hard startup filter
+        "max_employee_count_or_null": 1000,
+    }
+    if country_codes:
+        request_body["company_country_code_or"] = country_codes
+    if ts_stages:
+        request_body["company_funding_stage_or"] = ts_stages
+    if industry:
+        # TheirStack supports free-text description pattern matching
+        request_body["company_description_pattern_and"] = [industry]
+
+    try:
+        base = settings.theirstack_base_url.rstrip("/")
+        async with httpx.AsyncClient(timeout=15.0) as client:
+            resp = await client.post(
+                f"{base}/v1/companies/search",
+                headers={
+                    "Authorization": f"Bearer {settings.theirstack_api_key}",
+                    "Content-Type": "application/json",
+                },
+                json=request_body,
+            )
+            resp.raise_for_status()
+            data = resp.json()
+    except Exception as exc:
+        log.warning("TheirStack company search error: %s: %s", type(exc).__name__, exc)
+        return []
+
+    items = (
+        data if isinstance(data, list)
+        else data.get("data") or data.get("companies") or data.get("results") or []
+    )
+
+    results: list[dict[str, str]] = []
+    for item in items:
+        name    = (item.get("name") or "").strip()
+        website = (item.get("website") or item.get("domain") or "").strip()
+        if not name or not website:
+            continue
+        if not website.startswith("http"):
+            website = f"https://{website}"
+
+        # Build body: stage + location + size + description for downstream parsers
+        stage_raw   = (item.get("funding_stage") or "").lower()
+        stage_human = _CB_API_STAGE_MAP.get(stage_raw, "")
+
+        employees   = int(item.get("number_of_employees") or 0)
+        if   employees <=  10: size_human = "1-10"
+        elif employees <=  50: size_human = "11-50"
+        elif employees <= 100: size_human = "51-100"
+        elif employees <= 250: size_human = "101-250"
+        elif employees <= 500: size_human = "251-500"
+        else:                  size_human = ""
+
+        city    = (item.get("hq_city") or item.get("city") or "").strip()
+        country = (item.get("hq_country") or item.get("country") or "").strip()
+        loc_str = ", ".join(p for p in [city, country] if p)
+        desc    = (
+            item.get("short_description")
+            or item.get("description")
+            or item.get("linkedin_description")
+            or ""
+        ).strip()
+
+        body = " ".join(p for p in [stage_human, loc_str, size_human, desc[:300]] if p)
+        results.append({"href": website, "title": name, "body": body})
+
+    log.info(
+        "TheirStack company search: %d results for location=%r stages=%r",
+        len(results), location, funding_stages,
+    )
     return results
 
 
@@ -620,13 +952,17 @@ def _parse_company(item: dict[str, str], source_platform: str = "web") -> dict[s
     if _LISTING_TITLE_RE.search(title):
         return None
 
-    # ── Extract metadata from RAW snippet BEFORE any cleaning ────────────────
-    # Crunchbase snippets embed stage and employee-band in context-rich sections
-    # (e.g. "Lists Featuring This Company … Germany Seed Stage Companies With
-    # Fewer Than 100 Employees") that we are about to strip. Capturing here ensures
-    # we don't lose that signal.
-    raw_stage = _detect_funding_stage(body)
-    raw_size  = _detect_employee_range(body)
+    # ── Extract metadata from RAW snippet ────────────────────────────────────
+    # raw_size: employee-band only appears inside "Lists Featuring This Company"
+    # sections which we are about to strip — must be read BEFORE stripping.
+    #
+    # raw_stage: intentionally deferred until AFTER the "Lists Featuring This
+    # Company" strip (step 3 below).  That section contains stage labels for the
+    # *list* (e.g. "Germany Series A Companies With Fewer Than 100 Employees"),
+    # not for the company itself.  Reading stage before that strip causes valid
+    # Seed companies to be mis-classified as Series A and then post-filtered out.
+    raw_size = _detect_employee_range(body)
+    # raw_stage assigned after step 3 — see below.
 
     # ── Strip Wellfound generic "careers" boilerplate — contains no company info ─
     body = re.sub(
@@ -651,6 +987,12 @@ def _parse_company(item: dict[str, str], source_platform: str = "web") -> dict[s
     # 3. Strip "Lists Featuring This Company. Germany Seed Stage Companies…"
     #    — Crunchbase sidebar/related-lists text indexed by DDG instead of the desc.
     body = re.sub(r"\s*Lists Featuring This Company\b.*$", "", body, flags=re.I | re.DOTALL).strip()
+
+    # ── Detect funding stage AFTER step 3 ────────────────────────────────────
+    # Stage is now detected from the cleaned body (without "Lists Featuring" noise)
+    # so that list-section stage labels (e.g. "Germany Series A Companies") don't
+    # incorrectly classify a Seed company as Series A and trigger the post-filter.
+    raw_stage = _detect_funding_stage(body)
 
     # 4. Strip Crunchbase metadata header.
     #
@@ -777,18 +1119,24 @@ async def search_startups(
     size_range: str = "",
     limit: int = 50,
 ) -> dict[str, Any]:
-    """Phase A — discover startups via targeted DDG site: queries.
+    """Phase A — discover startups via structured APIs + targeted DDG site: queries.
 
-    Only queries large directories that DDG reliably indexes (Crunchbase, Dealroom,
-    Wellfound, YC).  Multiple query variants per directory maximise yield.
-    3-second gaps between queries keeps us under DDG's soft rate limit.
+    Execution order (EU/Germany-first strategy):
+      1. Crunchbase REST API v4  (if CRUNCHBASE_API_KEY set) ─┐ asyncio.gather
+      2. TheirStack company API  (if THEIRSTACK_API_KEY set)  ┘ no DDG rate risk
+      3. EU-specific DDG queries for germanyy.ai, seedtable.com, startupdetector.de
+      4. Global DDG fallback (Crunchbase/Wellfound/Dealroom site: queries)
+         — skipped for whichever sources were already covered by APIs above.
+
+    DDG Crunchbase queries are dropped when CRUNCHBASE_API_KEY is set (redundant
+    and noisier than the API).  Similarly Wellfound/Dealroom DDG is skipped when
+    TheirStack is configured.
 
     Returns a dict with keys:
         companies  — list of company dicts
         meta       — citation / stats dict for the frontend summary card
     """
     limit = max(10, min(limit, 200))  # clamp: 10–200
-    # Use up to 3 stages in the query string; DDG handles "OR" well up to 3 terms
     stage_label = " OR ".join(funding_stages[:3]) if funding_stages else ""
     ind = industry.strip() or "tech"
     loc = location.strip()
@@ -810,7 +1158,6 @@ async def search_startups(
 
     seen: set[str] = set()
     companies: list[dict[str, Any]] = []
-    # Track how many companies came from each source label
     source_counts: dict[str, int] = {}
     queries_run: int = 0
 
@@ -826,19 +1173,15 @@ async def search_startups(
                 continue
             seen.add(url_key)
             seen.add(name_key)
-            # Pop pre-extracted metadata (must not appear in the API response).
+            # Pop internal metadata fields (must not appear in the API response)
             raw_stage_pre = c.pop("_raw_stage", "")
             raw_size_pre  = c.pop("_raw_size",  "")
 
-            # funding_stage: prefer what was detected in the raw snippet (before stripping
-            # stripped context-rich sections like "Lists Featuring This Company…"); fall
-            # back to re-detecting from the cleaned description.
             detected = raw_stage_pre or _detect_funding_stage(c.get("description", ""))
             c["funding_stage"] = detected
 
-            # Stage post-filter: if we detected a stage AND it doesn't match any of the
-            # requested stages, skip this company. This prevents Series A/B/C companies
-            # from leaking through when the user only wants Seed/Pre-Seed results.
+            # Stage post-filter: if a stage was detected AND it doesn't match any of
+            # the requested stages, skip this company.
             if detected and funding_stages:
                 detected_norm = _canonical_stage(detected)
                 requested_norms = {_canonical_stage(s) for s in funding_stages}
@@ -849,29 +1192,85 @@ async def search_startups(
                     )
                     continue
 
-            # Auto-detect employee range from the raw snippet.
-            # If the user specified a size_range filter, honour that value instead.
             detected_size = (raw_size_pre or _detect_employee_range(c.get("description", ""))) if not size_range else ""
             c["location"] = loc
             c["size_range"] = detected_size or size_range
             companies.append(c)
             source_counts[source] = source_counts.get(source, 0) + 1
 
-    # ── Build query list ──────────────────────────────────────────────────────────
-    # Crunchbase is the most reliably indexed directory.
-    # IMPORTANT: do NOT quote location/industry — quotes kill DDG Crunchbase results.
-    queries: list[tuple[str, str]] = [
-        (f'site:crunchbase.com/organization {loc} {ind}', "Crunchbase"),
-        (f'site:crunchbase.com/organization {loc} {ind} startup {stage_label}', "Crunchbase"),
-        (f'site:crunchbase.com/organization {loc} artificial intelligence', "Crunchbase"),
-        (f'site:crunchbase.com/organization {loc} {ind} founded team', "Crunchbase"),
-        (f'site:wellfound.com/company {loc} {ind}', "Wellfound"),
-        (f'site:dealroom.co/companies {loc} {ind} startup', "Dealroom"),
-    ]
+    # ── Phase 1: structured API sources (parallel, no DDG rate-limit risk) ───────
+    api_tasks:  list[Any] = []
+    api_labels: list[str] = []
+
+    if settings.crunchbase_api_key:
+        api_tasks.append(
+            _crunchbase_api_search(loc, ind, funding_stages, limit=min(25, limit))
+        )
+        api_labels.append("Crunchbase API")
+
+    if settings.theirstack_api_key:
+        api_tasks.append(
+            _theirstack_company_search(loc, funding_stages, ind, limit=min(25, limit))
+        )
+        api_labels.append("TheirStack")
+
+    if api_tasks:
+        raw_api = await asyncio.gather(*api_tasks, return_exceptions=True)
+        for raw, label in zip(raw_api, api_labels):
+            if isinstance(raw, Exception):
+                log.warning("API source %s failed: %s: %s", label, type(raw).__name__, raw)
+            else:
+                _ingest(raw, label)
+                log.info("After %s: %d companies total", label, len(companies))
+
+    # Early exit if APIs alone satisfied the limit
+    if len(companies) >= limit:
+        final = companies[:limit]
+        log.info("search_startups: limit reached from API sources — %d companies", len(final))
+        return {
+            "companies": final,
+            "meta": {
+                "total": len(final), "limit": limit, "queries_run": 0,
+                "sources": source_counts, "location": loc,
+                "industry": industry.strip() or None, "funding_stages": funding_stages,
+            },
+        }
+
+    # ── Phase 2: DDG site: queries (supplement up to limit) ──────────────────────
+    # Skip DDG Crunchbase queries when the Crunchbase API is configured — they are
+    # strictly noisier (non-deterministic DDG indexing) than the API results.
+    # Skip broad Wellfound/Dealroom DDG when TheirStack covers the same universe.
+    use_cb_ddg     = not settings.crunchbase_api_key
+    use_broad_ddg  = not settings.theirstack_api_key
+
+    # IMPORTANT: do NOT quote location/industry in Crunchbase DDG queries —
+    # quoting kills DDG's Crunchbase site: results (known DDG quirk).
+    # For other EU directories (Seedtable, Dealroom) quoting the city name helps
+    # DDG understand it as a location filter, not a keyword bag.
+    queries: list[tuple[str, str]] = []
+
+    # ── Core global directories ───────────────────────────────────────────────
+    if use_cb_ddg:
+        queries += [
+            (f'site:crunchbase.com/organization {loc} {ind}', "Crunchbase"),
+            (f'site:crunchbase.com/organization {loc} {ind} startup {stage_label}', "Crunchbase"),
+            (f'site:crunchbase.com/organization {loc} artificial intelligence', "Crunchbase"),
+            (f'site:crunchbase.com/organization {loc} {ind} founded team', "Crunchbase"),
+        ]
+    if use_broad_ddg:
+        queries += [
+            (f'site:wellfound.com/company {loc} {ind}', "Wellfound"),
+            (f'site:dealroom.co/companies {loc} {ind} startup', "Dealroom"),
+        ]
+
+    # ── EU / German-specific startup directories ──────────────────────────────
     if is_german:
         queries += [
             (f'site:germanyy.ai/startups {ind} {loc}', "Germanyy.ai"),
-            (f'site:seedtable.com {loc} {ind} startup', "Seedtable"),
+            # seedtable.com/companies/NAME is the profile page path — more precise
+            (f'site:seedtable.com/companies "{loc}" {ind}', "Seedtable"),
+            # startupdetector.de/startup/NAME — individual German startup profiles
+            (f'site:startupdetector.de/startup {loc} {ind}', "Startupdetector"),
         ]
     if is_us:
         queries += [
@@ -880,54 +1279,69 @@ async def search_startups(
         ]
     if is_europe and not is_german:
         queries += [
-            (f'site:seedtable.com {loc} {ind} startup', "Seedtable"),
-        ]
-    # Extra queries for higher limits — more Crunchbase variants + broader terms
-    if limit > 50:
-        queries += [
-            (f'site:crunchbase.com/organization {loc} {ind} series funding', "Crunchbase"),
-            (f'site:crunchbase.com/organization {loc} {ind} saas b2b platform', "Crunchbase"),
-            (f'site:crunchbase.com/organization {loc} {ind} machine learning deep learning', "Crunchbase"),
-            (f'site:wellfound.com/company {loc} {ind} {stage_label}', "Wellfound"),
-        ]
-    if is_german and limit > 50:
-        queries += [
-            (f'site:crunchbase.com/organization {loc} {ind} {stage_label}', "Crunchbase"),
-            (f'site:f6s.com/companies {loc} {ind}', "F6S"),
-            (f'site:founded.de {ind}', "Founded.de"),
-            (f'site:crunchbase.com/organization {loc} {ind} automation robotics', "Crunchbase"),
-            (f'site:crunchbase.com/organization {loc} {ind} nlp computer vision', "Crunchbase"),
-        ]
-    if limit > 100:
-        queries += [
-            (f'site:crunchbase.com/organization {loc} climate health', "Crunchbase"),
-            (f'site:crunchbase.com/organization {loc} marketplace b2b', "Crunchbase"),
-            (f'site:crunchbase.com/organization {loc} fintech edtech', "Crunchbase"),
-            (f'site:crunchbase.com/organization {loc} deep tech hardware', "Crunchbase"),
-            (f'site:crunchbase.com/organization {loc} mobility logistics', "Crunchbase"),
-            (f'site:crunchbase.com/organization {loc} data analytics platform', "Crunchbase"),
-            (f'site:wellfound.com/company {loc} remote {ind}', "Wellfound"),
-            (f'site:wellfound.com/company {loc} engineer developer', "Wellfound"),
+            (f'site:seedtable.com/companies "{loc}" {ind}', "Seedtable"),
+            (f'site:dealroom.co/companies "{loc}" {ind} startup', "Dealroom"),
         ]
 
-    # Per-query result budget: more results per call at higher limits
-    # (DDG typically honours up to 25 before rate-limiting aggressively)
+    # ── Extra queries for higher limits ──────────────────────────────────────
+    if limit > 50:
+        if use_cb_ddg:
+            queries += [
+                (f'site:crunchbase.com/organization {loc} {ind} series funding', "Crunchbase"),
+                (f'site:crunchbase.com/organization {loc} {ind} saas b2b platform', "Crunchbase"),
+                (f'site:crunchbase.com/organization {loc} {ind} machine learning deep learning', "Crunchbase"),
+            ]
+        if use_broad_ddg:
+            queries += [
+                (f'site:wellfound.com/company {loc} {ind} {stage_label}', "Wellfound"),
+            ]
+    if is_german and limit > 50:
+        if use_cb_ddg:
+            queries += [
+                (f'site:crunchbase.com/organization {loc} {ind} {stage_label}', "Crunchbase"),
+                (f'site:crunchbase.com/organization {loc} {ind} automation robotics', "Crunchbase"),
+                (f'site:crunchbase.com/organization {loc} {ind} nlp computer vision', "Crunchbase"),
+            ]
+        queries += [
+            (f'site:f6s.com/companies {loc} {ind}', "F6S"),
+            # Broader germanyy.ai query without city (catches more DE startups)
+            (f'site:germanyy.ai/startups {ind}', "Germanyy.ai"),
+        ]
+    if limit > 100:
+        if use_cb_ddg:
+            queries += [
+                (f'site:crunchbase.com/organization {loc} climate health', "Crunchbase"),
+                (f'site:crunchbase.com/organization {loc} marketplace b2b', "Crunchbase"),
+                (f'site:crunchbase.com/organization {loc} fintech edtech', "Crunchbase"),
+                (f'site:crunchbase.com/organization {loc} deep tech hardware', "Crunchbase"),
+                (f'site:crunchbase.com/organization {loc} mobility logistics', "Crunchbase"),
+                (f'site:crunchbase.com/organization {loc} data analytics platform', "Crunchbase"),
+            ]
+        if use_broad_ddg:
+            queries += [
+                (f'site:wellfound.com/company {loc} remote {ind}', "Wellfound"),
+                (f'site:wellfound.com/company {loc} engineer developer', "Wellfound"),
+            ]
+
     per_query = 15 if limit <= 50 else (25 if limit <= 100 else 30)
 
     log.info(
-        "search_startups: %d queries (per_query=%d) for location=%r stages=%r industry=%r limit=%d",
+        "search_startups: %d DDG queries (per_query=%d) for location=%r stages=%r "
+        "industry=%r limit=%d [APIs: cb=%s ts=%s → %d companies so far]",
         len(queries), per_query, loc, funding_stages, ind, limit,
+        bool(settings.crunchbase_api_key), bool(settings.theirstack_api_key),
+        len(companies),
     )
 
     for i, (q, label) in enumerate(queries):
+        if len(companies) >= limit:
+            break
         if i > 0:
             await asyncio.sleep(2.0)
         results = await _ddg_search(q, max_results=per_query)
         queries_run += 1
         log.info("  [%s] %r → %d hits", label, q[:70], len(results))
         _ingest(results, label)
-        if len(companies) >= limit:
-            break
 
     final = companies[:limit]
     log.info("search_startups: %d companies total", len(final))
@@ -936,7 +1350,7 @@ async def search_startups(
         "total": len(final),
         "limit": limit,
         "queries_run": queries_run,
-        "sources": source_counts,  # e.g. {"Crunchbase": 25, "Wellfound": 10}
+        "sources": source_counts,
         "location": loc,
         "industry": industry.strip() or None,
         "funding_stages": funding_stages,
