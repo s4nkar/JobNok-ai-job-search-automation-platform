@@ -64,7 +64,7 @@ The tailor endpoint uses a deterministic + LLM-focused split to keep costs down 
 1. Chunk resume with regex (cached by PDF hash for 30 days)
 2. Embed resume via Jina/Cohere (cached alongside chunks)
 3. Chunk JD fresh on every request
-4. Embed JD
+4. Embed JD with jina
 5. Deterministic matching: numpy similarity matrix, per-requirement evidence, no AI
 6. Deterministic scoring: keyword overlap + embedding similarity per category
 7. Single focused LLM call (~1.2k tokens) for prose only: headline, tailored summary, bullet rewrites
