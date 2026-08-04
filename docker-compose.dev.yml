@@ -6,6 +6,9 @@
 #   - Celery:   source mounted
 #   - Next.js:  source mounted, npm run dev, port 3000 exposed directly
 #   - nginx:    disabled (dev hits services directly on their native ports)
+#   - Postgres: local throwaway Postgres for SQLAlchemy/Alembic dev work.
+#     Production points DATABASE_URL at the real Supabase Postgres instead —
+#     this local instance is dev-only and never touches production data.
 #
 # Volume notes:
 #   - api_packages: named volume isolates container's pip-installed packages
@@ -13,6 +16,8 @@
 #     conflicts (Windows) and accidental host .venv shadowing site-packages.
 #   - /app/node_modules: anonymous volume prevents the host ./apps/web mount
 #     from clobbering the container-installed node_modules.
+#   - postgres_data: persists the local dev DB across restarts. Delete this
+#     volume to reset to a fresh schema (re-runs docker-entrypoint-initdb.d).
 #
 # APP_URL override: the base docker-compose.yml reads APP_URL from apps/api/.env.
 # The environment: block below takes precedence for dev, setting it to localhost:3000
@@ -22,6 +27,29 @@
 services:
   nginx:
     profiles: ["disabled"]
+
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: devpassword
+      POSTGRES_DB: quickjob
+    ports:
+      - "5433:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      # Runs once against an empty data dir, in filename order: stub Supabase's
+      # auth.users (FK target for profiles.id), then the real app schema.
+      - ./docker/postgres-init/00-stub-auth.sql:/docker-entrypoint-initdb.d/00-stub-auth.sql:ro
+      - ./supabase/schema.sql:/docker-entrypoint-initdb.d/01-schema.sql:ro
+    networks:
+      - backend-net
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+    restart: unless-stopped
 
   fastapi:
     build:
@@ -33,8 +61,12 @@ services:
       - api_packages:/usr/local/lib/python3.12/site-packages
     ports:
       - "8000:8000"
+    depends_on:
+      postgres:
+        condition: service_healthy
     environment:
       - APP_URL=http://localhost:3000
+      - DATABASE_URL=postgresql://postgres:devpassword@postgres:5432/quickjob
 
   celery:
     build:
@@ -43,6 +75,11 @@ services:
     volumes:
       - ./apps/api:/app
       - api_packages:/usr/local/lib/python3.12/site-packages
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      - DATABASE_URL=postgresql://postgres:devpassword@postgres:5432/quickjob
 
   nextjs:
     build:
@@ -61,3 +98,4 @@ services:
 
 volumes:
   api_packages:
+  postgres_data:

@@ -16,8 +16,11 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     fonts-liberation \
     && rm -rf /var/lib/apt/lists/*
 
-COPY requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
+COPY pyproject.toml .
+# Stub package dir so setuptools' packages.find is satisfied at build time —
+# the real source is bind-mounted over /app at container start (see below),
+# shadowing this stub entirely. We only need this step to install dependencies.
+RUN mkdir -p app && touch app/__init__.py && pip install --no-cache-dir .
 
 # Source is mounted at runtime via docker-compose.dev.yml — no COPY . .
-CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8000", "--reload"]
+CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000", "--reload"]

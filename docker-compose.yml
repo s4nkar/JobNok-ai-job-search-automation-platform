@@ -43,7 +43,7 @@ services:
   celery:
     build:
       context: ./apps/api
-    command: celery -A workers.email_worker worker --loglevel=info
+    command: celery -A app.workers.celery_app worker --loglevel=info
     env_file:
       - ./apps/api/.env
     depends_on:
