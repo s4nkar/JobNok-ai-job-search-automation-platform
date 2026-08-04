@@ -24,6 +24,7 @@
 #   ./run.sh help       Show this message.
 
 set -e
+cd "$(dirname "${BASH_SOURCE[0]}")/.."
 CMD="${1:-help}"
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
@@ -66,7 +67,7 @@ _wait_for_health() {
 }
 
 # Validate that required env vars inside a file are non-empty or whitespace-only.
-# Usage: _check_env_vars backend/.env SUPABASE_URL ANTHROPIC_API_KEY ...
+# Usage: _check_env_vars apps/api/.env SUPABASE_URL ANTHROPIC_API_KEY ...
 _check_env_vars() {
   local file="$1"; shift
   local missing=()
@@ -99,32 +100,32 @@ cmd_setup() {
   docker compose down 2>/dev/null || true
 
   # ── Backend .env ───────────────────────────────────────────────
-  if [ ! -f backend/.env ]; then
-    if [ ! -f backend/.env.example ]; then
-      abort "backend/.env.example not found. Cannot scaffold environment."
+  if [ ! -f apps/api/.env ]; then
+    if [ ! -f apps/api/.env.example ]; then
+      abort "apps/api/.env.example not found. Cannot scaffold environment."
     fi
-    cp backend/.env.example backend/.env
+    cp apps/api/.env.example apps/api/.env
     echo ""
-    echo "Created backend/.env from backend/.env.example."
+    echo "Created apps/api/.env from apps/api/.env.example."
     echo "Open it and fill in the required values, then run './run.sh setup' again."
     exit 0
   fi
 
   # ── Frontend .env.local ────────────────────────────────────────
-  if [ ! -f frontend/.env.local ]; then
-    if [ ! -f frontend/.env.example ]; then
-      abort "frontend/.env.example not found. Cannot scaffold environment."
+  if [ ! -f apps/web/.env.local ]; then
+    if [ ! -f apps/web/.env.example ]; then
+      abort "apps/web/.env.example not found. Cannot scaffold environment."
     fi
-    cp frontend/.env.example frontend/.env.local
+    cp apps/web/.env.example apps/web/.env.local
     echo ""
-    echo "Created frontend/.env.local from frontend/.env.example."
+    echo "Created apps/web/.env.local from apps/web/.env.example."
     echo "Open it and fill in the required values, then run './run.sh setup' again."
     exit 0
   fi
 
   # ── Validate required vars are filled ─────────────────────────
   info "Validating environment variables..."
-  _check_env_vars backend/.env \
+  _check_env_vars apps/api/.env \
     SUPABASE_URL \
     SUPABASE_SERVICE_ROLE_KEY \
     SUPABASE_JWT_SECRET \
@@ -132,7 +133,7 @@ cmd_setup() {
     UPSTASH_REDIS_REST_TOKEN \
     REDIS_PASSWORD
 
-  _check_env_vars frontend/.env.local \
+  _check_env_vars apps/web/.env.local \
     NEXT_PUBLIC_SUPABASE_URL \
     NEXT_PUBLIC_SUPABASE_ANON_KEY
 
@@ -179,7 +180,7 @@ cmd_up() {
 cmd_dev() {
   _require_docker
 
-  if [ ! -f backend/.env ] || [ ! -f frontend/.env.local ]; then
+  if [ ! -f apps/api/.env ] || [ ! -f apps/web/.env.local ]; then
     abort "Environment files missing. Run './run.sh setup' first."
   fi
 

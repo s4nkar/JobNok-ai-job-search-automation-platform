@@ -8,13 +8,13 @@
 #   - nginx:    disabled (dev hits services directly on their native ports)
 #
 # Volume notes:
-#   - backend_packages: named volume isolates container's pip-installed packages
-#     from the host's ./backend directory. Prevents case-insensitive filesystem
+#   - api_packages: named volume isolates container's pip-installed packages
+#     from the host's ./apps/api directory. Prevents case-insensitive filesystem
 #     conflicts (Windows) and accidental host .venv shadowing site-packages.
-#   - /app/node_modules: anonymous volume prevents the host ./frontend mount
+#   - /app/node_modules: anonymous volume prevents the host ./apps/web mount
 #     from clobbering the container-installed node_modules.
 #
-# APP_URL override: the base docker-compose.yml reads APP_URL from backend/.env.
+# APP_URL override: the base docker-compose.yml reads APP_URL from apps/api/.env.
 # The environment: block below takes precedence for dev, setting it to localhost:3000
 # so FastAPI's CORS allows the browser origin. If you customise APP_URL in .env,
 # update the value below to match.
@@ -25,12 +25,12 @@ services:
 
   fastapi:
     build:
-      context: ./backend
+      context: ./apps/api
       dockerfile: Dockerfile.dev
     volumes:
-      - ./backend:/app
+      - ./apps/api:/app
       # Isolate pip packages from the host directory (see note above)
-      - backend_packages:/usr/local/lib/python3.12/site-packages
+      - api_packages:/usr/local/lib/python3.12/site-packages
     ports:
       - "8000:8000"
     environment:
@@ -38,18 +38,18 @@ services:
 
   celery:
     build:
-      context: ./backend
+      context: ./apps/api
       dockerfile: Dockerfile.dev
     volumes:
-      - ./backend:/app
-      - backend_packages:/usr/local/lib/python3.12/site-packages
+      - ./apps/api:/app
+      - api_packages:/usr/local/lib/python3.12/site-packages
 
   nextjs:
     build:
-      context: ./frontend
+      context: ./apps/web
       dockerfile: Dockerfile.dev
     volumes:
-      - ./frontend:/app
+      - ./apps/web:/app
       - /app/node_modules
     ports:
       - "3000:3000"
@@ -60,4 +60,4 @@ services:
       - BACKEND_URL=http://fastapi:8000
 
 volumes:
-  backend_packages:
+  api_packages:

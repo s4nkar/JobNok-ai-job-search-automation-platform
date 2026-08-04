@@ -232,7 +232,7 @@ _NON_STARTUP_TITLE_RE = re.compile(
     # Bare acronym + fund-category — blocks "TVM Capital", "HV Ventures", "EQT AB"
     # but NOT "Greentech Ventures" (descriptive prefix) or "Cherry Ventures" (name).
     # Pattern: 1–5 uppercase letters (abbreviation only) followed by fund-type word.
-    r"|^[A-Z]{1,5}\s+(?:Capital|Ventures?|Fund|Partners?)\s*$",
+    r"|^[A-Z]{1,5}\s+(?:Capital|Ventures?|Fund|Partners?)\s*$)",
     re.I,
 )
 # Description patterns that identify non-startups not caught by the title regex
