@@ -743,7 +743,7 @@ Present results clearly to users.
 | Component | Implementation |
 |---|---|
 | Resume Parsing | PyMuPDF |
-| Resume Chunking | Regex-based deterministic chunker (`lib/resume_chunker.py`) |
+| Resume Chunking | Regex-based deterministic chunker (`apps/api/app/modules/resume_tailor/chunker.py`) |
 | JD Chunking | Regex-based deterministic chunker |
 | Embeddings API | Jina v3 (primary) / Cohere (fallback) |
 | Vector Storage | Redis (cache layer, not ANN DB) |

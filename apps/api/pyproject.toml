@@ -26,9 +26,9 @@ dependencies = [
     "celery==5.4.0",
     "redis==5.0.8",
 
-    # Database — supabase-py is transitional, removed once all modules are
-    # migrated to SQLAlchemy (see app/integrations/supabase_client.py)
-    "supabase==2.7.0",
+    # Database — direct Postgres access via SQLAlchemy. Supabase remains the
+    # Postgres host + Auth/JWT provider (see app/core/security.py), but is no
+    # longer used as a query client.
     "sqlalchemy[asyncio]==2.0.35",
     "asyncpg==0.29.0",
     "psycopg[binary]==3.2.3",

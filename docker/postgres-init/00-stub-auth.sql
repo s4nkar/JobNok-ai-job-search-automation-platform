@@ -8,9 +8,12 @@
 -- aren't tracked by Alembic either way, so a null-returning stub is enough.
 create schema if not exists auth;
 
+-- raw_user_meta_data is required by schema.sql's handle_new_user() trigger,
+-- which reads new.raw_user_meta_data->>'full_name' / 'avatar_url' on insert.
 create table if not exists auth.users (
   id uuid primary key default gen_random_uuid(),
-  email text
+  email text,
+  raw_user_meta_data jsonb not null default '{}'::jsonb
 );
 
 create or replace function auth.uid() returns uuid

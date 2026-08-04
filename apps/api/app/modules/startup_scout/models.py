@@ -1,7 +1,7 @@
 import uuid
 from datetime import datetime
 
-from sqlalchemy import CheckConstraint, ForeignKey, Index, Numeric, Text, func
+from sqlalchemy import Boolean, CheckConstraint, ForeignKey, Index, Numeric, Text, func
 from sqlalchemy.dialects.postgresql import TIMESTAMP, UUID as PG_UUID
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -59,3 +59,8 @@ class StartupScoutContact(Base, UUIDPKMixin, CreatedAtMixin):
     linkedin_url: Mapped[str | None] = mapped_column(Text, nullable=True)
     source: Mapped[str | None] = mapped_column(Text, nullable=True)
     confidence: Mapped[float | None] = mapped_column(Numeric, nullable=True)
+    # Contact-verification fields (Apollo/web-crawl enrichment stage 2) — added
+    # to the live schema after the table was first created; see schema.sql.
+    source_url: Mapped[str | None] = mapped_column(Text, nullable=True)
+    is_verified: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
+    verification_url: Mapped[str | None] = mapped_column(Text, nullable=True)

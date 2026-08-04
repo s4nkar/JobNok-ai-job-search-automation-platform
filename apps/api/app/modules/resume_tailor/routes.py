@@ -16,12 +16,14 @@ logger = logging.getLogger(__name__)
 import fitz  # PyMuPDF
 import httpx
 import numpy as np
-from fastapi import APIRouter, Request, HTTPException, UploadFile, File, Form
+from fastapi import APIRouter, Depends, Request, HTTPException, UploadFile, File, Form
 from fastapi.responses import StreamingResponse, Response, HTMLResponse
 from jinja2 import Environment, FileSystemLoader
+from sqlalchemy.ext.asyncio import AsyncSession
 from weasyprint import HTML as WeasyHTML
 
 from app.core.config import settings
+from app.core.database import get_db
 from app.services.cache import check_rate_limit, get_cached, set_cached
 from app.modules.resume_tailor.cache import (
     compute_resume_hash,
@@ -32,8 +34,8 @@ from app.modules.resume_tailor.cache import (
 )
 from app.modules.resume_tailor.chunker import chunk_jd, chunk_resume, chunks_from_dicts, chunks_to_dicts, clean_jd_text
 from app.modules.resume_tailor.matcher import match_resume_to_jd
+from app.modules.resume_tailor import service as resume_tailor_service
 from app.ai.embeddings import EmbeddingError, embed
-from app.integrations.supabase_client import get_supabase
 from app.core.security import get_user_id
 from app.ai.llm import provider as ai_provider
 from app.shared.utils import _rl_error
@@ -521,7 +523,7 @@ async def list_templates():
 
 
 @router.post("/tailor/structure-resume")
-async def structure_resume(request: Request, body: dict):
+async def structure_resume(request: Request, body: dict, db: AsyncSession = Depends(get_db)):
     """LLM-structure the cached resume into cv_data JSON. Called once when the editor loads."""
     user_id = get_user_id(request)
     allowed, _ = await check_rate_limit(user_id, "resume", settings.rate_limit_resume_per_day)
@@ -543,11 +545,7 @@ async def structure_resume(request: Request, body: dict):
     cv_data = await _llm_structure_resume(resume_text, analysis)
     _normalize_cv_data(cv_data)
 
-    sb = get_supabase()
-    profile_res = await asyncio.to_thread(
-        lambda: sb.table("profiles").select("*").eq("id", user_id).single().execute()
-    )
-    profile = profile_res.data or {}
+    profile = await resume_tailor_service.get_profile_for_overlay(db, user_id)
     profile_headline = analysis.get("profile_headline") or ""
     await _apply_profile_overlay(cv_data, profile, profile_headline, template_id)
 
@@ -555,7 +553,7 @@ async def structure_resume(request: Request, body: dict):
 
 
 @router.post("/tailor/generate-pdf")
-async def generate_cv_pdf(request: Request, body: dict):
+async def generate_cv_pdf(request: Request, body: dict, db: AsyncSession = Depends(get_db)):
     user_id = get_user_id(request)
     allowed, _ = await check_rate_limit(user_id, "resume", settings.rate_limit_resume_per_day)
     if not allowed:
@@ -574,15 +572,7 @@ async def generate_cv_pdf(request: Request, body: dict):
         cv_data = dict(cv_data_override)
         _normalize_cv_data(cv_data)
         if template_id == "lebenslauf":
-            sb = get_supabase()
-            profile_res = await asyncio.to_thread(
-                lambda: sb.table("profiles")
-                .select("cv_photo_url,date_of_birth,nationality")
-                .eq("id", user_id)
-                .single()
-                .execute()
-            )
-            profile = profile_res.data or {}
+            profile = await resume_tailor_service.get_profile_photo_fields(db, user_id)
             photo_base64 = None
             safe_url = _safe_photo_url(profile.get("cv_photo_url"))
             if safe_url:
@@ -611,11 +601,7 @@ async def generate_cv_pdf(request: Request, body: dict):
         cv_data = await _llm_structure_resume(resume_text, analysis)
         _normalize_cv_data(cv_data)
 
-        sb = get_supabase()
-        profile_res = await asyncio.to_thread(
-            lambda: sb.table("profiles").select("*").eq("id", user_id).single().execute()
-        )
-        profile = profile_res.data or {}
+        profile = await resume_tailor_service.get_profile_for_overlay(db, user_id)
         profile_headline = analysis.get("profile_headline") or ""
         await _apply_profile_overlay(cv_data, profile, profile_headline, template_id)
 
@@ -629,23 +615,9 @@ async def generate_cv_pdf(request: Request, body: dict):
 
     opportunity_id = body.get("opportunity_id")
     if opportunity_id:
-        try:
-            _sb = get_supabase()
-            await asyncio.to_thread(
-                lambda: _sb.table("opportunity_artifacts").insert({
-                    "user_id": user_id,
-                    "opportunity_id": opportunity_id,
-                    "artifact_type": "resume_analysis",
-                    "tool_used": "resume-tailor",
-                    "content": f"[Generated PDF — template: {template_id}]",
-                    "metadata": {
-                        "template_id": template_id,
-                        "match_score": (body.get("analysis") or {}).get("match_score"),
-                    },
-                }).execute()
-            )
-        except Exception:
-            pass
+        await resume_tailor_service.save_resume_artifact(
+            db, user_id, opportunity_id, template_id, (body.get("analysis") or {}).get("match_score")
+        )
 
     return Response(
         content=pdf_bytes,
@@ -655,7 +627,7 @@ async def generate_cv_pdf(request: Request, body: dict):
 
 
 @router.post("/tailor/preview-html")
-async def preview_cv_html(request: Request, body: dict):
+async def preview_cv_html(request: Request, body: dict, db: AsyncSession = Depends(get_db)):
     """Render CV template to HTML for live preview — no PDF conversion, no rate limit."""
     user_id = get_user_id(request)
 
@@ -679,15 +651,7 @@ async def preview_cv_html(request: Request, body: dict):
         if cached_profile:
             lp = json.loads(cached_profile)
         else:
-            sb = get_supabase()
-            profile_res = await asyncio.to_thread(
-                lambda: sb.table("profiles")
-                .select("cv_photo_url,date_of_birth,nationality")
-                .eq("id", user_id)
-                .single()
-                .execute()
-            )
-            profile = profile_res.data or {}
+            profile = await resume_tailor_service.get_profile_photo_fields(db, user_id)
             photo_base64 = ""
             safe_url = _safe_photo_url(profile.get("cv_photo_url"))
             if safe_url:

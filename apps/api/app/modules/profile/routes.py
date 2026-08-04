@@ -2,22 +2,16 @@
 
 from __future__ import annotations
 
-import asyncio
 import httpx
-from fastapi import APIRouter, HTTPException, Request, UploadFile, File
+from fastapi import APIRouter, Depends, HTTPException, Request, UploadFile, File
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import settings
-from app.integrations.supabase_client import get_supabase
+from app.core.database import get_db
 from app.core.security import get_user_id
+from app.modules.profile import service
 
 router = APIRouter()
-
-_ALLOWED_FIELDS = {
-    "full_name", "job_title", "cv_email", "phone",
-    "address_street", "address_city", "address_postal_code", "address_country",
-    "date_of_birth", "nationality",
-    "linkedin_url", "github_url", "website_url", "work_authorization",
-}
 
 _STORAGE_HEADERS = lambda: {
     "Authorization": f"Bearer {settings.supabase_service_role_key}",
@@ -36,51 +30,21 @@ async def _ensure_cv_photos_bucket(client: httpx.AsyncClient) -> None:
 
 
 @router.get("")
-async def get_profile(request: Request):
+async def get_profile(request: Request, db: AsyncSession = Depends(get_db)):
     user_id = get_user_id(request)
-    sb = get_supabase()
-    res = await asyncio.to_thread(
-        lambda: sb.table("profiles").select("*").eq("id", user_id).limit(1).execute()
-    )
-    row = (res.data or [None])[0]
-    if not row:
-        # Profile row missing (trigger may have failed at signup) — create a minimal one
-        from app.core.security import verify_jwt
-        token = request.headers.get("Authorization", "").removeprefix("Bearer ").strip()
-        claims = verify_jwt(token)
-        email = claims.get("email") or f"{user_id}@unknown.local"
-        await asyncio.to_thread(
-            lambda: sb.table("profiles")
-            .upsert({"id": user_id, "email": email}, on_conflict="id")
-            .execute()
-        )
-        ins = await asyncio.to_thread(
-            lambda: sb.table("profiles").select("*").eq("id", user_id).limit(1).execute()
-        )
-        row = (ins.data or [None])[0]
-    if not row:
-        raise HTTPException(status_code=500, detail="Could not retrieve or create profile")
-    return row
+    return await service.get_or_create_profile(db, user_id, request)
 
 
 @router.put("")
-async def update_profile(request: Request, body: dict):
+async def update_profile(request: Request, body: dict, db: AsyncSession = Depends(get_db)):
     user_id = get_user_id(request)
-    updates = {k: v for k, v in body.items() if k in _ALLOWED_FIELDS}
-    if not updates:
-        raise HTTPException(status_code=422, detail="No valid fields provided")
-    sb = get_supabase()
-    await asyncio.to_thread(
-        lambda: sb.table("profiles").update(updates).eq("id", user_id).execute()
-    )
-    res = await asyncio.to_thread(
-        lambda: sb.table("profiles").select("*").eq("id", user_id).single().execute()
-    )
-    return res.data
+    return await service.update_profile(db, user_id, body)
 
 
 @router.post("/photo")
-async def upload_cv_photo(request: Request, photo: UploadFile = File(...)):
+async def upload_cv_photo(
+    request: Request, photo: UploadFile = File(...), db: AsyncSession = Depends(get_db)
+):
     user_id = get_user_id(request)
     if photo.content_type not in ("image/jpeg", "image/png", "image/webp"):
         raise HTTPException(status_code=422, detail="Only JPEG, PNG, or WebP images accepted")
@@ -114,12 +78,5 @@ async def upload_cv_photo(request: Request, photo: UploadFile = File(...)):
             )
 
     public_url = f"{settings.supabase_url}/storage/v1/object/public/cv-photos/{path}"
-
-    sb = get_supabase()
-    await asyncio.to_thread(
-        lambda: sb.table("profiles")
-        .update({"cv_photo_url": public_url})
-        .eq("id", user_id)
-        .execute()
-    )
+    await service.update_cv_photo_url(db, user_id, public_url)
     return {"cv_photo_url": public_url}

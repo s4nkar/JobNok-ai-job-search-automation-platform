@@ -1,8 +1,8 @@
 """baseline: reflect existing schema
 
-Revision ID: a9262bb8c004
+Revision ID: ae83bb0194fa
 Revises: 
-Create Date: 2026-08-04 02:00:50.038768
+Create Date: 2026-08-04 18:54:52.916579
 
 """
 from typing import Sequence, Union
@@ -12,7 +12,7 @@ import sqlalchemy as sa
 from sqlalchemy.dialects import postgresql
 
 # revision identifiers, used by Alembic.
-revision: str = 'a9262bb8c004'
+revision: str = 'ae83bb0194fa'
 down_revision: Union[str, None] = None
 branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
@@ -234,6 +234,9 @@ def upgrade() -> None:
     sa.Column('linkedin_url', sa.Text(), nullable=True),
     sa.Column('source', sa.Text(), nullable=True),
     sa.Column('confidence', sa.Numeric(), nullable=True),
+    sa.Column('source_url', sa.Text(), nullable=True),
+    sa.Column('is_verified', sa.Boolean(), nullable=True),
+    sa.Column('verification_url', sa.Text(), nullable=True),
     sa.Column('id', sa.UUID(), server_default=sa.text('uuid_generate_v4()'), nullable=False),
     sa.Column('created_at', postgresql.TIMESTAMP(timezone=True), server_default=sa.text('now()'), nullable=False),
     sa.ForeignKeyConstraint(['company_id'], ['startup_scout_companies.id'], ondelete='CASCADE'),

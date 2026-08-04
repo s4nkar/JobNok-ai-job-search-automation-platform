@@ -10,23 +10,7 @@ from sqlalchemy import engine_from_config, pool
 
 from app.core.config import settings
 from app.shared.models import Base
-
-# Import every module's models.py so its tables register on Base.metadata
-# before autogenerate runs — a model module never imported here means its
-# table is silently missing from the diff.
-from app.modules.profile.models import Profile  # noqa: F401
-from app.modules.templates.models import Template  # noqa: F401
-from app.modules.bulk_email.models import EmailCampaign, EmailRecipient  # noqa: F401
-from app.modules.tracker.models import JobApplication  # noqa: F401
-from app.modules.job_search.models import JobSearchApplication  # noqa: F401
-from app.modules.startup_hunt.models import (  # noqa: F401
-    StartupHuntCompany,
-    StartupHuntOpportunity,
-    StartupHuntContact,
-    OpportunityArtifact,
-)
-from app.modules.startup_scout.models import StartupScoutCompany, StartupScoutContact  # noqa: F401
-from app.modules.linkedin_fill.models import LinkedinCache  # noqa: F401
+from app.shared import model_registry  # noqa: F401 — registers every table on Base.metadata
 
 config = context.config
 config.set_main_option("sqlalchemy.url", settings.database_url_sync)

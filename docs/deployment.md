@@ -19,11 +19,12 @@ QuickJob provides a comprehensive `docker-compose.yml` that orchestrates all loc
 ### Setup Steps
 1. Clone the repository.
 2. Setup environment variables:
-   - Copy `frontend/.env.example` to `frontend/.env.local`.
-   - Copy `backend/.env.example` to `backend/.env`.
-   - Fill in your API keys (Supabase, Upstash Redis, Resend, AI Provider).
+   - Copy `apps/web/.env.example` to `apps/web/.env.local`.
+   - Copy `apps/api/.env.example` to `apps/api/.env`.
+   - Fill in your API keys (Supabase, Upstash Redis, Resend, AI Provider, `DATABASE_URL`).
 3. Setup the Database:
    - Run the SQL script located in `supabase/schema.sql` within your Supabase project's SQL editor.
+   - Stamp Alembic at the current schema (first deploy only — see "Database Migrations" below).
 4. Run Docker Compose:
    ```bash
    docker-compose up --build
@@ -40,7 +41,7 @@ If you prefer to run services individually without Docker:
 
 ### 1. Frontend
 ```bash
-cd frontend
+cd apps/web
 npm install
 npm run dev
 # Running on http://localhost:3000
@@ -48,19 +49,19 @@ npm run dev
 
 ### 2. Backend (FastAPI)
 ```bash
-cd backend
+cd apps/api
 python -m venv .venv
 source .venv/bin/activate  # Windows: .venv\Scripts\activate
-pip install -r requirements.txt
-uvicorn main:app --reload --port 8000
+pip install .
+uvicorn app.main:app --reload --port 8000
 # Running on http://localhost:8000
 ```
 
 ### 3. Celery Worker (Required for Bulk Email)
 In a separate terminal, within the activated backend virtual environment:
 ```bash
-cd backend
-celery -A workers.email_worker worker --loglevel=info
+cd apps/api
+celery -A app.workers.celery_app worker --loglevel=info
 ```
 
 ---
@@ -76,6 +77,14 @@ The FastAPI backend locks down CORS via the `APP_URL` environment variable. Ensu
 ### Background Workers
 Deploying Celery requires a dedicated worker process. On platforms like Railway, you define a secondary service or custom start command:
 ```bash
-celery -A workers.email_worker worker --loglevel=info
+celery -A app.workers.celery_app worker --loglevel=info
 ```
-Ensure both the FastAPI web service and the Celery worker service share the exact same environment variables and connect to the same Redis instance.
+Ensure both the FastAPI web service and the Celery worker service share the exact same environment variables (including `DATABASE_URL`) and connect to the same Redis instance.
+
+### Database Migrations (Alembic)
+Schema changes go through Alembic, not manual `schema.sql` edits, going forward — `alembic revision --autogenerate` + `alembic upgrade head`. On the **first** deploy after this migration, all 13 tables already exist in production (created by hand-applying `supabase/schema.sql` over time), so run `alembic stamp head` once — **not** `alembic upgrade head` — to tell Alembic "the DB already matches this baseline" without it trying to recreate anything. From then on, `alembic upgrade head` runs as part of the normal release step. `supabase/schema.sql` remains the reference for RLS policies, triggers, and grants, which aren't managed by Alembic.
+
+### Post-Migration Manual Steps (one-time)
+This repo was reorganized from `backend`/`frontend` to `apps/api`/`apps/web`. Since Railway and Vercel projects are configured via their dashboards (no config files checked into this repo), update each service's **Root Directory** setting once:
+- **Railway** (FastAPI service and Celery worker service): Root Directory `backend` → `apps/api`.
+- **Vercel** (frontend project): Root Directory `frontend` → `apps/web`.

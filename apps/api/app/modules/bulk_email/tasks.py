@@ -1,13 +1,19 @@
 """Celery task that processes the bulk email queue.
 
 Picks up email jobs from the Redis queue, personalises templates, calls
-Resend, and updates recipient status in Supabase.
+Resend, and updates recipient status. Uses the SYNC SQLAlchemy session
+(app.core.database.SyncSessionLocal) — Celery tasks are plain sync functions
+with no event loop, so the async engine/session can't be used here.
 """
 
 import re
+import asyncio
+from datetime import datetime, timezone
+
 from app.workers.celery_app import celery_app
+from app.core.database import SyncSessionLocal
+from app.modules.bulk_email.models import EmailRecipient
 from app.services.email import send_email
-from app.integrations.supabase_client import get_supabase
 
 
 def _fill_template(template: str, variables: dict) -> str:
@@ -38,45 +44,38 @@ def send_campaign_email(
 
     Retries up to 3 times on transient failures with 60s backoff.
     """
-    supabase = get_supabase()
+    with SyncSessionLocal() as session:
+        recipient = session.get(EmailRecipient, recipient_id)
 
-    # Mark as sending
-    supabase.from_("email_recipients") \
-        .update({"status": "sending"}) \
-        .eq("id", recipient_id) \
-        .execute()
+        recipient.status = "sending"
+        session.commit()
 
-    try:
-        # Personalise template with recipient variables
-        all_vars = {"name": to_name, "email": to_email, **variables}
-        personalised_subject = _fill_template(subject, all_vars)
-        personalised_body = _fill_template(body_template, all_vars)
-
-        import asyncio
-        asyncio.run(
-            send_email(
-                to_email=to_email,
-                to_name=to_name,
-                subject=personalised_subject,
-                body=personalised_body,
-                campaign_id=campaign_id,
-            )
-        )
-
-        # Mark as sent
-        from datetime import datetime, timezone
-        supabase.from_("email_recipients") \
-            .update({"status": "sent", "sent_at": datetime.now(timezone.utc).isoformat()}) \
-            .eq("id", recipient_id) \
-            .execute()
-
-    except Exception as exc:
-        # Retry on transient errors
         try:
-            self.retry(exc=exc)
-        except self.MaxRetriesExceededError:
-            # Final failure — mark as failed
-            supabase.from_("email_recipients") \
-                .update({"status": "failed", "error": str(exc)[:500]}) \
-                .eq("id", recipient_id) \
-                .execute()
+            # Personalise template with recipient variables
+            all_vars = {"name": to_name, "email": to_email, **variables}
+            personalised_subject = _fill_template(subject, all_vars)
+            personalised_body = _fill_template(body_template, all_vars)
+
+            asyncio.run(
+                send_email(
+                    to_email=to_email,
+                    to_name=to_name,
+                    subject=personalised_subject,
+                    body=personalised_body,
+                    campaign_id=campaign_id,
+                )
+            )
+
+            recipient.status = "sent"
+            recipient.sent_at = datetime.now(timezone.utc)
+            session.commit()
+
+        except Exception as exc:
+            session.rollback()
+            try:
+                self.retry(exc=exc)
+            except self.MaxRetriesExceededError:
+                # Final failure — mark as failed
+                recipient.status = "failed"
+                recipient.error = str(exc)[:500]
+                session.commit()

@@ -9,6 +9,10 @@ from fastapi import FastAPI
 from app.core.config import settings
 from app.core.middleware import setup_middleware
 from app.core.logging import setup_logging
+# Registers every module's SQLAlchemy models on Base.metadata, regardless of
+# whether that module's own routes/service have been migrated to SQLAlchemy
+# yet — needed so cross-module FKs resolve during flush (see docstring).
+from app.shared import model_registry  # noqa: F401
 
 from app.modules.linkedin_fill.routes import router as linkedin_fill_router
 from app.modules.resume_tailor.routes import router as resume_tailor_router
