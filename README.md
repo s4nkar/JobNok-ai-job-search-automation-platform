@@ -105,20 +105,17 @@ npm install
 npm run dev
 ```
 
-**Backend:**
+**Backend:** (requires [uv](https://docs.astral.sh/uv/getting-started/installation/))
 ```bash
 cd apps/api
-python -m venv .venv
-.venv\Scripts\activate   # Windows
-# or: source .venv/bin/activate
-pip install .
-uvicorn app.main:app --reload --port 8000
+uv sync --frozen
+uv run uvicorn app.main:app --reload --port 8000
 ```
 
-**Celery worker** (required for bulk email — separate terminal, same venv):
+**Celery worker** (required for bulk email — separate terminal):
 ```bash
 cd apps/api
-celery -A app.workers.celery_app worker --loglevel=info
+uv run celery -A app.workers.celery_app worker --loglevel=info
 ```
 
 ## Environment Variables

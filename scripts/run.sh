@@ -12,13 +12,13 @@
 #                       No nginx. Source directories mounted for live changes.
 #                       NOTE: uvicorn --reload may not detect file changes on Windows
 #                       hosts with Docker Desktop (WSL2 inotify limitation). Run
-#                       './run.sh restart fastapi' to manually restart the container.
+#                       './run.sh restart api' to manually restart the container.
 #
 # OTHER
-#   ./run.sh logs [svc] Tail logs. Scope to: fastapi | nextjs | celery | redis | nginx
+#   ./run.sh logs [svc] Tail logs. Scope to: api | nextjs | celery | redis | nginx | postgres
 #   ./run.sh restart    Stop then start in production mode.
 #   ./run.sh ps         Show container status and health checks.
-#   ./run.sh shell [s]  Open a shell inside a container (default: fastapi).
+#   ./run.sh shell [s]  Open a shell inside a container (default: api).
 #   ./run.sh down       Stop all containers.
 #   ./run.sh clean      Full wipe — containers + volumes (asks for confirmation).
 #   ./run.sh help       Show this message.
@@ -201,7 +201,7 @@ cmd_dev() {
   echo ""
   echo "  Source changes are picked up instantly — no rebuild needed."
   echo "  NOTE: On Windows, uvicorn --reload may not detect changes."
-  echo "        Use './run.sh restart fastapi' if a change is missed."
+  echo "        Use './run.sh restart api' if a change is missed."
 }
 
 cmd_logs() {
@@ -227,8 +227,8 @@ cmd_ps() {
 }
 
 cmd_shell() {
-  # $1 is the optional service name (passed from dispatch as "${2:-fastapi}")
-  local service="${1:-fastapi}"
+  # $1 is the optional service name (passed from dispatch as "${2:-api}")
+  local service="${1:-api}"
   info "Opening shell in ${service}..."
   docker compose exec "$service" /bin/sh
 }
@@ -264,10 +264,10 @@ cmd_help() {
     ./run.sh dev            Dev mode — FastAPI hot-reload on :8000, Next.js on :3000.
                             Source directories mounted. No nginx.
 
-    ./run.sh logs [service] Tail logs. Scope to: fastapi | nextjs | celery | redis | nginx
+    ./run.sh logs [service] Tail logs. Scope to: api | nextjs | celery | redis | nginx | postgres
     ./run.sh restart        Stop then start in production mode.
     ./run.sh ps             Show container status and health.
-    ./run.sh shell [svc]    Shell into a container (default: fastapi).
+    ./run.sh shell [svc]    Shell into a container (default: api).
     ./run.sh down           Stop all containers.
     ./run.sh clean          Full wipe — containers + volumes (asks for confirmation).
     ./run.sh help           Show this message.

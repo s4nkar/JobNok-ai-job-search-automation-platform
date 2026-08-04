@@ -47,21 +47,19 @@ npm run dev
 # Running on http://localhost:3000
 ```
 
-### 2. Backend (FastAPI)
+### 2. Backend (FastAPI) — requires [uv](https://docs.astral.sh/uv/getting-started/installation/)
 ```bash
 cd apps/api
-python -m venv .venv
-source .venv/bin/activate  # Windows: .venv\Scripts\activate
-pip install .
-uvicorn app.main:app --reload --port 8000
+uv sync --frozen
+uv run uvicorn app.main:app --reload --port 8000
 # Running on http://localhost:8000
 ```
 
 ### 3. Celery Worker (Required for Bulk Email)
-In a separate terminal, within the activated backend virtual environment:
+In a separate terminal:
 ```bash
 cd apps/api
-celery -A app.workers.celery_app worker --loglevel=info
+uv run celery -A app.workers.celery_app worker --loglevel=info
 ```
 
 ---

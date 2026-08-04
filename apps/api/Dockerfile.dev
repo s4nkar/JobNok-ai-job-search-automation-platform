@@ -1,5 +1,7 @@
 FROM python:3.12-slim
 
+COPY --from=ghcr.io/astral-sh/uv:0.12.1 /uv /uvx /bin/
+
 WORKDIR /app
 
 # WeasyPrint system dependencies
@@ -16,11 +18,14 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     fonts-liberation \
     && rm -rf /var/lib/apt/lists/*
 
-COPY pyproject.toml .
-# Stub package dir so setuptools' packages.find is satisfied at build time —
-# the real source is bind-mounted over /app at container start (see below),
-# shadowing this stub entirely. We only need this step to install dependencies.
-RUN mkdir -p app && touch app/__init__.py && pip install --no-cache-dir .
+ENV UV_COMPILE_BYTECODE=1 UV_LINK_MODE=copy
+
+COPY pyproject.toml uv.lock ./
+# --no-install-project: dependencies only, skip building/installing our own
+# package — the real source is bind-mounted over /app at container start (see
+# below) and runs via cwd, not an installed copy, so there's nothing to shadow.
+RUN uv sync --frozen --no-install-project
 
 # Source is mounted at runtime via docker-compose.dev.yml — no COPY . .
+ENV PATH="/app/.venv/bin:$PATH"
 CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000", "--reload"]

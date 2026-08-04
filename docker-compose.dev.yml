@@ -11,9 +11,9 @@
 #     this local instance is dev-only and never touches production data.
 #
 # Volume notes:
-#   - api_packages: named volume isolates container's pip-installed packages
-#     from the host's ./apps/api directory. Prevents case-insensitive filesystem
-#     conflicts (Windows) and accidental host .venv shadowing site-packages.
+#   - api_venv: named volume isolates the container's uv-managed virtualenv
+#     (/app/.venv, built at image-build time) from the host's ./apps/api bind
+#     mount, which would otherwise shadow/erase it at container start.
 #   - /app/node_modules: anonymous volume prevents the host ./apps/web mount
 #     from clobbering the container-installed node_modules.
 #   - postgres_data: persists the local dev DB across restarts. Delete this
@@ -51,14 +51,14 @@ services:
       retries: 5
     restart: unless-stopped
 
-  fastapi:
+  api:
     build:
       context: ./apps/api
       dockerfile: Dockerfile.dev
     volumes:
       - ./apps/api:/app
-      # Isolate pip packages from the host directory (see note above)
-      - api_packages:/usr/local/lib/python3.12/site-packages
+      # Isolate the uv-managed venv from the host directory (see note above)
+      - api_venv:/app/.venv
     ports:
       - "8000:8000"
     depends_on:
@@ -74,7 +74,7 @@ services:
       dockerfile: Dockerfile.dev
     volumes:
       - ./apps/api:/app
-      - api_packages:/usr/local/lib/python3.12/site-packages
+      - api_venv:/app/.venv
     depends_on:
       postgres:
         condition: service_healthy
@@ -92,10 +92,10 @@ services:
       - "3000:3000"
     environment:
       - NEXT_PUBLIC_APP_URL=http://localhost:3000
-      # Server-side only — used by Next.js rewrites to reach FastAPI inside Docker.
+      # Server-side only — used by Next.js rewrites to reach the API inside Docker.
       # Never exposed to the browser (no NEXT_PUBLIC_ prefix).
-      - BACKEND_URL=http://fastapi:8000
+      - BACKEND_URL=http://api:8000
 
 volumes:
-  api_packages:
+  api_venv:
   postgres_data:
