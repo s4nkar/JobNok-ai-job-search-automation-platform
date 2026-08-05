@@ -6,15 +6,20 @@
 #   - Celery:   source mounted
 #   - Next.js:  source mounted, npm run dev, port 3000 exposed directly
 #   - nginx:    disabled (dev hits services directly on their native ports)
+#   - Postgres: local throwaway Postgres for SQLAlchemy/Alembic dev work.
+#     Production points DATABASE_URL at the real Supabase Postgres instead —
+#     this local instance is dev-only and never touches production data.
 #
 # Volume notes:
-#   - backend_packages: named volume isolates container's pip-installed packages
-#     from the host's ./backend directory. Prevents case-insensitive filesystem
-#     conflicts (Windows) and accidental host .venv shadowing site-packages.
-#   - /app/node_modules: anonymous volume prevents the host ./frontend mount
+#   - api_venv: named volume isolates the container's uv-managed virtualenv
+#     (/app/.venv, built at image-build time) from the host's ./apps/api bind
+#     mount, which would otherwise shadow/erase it at container start.
+#   - /app/node_modules: anonymous volume prevents the host ./apps/web mount
 #     from clobbering the container-installed node_modules.
+#   - postgres_data: persists the local dev DB across restarts. Delete this
+#     volume to reset to a fresh schema (re-runs docker-entrypoint-initdb.d).
 #
-# APP_URL override: the base docker-compose.yml reads APP_URL from backend/.env.
+# APP_URL override: the base docker-compose.yml reads APP_URL from apps/api/.env.
 # The environment: block below takes precedence for dev, setting it to localhost:3000
 # so FastAPI's CORS allows the browser origin. If you customise APP_URL in .env,
 # update the value below to match.
@@ -23,41 +28,74 @@ services:
   nginx:
     profiles: ["disabled"]
 
-  fastapi:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: devpassword
+      POSTGRES_DB: quickjob
+    ports:
+      - "5433:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      # Runs once against an empty data dir, in filename order: stub Supabase's
+      # auth.users (FK target for profiles.id), then the real app schema.
+      - ./docker/postgres-init/00-stub-auth.sql:/docker-entrypoint-initdb.d/00-stub-auth.sql:ro
+      - ./supabase/schema.sql:/docker-entrypoint-initdb.d/01-schema.sql:ro
+    networks:
+      - backend-net
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+    restart: unless-stopped
+
+  api:
     build:
-      context: ./backend
+      context: ./apps/api
       dockerfile: Dockerfile.dev
     volumes:
-      - ./backend:/app
-      # Isolate pip packages from the host directory (see note above)
-      - backend_packages:/usr/local/lib/python3.12/site-packages
+      - ./apps/api:/app
+      # Isolate the uv-managed venv from the host directory (see note above)
+      - api_venv:/app/.venv
     ports:
       - "8000:8000"
+    depends_on:
+      postgres:
+        condition: service_healthy
     environment:
       - APP_URL=http://localhost:3000
+      - DATABASE_URL=postgresql://postgres:devpassword@postgres:5432/quickjob
 
   celery:
     build:
-      context: ./backend
+      context: ./apps/api
       dockerfile: Dockerfile.dev
     volumes:
-      - ./backend:/app
-      - backend_packages:/usr/local/lib/python3.12/site-packages
+      - ./apps/api:/app
+      - api_venv:/app/.venv
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      - DATABASE_URL=postgresql://postgres:devpassword@postgres:5432/quickjob
 
   nextjs:
     build:
-      context: ./frontend
-      dockerfile: Dockerfile.dev
+      context: .
+      dockerfile: apps/web/Dockerfile.dev
     volumes:
-      - ./frontend:/app
-      - /app/node_modules
+      - ./apps/web:/repo/apps/web
+      - /repo/apps/web/node_modules
     ports:
       - "3000:3000"
     environment:
       - NEXT_PUBLIC_APP_URL=http://localhost:3000
-      # Server-side only — used by Next.js rewrites to reach FastAPI inside Docker.
+      # Server-side only — used by Next.js rewrites to reach the API inside Docker.
       # Never exposed to the browser (no NEXT_PUBLIC_ prefix).
-      - BACKEND_URL=http://fastapi:8000
+      - BACKEND_URL=http://api:8000
 
 volumes:
-  backend_packages:
+  api_venv:
+  postgres_data:

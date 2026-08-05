@@ -34,7 +34,7 @@ Nginx
   | HTTP
   v
 Railway (FastAPI)
-  |-- Supabase (PostgreSQL + Auth + RLS)
+  |-- Supabase (PostgreSQL + Auth) — accessed via SQLAlchemy + Alembic
   |-- Upstash Redis (rate limits + Celery broker)
   |-- Celery Worker (bulk email, background tasks)
   |-- Groq / Cerebras / HuggingFace (AI generation, fallback chain)
@@ -49,11 +49,11 @@ The frontend is UI-only. All business logic lives in FastAPI. Next.js `/api/*` r
 
 **Frontend:** Next.js 14, TypeScript, Tailwind CSS, shadcn/ui, Zustand, React Hook Form, Zod
 
-**Backend:** FastAPI, Python 3.11, Pydantic v2, Celery, PyMuPDF, WeasyPrint, httpx, Sentry
+**Backend:** FastAPI, Python 3.12, Pydantic v2, SQLAlchemy (async) + Alembic, Celery, PyMuPDF, WeasyPrint, httpx, Sentry — modular monolith at `apps/api/app/`, one module per feature under `app/modules/`
 
-**AI:** Groq (primary), Cerebras (fallback), HuggingFace (last resort) via `lib/ai_provider.py`
+**AI:** Groq (primary), Cerebras (fallback), HuggingFace (last resort) via `app/ai/llm/provider.py`
 
-**Embeddings:** Jina (primary), Cohere (fallback) via `lib/embeddings.py` — used for resume/JD semantic matching
+**Embeddings:** Jina (primary), Cohere (fallback) via `app/ai/embeddings.py` — used for resume/JD semantic matching
 
 **Infrastructure:** Vercel, Railway, Supabase, Upstash Redis, Resend, Cloudflare
 
@@ -74,13 +74,11 @@ If embeddings fail, the matcher falls back to keyword-only and sets `degraded: t
 
 ## Local Setup
 
-### Docker (recommended)
-
 ```bash
 git clone <repo>
-cp frontend/.env.example frontend/.env.local
-cp backend/.env.example backend/.env
-# fill in keys: Supabase, Upstash, Resend, Groq, Jina
+cp apps/web/.env.example apps/web/.env.local
+cp apps/api/.env.example apps/api/.env
+# fill in keys: Supabase, Upstash, Resend, Groq, Jina, DATABASE_URL
 ```
 
 Run the schema in your Supabase SQL editor:
@@ -88,42 +86,48 @@ Run the schema in your Supabase SQL editor:
 supabase/schema.sql
 ```
 
-Start all services:
+Three ways to run it locally, pick one:
+
+### 1. Fully Dockerized (recommended for a first run)
 ```bash
-docker-compose up --build
+pnpm dev          # or: docker compose -f docker-compose.yml -f docker-compose.dev.yml up --build
+```
+Everything — Postgres, Redis, the API, Celery, and Next.js — runs in Docker with hot reload via bind mounts.
+
+### 2. Native frontend + Dockerized backend (`dev:local`)
+```bash
+pnpm dev:local
+```
+Runs Postgres/Redis/API/Celery in Docker (same as above) but Next.js natively on the host via `pnpm --filter quickjob-frontend dev`. Sidesteps a real limitation of option 1 on Windows: Docker Desktop's WSL2 inotify layer can miss file-change events on bind-mounted volumes, so hot reload for both the API and Next.js can silently stop working. Requires [pnpm](https://pnpm.io/installation) (Node ≥ 22) on the host — `corepack enable` picks up the pinned version automatically.
+
+### 3. Fully manual (no Docker)
+
+**Frontend:** (requires [pnpm](https://pnpm.io/installation), Node ≥ 22)
+```bash
+pnpm install           # from the repo root — it's a pnpm workspace
+cd apps/web
+pnpm dev
+```
+
+**Backend:** (requires [uv](https://docs.astral.sh/uv/getting-started/installation/))
+```bash
+cd apps/api
+uv sync --frozen
+uv run uvicorn app.main:app --reload --port 8000
+```
+
+**Celery worker** (required for bulk email — separate terminal):
+```bash
+cd apps/api
+uv run celery -A app.workers.celery_app worker --loglevel=info
 ```
 
 - Frontend: http://localhost:3000
 - Backend API docs: http://localhost:8000/docs
 
-### Manual (without Docker)
-
-**Frontend:**
-```bash
-cd frontend
-npm install
-npm run dev
-```
-
-**Backend:**
-```bash
-cd backend
-python -m venv .venv
-.venv\Scripts\activate   # Windows
-# or: source .venv/bin/activate
-pip install -r requirements.txt
-uvicorn main:app --reload --port 8000
-```
-
-**Celery worker** (required for bulk email — separate terminal, same venv):
-```bash
-cd backend
-celery -A workers.email_worker worker --loglevel=info
-```
-
 ## Environment Variables
 
-### Frontend (`frontend/.env.local`)
+### Frontend (`apps/web/.env.local`)
 
 | Variable | Purpose |
 |----------|---------|
@@ -133,13 +137,14 @@ celery -A workers.email_worker worker --loglevel=info
 
 No API keys or secrets belong in frontend env vars.
 
-### Backend (`backend/.env`)
+### Backend (`apps/api/.env`)
 
 | Variable | Purpose |
 |----------|---------|
-| `SUPABASE_URL` | Supabase project URL |
+| `SUPABASE_URL` | Supabase project URL (Auth only — not used as a query client) |
 | `SUPABASE_SERVICE_KEY` | Service role key (server-only) |
 | `SUPABASE_JWT_SECRET` | JWT secret for token verification |
+| `DATABASE_URL` | Direct Postgres connection string (SQLAlchemy/Alembic) — same Supabase project, `postgresql://postgres:[password]@db.[project-ref].supabase.co:5432/postgres` |
 | `UPSTASH_REDIS_URL` | Redis URL for rate limits + Celery |
 | `GROQ_API_KEY` | Primary AI provider |
 | `CEREBRAS_API_KEY` | AI fallback |
@@ -153,7 +158,7 @@ No API keys or secrets belong in frontend env vars.
 
 ## Database
 
-Core tables in Supabase PostgreSQL, all with Row Level Security:
+Core tables in Supabase PostgreSQL, managed via SQLAlchemy models + Alembic migrations (`apps/api/app/modules/<feature>/models.py`, `apps/api/alembic/`). RLS policies remain defined in `supabase/schema.sql` as defense-in-depth, but the app connects with an RLS-bypassing role — the real enforcement is explicit `user_id` filtering in every query (see `UserScopedRepository`):
 
 | Table | Purpose |
 |-------|---------|
@@ -168,7 +173,7 @@ Core tables in Supabase PostgreSQL, all with Row Level Security:
 | `opportunity_artifacts` | AI-generated content linked to opportunities |
 | `linkedin_cache` | Shared LinkedIn profile cache, no RLS, service key only |
 
-Every FastAPI endpoint re-checks `user_id` from the JWT explicitly. RLS is a second layer, not the only layer.
+Every FastAPI endpoint re-checks `user_id` from the JWT explicitly — this is the primary enforcement layer, not RLS.
 
 ## Security Rules
 
@@ -192,11 +197,11 @@ Every FastAPI endpoint re-checks `user_id` from the JWT explicitly. RLS is a sec
 
 ## Adding a New Tool
 
-1. Add frontend route under `app/`
+1. Add frontend route under `apps/web/app/`
 2. Add to sidebar navigation
 3. Set per-user rate limit key in Redis config
-4. Add FastAPI router under `backend/routers/`
-5. Add DB table + RLS policy if persistent data is needed
+4. Add a module under `apps/api/app/modules/<feature>/` (`routes.py`, `service.py`, `schemas.py`, `models.py`) — register the router in `apps/api/app/main.py`
+5. Add a SQLAlchemy model + `alembic revision --autogenerate` if persistent data is needed
 
 ## Documentation
 

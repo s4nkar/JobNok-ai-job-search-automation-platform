@@ -2,22 +2,23 @@
 node_modules/
 .pnp
 .pnp.js
+.pnpm-store/
 
 # Next.js
-frontend/.next/
-frontend/out/
-frontend/build/
+apps/web/.next/
+apps/web/out/
+apps/web/build/
 
 # Python
-backend/__pycache__/
-backend/**/__pycache__/
-backend/*.pyc
-backend/*.pyo
-backend/.venv/
-backend/venv/
-backend/.pytest_cache/
-backend/celerybeat-schedule
-backend/celerybeat.pid
+apps/api/__pycache__/
+apps/api/**/__pycache__/
+apps/api/*.pyc
+apps/api/*.pyo
+apps/api/.venv/
+apps/api/venv/
+apps/api/.pytest_cache/
+apps/api/celerybeat-schedule
+apps/api/celerybeat.pid
 
 # Environment
 .env
@@ -25,9 +26,9 @@ backend/celerybeat.pid
 .env.development.local
 .env.test.local
 .env.production.local
-frontend/.env
-frontend/.env.local
-backend/.env
+apps/web/.env
+apps/web/.env.local
+apps/api/.env
 
 # Logs
 *.log
@@ -46,7 +47,7 @@ Thumbs.db
 *.swo
 
 # Uploads (temp)
-backend/uploads/
+apps/api/uploads/
 
 # Coverage
 coverage/

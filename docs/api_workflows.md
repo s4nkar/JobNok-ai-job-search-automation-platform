@@ -7,7 +7,7 @@ QuickJob provides 11 distinct AI-powered tools and features. All tools communica
 2. **Backend Validation:** FastAPI validates the JWT, ensuring the `user_id` is present.
 3. **Rate Limiting:** Redis checks if the user has exceeded their usage limits for the specific tool.
 4. **Processing:** The backend executes the requested logic (e.g., scraping, prompting the LLM).
-5. **Database Interaction:** Results are read from or saved to Supabase (secured by RLS).
+5. **Database Interaction:** Results are read from or saved to Postgres via SQLAlchemy (Supabase-hosted). App-level `user_id` filtering is the primary access control; RLS is a defense-in-depth backstop, not the enforcement layer.
 
 ---
 
@@ -95,8 +95,8 @@ QuickJob provides 11 distinct AI-powered tools and features. All tools communica
 
 ---
 
-## AI Provider Abstraction (`ai_provider.py`)
-All AI interactions are routed through a central `ai_provider.py` module. This module abstracts the underlying LLM provider.
+## AI Provider Abstraction (`app/ai/llm/provider.py`)
+All AI interactions are routed through a central `provider.py` module. This module abstracts the underlying LLM provider.
 - Governed by the `AI_PROVIDER` environment variable.
 - Supported providers: Anthropic (`claude-sonnet`) and HuggingFace (`Mistral-7B`).
 - If an AI call fails, the system is designed to retry before throwing an error to the user.

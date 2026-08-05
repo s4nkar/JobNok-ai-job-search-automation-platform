@@ -1,0 +1,24 @@
+{
+  "name": "quickjob",
+  "private": true,
+  "version": "1.0.0",
+  "packageManager": "pnpm@11.20.0",
+  "scripts": {
+    "dev": "docker compose -f docker-compose.yml -f docker-compose.dev.yml up --build",
+    "dev:local": "concurrently -n docker,web -c yellow,blue \"docker compose -f docker-compose.yml -f docker-compose.dev.yml -f docker-compose.local.yml up --build\" \"pnpm --filter quickjob-frontend dev\"",
+    "dev:api": "docker compose -f docker-compose.yml -f docker-compose.dev.yml up --build postgres redis api celery",
+    "up": "docker compose up --build -d",
+    "down": "docker compose down",
+    "logs": "docker compose logs -f",
+    "api:migrate": "docker compose exec api alembic upgrade head",
+    "api:migrate:new": "docker compose exec api alembic revision --autogenerate -m",
+    "api:migrate:down": "docker compose exec api alembic downgrade -1",
+    "api:migrate:current": "docker compose exec api alembic current",
+    "build": "pnpm --filter quickjob-frontend build",
+    "lint": "pnpm --filter quickjob-frontend lint",
+    "typecheck": "pnpm --filter quickjob-frontend type-check"
+  },
+  "devDependencies": {
+    "concurrently": "^9.1.0"
+  }
+}

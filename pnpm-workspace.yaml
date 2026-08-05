@@ -1,0 +1,10 @@
+packages:
+  - "apps/*"
+  - "packages/*"
+
+# Packages allowed to run install/postinstall scripts (pnpm 11's
+# strictDepBuilds policy blocks all others by default). unrs-resolver is a
+# transitive dep of eslint-config-next (via eslint-import-resolver-typescript)
+# — dev-only tooling, needs its native binary built.
+allowBuilds:
+  unrs-resolver: true

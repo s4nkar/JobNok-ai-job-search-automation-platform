@@ -559,6 +559,13 @@ create table if not exists public.startup_scout_contacts (
   created_at      timestamptz not null default now()
 );
 
+-- Contact-verification fields (Apollo/web-crawl enrichment stage 2). Added
+-- after the table above was first created — documented here so schema.sql
+-- and the app's SQLAlchemy models stay in sync with the live schema.
+alter table public.startup_scout_contacts add column if not exists source_url text;
+alter table public.startup_scout_contacts add column if not exists is_verified boolean;
+alter table public.startup_scout_contacts add column if not exists verification_url text;
+
 alter table public.startup_scout_contacts enable row level security;
 
 create policy "Users can view own scout contacts"

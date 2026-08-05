@@ -4,9 +4,9 @@ services:
     ports:
       - "80:80"
     volumes:
-      - ./nginx/nginx.conf:/etc/nginx/nginx.conf:ro
+      - ./docker/nginx/nginx.conf:/etc/nginx/nginx.conf:ro
     depends_on:
-      fastapi:
+      api:
         condition: service_healthy
       nextjs:
         condition: service_healthy
@@ -15,11 +15,11 @@ services:
       - backend-net
     restart: unless-stopped
 
-  fastapi:
+  api:
     build:
-      context: ./backend
+      context: ./apps/api
     env_file:
-      - ./backend/.env
+      - ./apps/api/.env
     expose:
       - "8000"
     depends_on:
@@ -42,10 +42,10 @@ services:
 
   celery:
     build:
-      context: ./backend
-    command: celery -A workers.email_worker worker --loglevel=info
+      context: ./apps/api
+    command: celery -A app.workers.celery_app worker --loglevel=info
     env_file:
-      - ./backend/.env
+      - ./apps/api/.env
     depends_on:
       redis:
         condition: service_healthy
@@ -60,7 +60,8 @@ services:
 
   nextjs:
     build:
-      context: ./frontend
+      context: .
+      dockerfile: apps/web/Dockerfile
       args:
         NEXT_PUBLIC_SUPABASE_URL: ${NEXT_PUBLIC_SUPABASE_URL}
         NEXT_PUBLIC_SUPABASE_ANON_KEY: ${NEXT_PUBLIC_SUPABASE_ANON_KEY}
@@ -78,9 +79,9 @@ services:
         NEXT_PUBLIC_BULK_EMAIL_DEFAULT_DELAY: ${NEXT_PUBLIC_BULK_EMAIL_DEFAULT_DELAY}
         NEXT_PUBLIC_LINKEDIN_CACHE_TTL_DAYS: ${NEXT_PUBLIC_LINKEDIN_CACHE_TTL_DAYS}
     env_file:
-      - ./frontend/.env.local
+      - ./apps/web/.env.local
     environment:
-      BACKEND_URL: http://fastapi:8000
+      BACKEND_URL: http://api:8000
     expose:
       - "3000"
     networks:
