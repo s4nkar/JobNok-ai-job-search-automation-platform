@@ -83,11 +83,11 @@ services:
 
   nextjs:
     build:
-      context: ./apps/web
-      dockerfile: Dockerfile.dev
+      context: .
+      dockerfile: apps/web/Dockerfile.dev
     volumes:
-      - ./apps/web:/app
-      - /app/node_modules
+      - ./apps/web:/repo/apps/web
+      - /repo/apps/web/node_modules
     ports:
       - "3000:3000"
     environment:

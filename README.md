@@ -74,8 +74,6 @@ If embeddings fail, the matcher falls back to keyword-only and sets `degraded: t
 
 ## Local Setup
 
-### Docker (recommended)
-
 ```bash
 git clone <repo>
 cp apps/web/.env.example apps/web/.env.local
@@ -88,21 +86,27 @@ Run the schema in your Supabase SQL editor:
 supabase/schema.sql
 ```
 
-Start all services:
+Three ways to run it locally, pick one:
+
+### 1. Fully Dockerized (recommended for a first run)
 ```bash
-docker-compose up --build
+pnpm dev          # or: docker compose -f docker-compose.yml -f docker-compose.dev.yml up --build
 ```
+Everything — Postgres, Redis, the API, Celery, and Next.js — runs in Docker with hot reload via bind mounts.
 
-- Frontend: http://localhost:3000
-- Backend API docs: http://localhost:8000/docs
-
-### Manual (without Docker)
-
-**Frontend:**
+### 2. Native frontend + Dockerized backend (`dev:local`)
 ```bash
+pnpm dev:local
+```
+Runs Postgres/Redis/API/Celery in Docker (same as above) but Next.js natively on the host via `pnpm --filter quickjob-frontend dev`. Sidesteps a real limitation of option 1 on Windows: Docker Desktop's WSL2 inotify layer can miss file-change events on bind-mounted volumes, so hot reload for both the API and Next.js can silently stop working. Requires [pnpm](https://pnpm.io/installation) (Node ≥ 22) on the host — `corepack enable` picks up the pinned version automatically.
+
+### 3. Fully manual (no Docker)
+
+**Frontend:** (requires [pnpm](https://pnpm.io/installation), Node ≥ 22)
+```bash
+pnpm install           # from the repo root — it's a pnpm workspace
 cd apps/web
-npm install
-npm run dev
+pnpm dev
 ```
 
 **Backend:** (requires [uv](https://docs.astral.sh/uv/getting-started/installation/))
@@ -117,6 +121,9 @@ uv run uvicorn app.main:app --reload --port 8000
 cd apps/api
 uv run celery -A app.workers.celery_app worker --loglevel=info
 ```
+
+- Frontend: http://localhost:3000
+- Backend API docs: http://localhost:8000/docs
 
 ## Environment Variables
 

@@ -1,0 +1,19 @@
+# "Native frontend + Dockerized backend" overlay — layer on top of the dev
+# overlay to run everything EXCEPT Next.js in Docker:
+#   docker compose -f docker-compose.yml -f docker-compose.dev.yml -f docker-compose.local.yml up --build
+# (or just `pnpm dev:local`, which does this plus starts `pnpm dev` natively
+# in apps/web via concurrently)
+#
+# Why: avoids the Windows Docker Desktop / WSL2 inotify limitation noted in
+# docker-compose.dev.yml, where uvicorn/Next.js --reload can miss file-change
+# events on a bind-mounted volume. Running Next.js natively sidesteps it for
+# the frontend. The API still runs in Docker with its own --reload; this only
+# disables the nextjs *container* — nginx is already disabled by the dev overlay.
+#
+# Next.js reaches the Dockerized API via localhost:8000 (already exposed by
+# docker-compose.dev.yml's api service) — next.config.mjs's rewrite defaults
+# to http://localhost:8000 when BACKEND_URL is unset, which it is here.
+
+services:
+  nextjs:
+    profiles: ["disabled"]

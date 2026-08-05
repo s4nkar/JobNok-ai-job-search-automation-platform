@@ -39,11 +39,11 @@ QuickJob provides a comprehensive `docker-compose.yml` that orchestrates all loc
 
 If you prefer to run services individually without Docker:
 
-### 1. Frontend
+### 1. Frontend — requires [pnpm](https://pnpm.io/installation) (Node ≥ 22)
 ```bash
+pnpm install   # from the repo root — it's a pnpm workspace
 cd apps/web
-npm install
-npm run dev
+pnpm dev
 # Running on http://localhost:3000
 ```
 
@@ -83,6 +83,6 @@ Ensure both the FastAPI web service and the Celery worker service share the exac
 Schema changes go through Alembic, not manual `schema.sql` edits, going forward — `alembic revision --autogenerate` + `alembic upgrade head`. On the **first** deploy after this migration, all 13 tables already exist in production (created by hand-applying `supabase/schema.sql` over time), so run `alembic stamp head` once — **not** `alembic upgrade head` — to tell Alembic "the DB already matches this baseline" without it trying to recreate anything. From then on, `alembic upgrade head` runs as part of the normal release step. `supabase/schema.sql` remains the reference for RLS policies, triggers, and grants, which aren't managed by Alembic.
 
 ### Post-Migration Manual Steps (one-time)
-This repo was reorganized from `backend`/`frontend` to `apps/api`/`apps/web`. Since Railway and Vercel projects are configured via their dashboards (no config files checked into this repo), update each service's **Root Directory** setting once:
+This repo was reorganized from `backend`/`frontend` to `apps/api`/`apps/web`, and the frontend moved from npm to a pnpm workspace rooted at the repo root. Since Railway and Vercel projects are configured via their dashboards (no config files checked into this repo), update each service's settings once:
 - **Railway** (FastAPI service and Celery worker service): Root Directory `backend` → `apps/api`.
-- **Vercel** (frontend project): Root Directory `frontend` → `apps/web`.
+- **Vercel** (frontend project): Root Directory `frontend` → `apps/web`. Vercel auto-detects pnpm from `pnpm-lock.yaml` at the repo root and understands the monorepo layout automatically once Root Directory is set — no extra build-command config needed.

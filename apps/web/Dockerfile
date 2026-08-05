@@ -1,10 +1,17 @@
-FROM node:20-alpine AS deps
-WORKDIR /app
-COPY package.json package-lock.json* ./
-RUN npm ci
+# Build context is the repo root (not apps/web) — required so this Dockerfile
+# can see the workspace-level pnpm-lock.yaml/pnpm-workspace.yaml. See
+# docker-compose.yml: context: . / dockerfile: apps/web/Dockerfile
 
-FROM node:20-alpine AS builder
-WORKDIR /app
+FROM node:22-alpine AS deps
+WORKDIR /repo
+RUN corepack enable && corepack prepare pnpm@11.20.0 --activate
+COPY pnpm-workspace.yaml package.json pnpm-lock.yaml ./
+COPY apps/web/package.json ./apps/web/package.json
+RUN pnpm install --frozen-lockfile
+
+FROM node:22-alpine AS builder
+WORKDIR /repo
+RUN corepack enable && corepack prepare pnpm@11.20.0 --activate
 
 ARG NEXT_PUBLIC_SUPABASE_URL
 ARG NEXT_PUBLIC_SUPABASE_ANON_KEY
@@ -38,12 +45,13 @@ ENV NEXT_PUBLIC_BULK_EMAIL_MIN_DELAY=$NEXT_PUBLIC_BULK_EMAIL_MIN_DELAY
 ENV NEXT_PUBLIC_BULK_EMAIL_DEFAULT_DELAY=$NEXT_PUBLIC_BULK_EMAIL_DEFAULT_DELAY
 ENV NEXT_PUBLIC_LINKEDIN_CACHE_TTL_DAYS=$NEXT_PUBLIC_LINKEDIN_CACHE_TTL_DAYS
 
-COPY --from=deps /app/node_modules ./node_modules
+COPY --from=deps /repo/node_modules ./node_modules
+COPY --from=deps /repo/apps/web/node_modules ./apps/web/node_modules
 COPY . .
 
-RUN npm run build
+RUN pnpm --filter quickjob-frontend build
 
-FROM node:20-alpine AS runner
+FROM node:22-alpine AS runner
 WORKDIR /app
 ENV NODE_ENV=production
 ENV HOSTNAME=0.0.0.0
@@ -51,10 +59,13 @@ ENV PORT=3000
 
 RUN addgroup --system app && adduser --system --ingroup app app
 
-COPY --from=builder --chown=app:app /app/.next/standalone ./
-COPY --from=builder --chown=app:app /app/.next/static ./.next/static
-COPY --from=builder --chown=app:app /app/public ./public
+# Next.js standalone output preserves the monorepo-relative path structure
+# when built inside a pnpm workspace (server.js lands at apps/web/server.js,
+# not flat at the root) — copy targets mirror that nesting.
+COPY --from=builder --chown=app:app /repo/apps/web/.next/standalone ./
+COPY --from=builder --chown=app:app /repo/apps/web/.next/static ./apps/web/.next/static
+COPY --from=builder --chown=app:app /repo/apps/web/public ./apps/web/public
 
 USER app
 EXPOSE 3000
-CMD ["node", "server.js"]
+CMD ["node", "apps/web/server.js"]
