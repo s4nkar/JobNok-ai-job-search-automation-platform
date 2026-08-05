@@ -93,8 +93,6 @@ async def create_campaign(db: AsyncSession, user_id: str, body: CreateCampaignRe
     ]
     db.add_all(recipients)
     await db.flush()
-    for r in recipients:
-        await db.refresh(r)
 
     for i, recipient in enumerate(recipients):
         delay_seconds = i * body.delay_seconds

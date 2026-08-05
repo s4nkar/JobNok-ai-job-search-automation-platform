@@ -113,9 +113,12 @@ async def tailor_resume(
     if cached and cached.get("text"):
         resume_text = cached["text"]
     else:
-        try:
+        def _extract_text() -> str:
             doc = fitz.open(stream=pdf_bytes, filetype="pdf")
-            resume_text = "\n".join(page.get_text() for page in doc)
+            return "\n".join(page.get_text() for page in doc)
+
+        try:
+            resume_text = await asyncio.to_thread(_extract_text)
         except Exception:
             raise HTTPException(status_code=400, detail="Could not parse PDF. Ensure it's a valid PDF file.")
         await update_resume_cache(user_id, resume_hash, text=resume_text)
