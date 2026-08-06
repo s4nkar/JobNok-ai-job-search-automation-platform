@@ -155,7 +155,6 @@ class Settings(BaseSettings):
     upstash_redis_rest_token: str = ""
     # TCP Redis URL for Celery broker/backend (can reuse Upstash rediss:// URL)
     redis_url: str = "redis://localhost:6379/0"
-    redis_password: str = ""
 
     # ── Resend ───────────────────────────────────────────────────────────────
     resend_api_key: str = ""
