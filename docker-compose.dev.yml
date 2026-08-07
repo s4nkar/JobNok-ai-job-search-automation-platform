@@ -67,6 +67,8 @@ services:
     environment:
       - APP_URL=http://localhost:3000
       - DATABASE_URL=postgresql://postgres:devpassword@postgres:5432/quickjob
+      # Local throwaway Postgres has no pooler — same URL serves both roles.
+      - MIGRATIONS_DATABASE_URL=postgresql://postgres:devpassword@postgres:5432/quickjob
 
   celery:
     build:

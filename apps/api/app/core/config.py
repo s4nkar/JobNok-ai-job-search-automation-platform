@@ -139,6 +139,11 @@ class Settings(BaseSettings):
     # RLS is not the enforcement layer here.
     database_url: str = ""
 
+    # Session-pooler / direct connection to the same Supabase project (port 5432,
+    # not the transaction pooler's 6543). DDL (CREATE INDEX, ALTER TABLE, etc.) is
+    # unreliable through the transaction pooler, so Alembic needs this instead.
+    migrations_database_url: str = ""
+
     @property
     def database_url_async(self) -> str:
         """asyncpg driver — used by the FastAPI app (app/core/database.py)."""
@@ -146,8 +151,13 @@ class Settings(BaseSettings):
 
     @property
     def database_url_sync(self) -> str:
-        """psycopg driver — used by Celery tasks (no event loop) and Alembic."""
+        """psycopg driver — used by Celery tasks (no event loop)."""
         return self.database_url.replace("postgresql://", "postgresql+psycopg://", 1)
+
+    @property
+    def migrations_database_url_sync(self) -> str:
+        """psycopg driver over the session-pooler/direct URL — used by Alembic only."""
+        return self.migrations_database_url.replace("postgresql://", "postgresql+psycopg://", 1)
 
     # ── Upstash Redis ────────────────────────────────────────────────────────
     # REST-based Redis for rate limiting — get from Upstash console

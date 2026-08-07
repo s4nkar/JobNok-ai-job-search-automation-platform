@@ -78,7 +78,8 @@ export default function LoginFormClient() {
   // ── Forgot password view ──────────────────────────────────────────
   if (showForgot) {
     return (
-      <div className="bg-white/5 backdrop-blur-sm border border-white/10 rounded-2xl p-8 shadow-2xl">
+      <div className="relative rounded-2xl p-8 shadow-2xl bg-white/[0.04] border border-white/10 backdrop-blur-xl">
+        <div className="absolute inset-x-8 top-0 h-px bg-gradient-to-r from-transparent via-white/25 to-transparent" />
         <button
           onClick={() => { setShowForgot(false); setForgotSent(false); setForgotEmail('') }}
           className="flex items-center gap-1.5 text-slate-400 hover:text-slate-200 text-sm mb-6 transition-colors"
@@ -91,7 +92,7 @@ export default function LoginFormClient() {
             <div className="w-12 h-12 rounded-2xl bg-emerald-500/10 flex items-center justify-center mx-auto">
               <CheckCircle className="h-6 w-6 text-emerald-400" />
             </div>
-            <h2 className="text-lg font-bold text-white">Check your email</h2>
+            <h2 className="text-lg text-white" style={{ fontFamily: 'var(--font-display)', fontWeight: 600 }}>Check your email</h2>
             <p className="text-slate-400 text-sm">
               We sent a password reset link to <strong className="text-slate-200">{forgotEmail}</strong>
             </p>
@@ -99,7 +100,7 @@ export default function LoginFormClient() {
           </div>
         ) : (
           <>
-            <h2 className="text-xl font-bold text-white mb-1">Reset your password</h2>
+            <h2 className="text-xl text-white mb-1" style={{ fontFamily: 'var(--font-display)', fontWeight: 600 }}>Reset your password</h2>
             <p className="text-slate-400 text-sm mb-6">Enter your email and we'll send a reset link.</p>
             <div className="space-y-4">
               <div className="space-y-1.5">
@@ -130,9 +131,10 @@ export default function LoginFormClient() {
 
   // ── Sign in view ──────────────────────────────────────────────────
   return (
-    <div className="bg-white/5 backdrop-blur-sm border border-white/10 rounded-2xl p-8 shadow-2xl">
+    <div className="relative rounded-2xl p-8 shadow-2xl bg-white/[0.04] border border-white/10 backdrop-blur-xl">
+      <div className="absolute inset-x-8 top-0 h-px bg-gradient-to-r from-transparent via-white/25 to-transparent" />
       <div className="mb-6">
-        <h2 className="text-xl font-bold text-white">Welcome back</h2>
+        <h2 className="text-xl text-white" style={{ fontFamily: 'var(--font-display)', fontWeight: 600 }}>Welcome back</h2>
         <p className="text-slate-400 text-sm mt-1">Sign in to continue to QuickJob</p>
       </div>
 

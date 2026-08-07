@@ -1,6 +1,10 @@
 """Alembic environment — always runs against the sync (psycopg) engine, even
 though the FastAPI app itself is async. This is standard practice; there's no
 need for an async env.py unless a real need arises.
+
+Uses MIGRATIONS_DATABASE_URL (session-pooler/direct, port 5432), not the
+transaction-pooler DATABASE_URL the app runs on — DDL is unreliable through
+transaction-mode pooling (see app/core/config.py).
 """
 
 from logging.config import fileConfig
@@ -13,7 +17,7 @@ from app.shared.models import Base
 from app.shared import model_registry  # noqa: F401 — registers every table on Base.metadata
 
 config = context.config
-config.set_main_option("sqlalchemy.url", settings.database_url_sync)
+config.set_main_option("sqlalchemy.url", settings.migrations_database_url_sync)
 
 if config.config_file_name is not None:
     fileConfig(config.config_file_name)
