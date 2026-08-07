@@ -1,7 +1,7 @@
 import uuid
 from datetime import date, datetime
 
-from sqlalchemy import ForeignKey, Text, func
+from sqlalchemy import Text, func
 from sqlalchemy.dialects.postgresql import UUID as PG_UUID, TIMESTAMP
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -11,13 +11,10 @@ from app.shared.models import Base
 class Profile(Base):
     __tablename__ = "profiles"
 
-    # No server_default — populated by the Postgres trigger on signup
-    # (handle_new_user()), not by app code. FK targets Supabase's own
-    # auth.users table (not modeled here — it's Supabase/GoTrue-managed,
-    # outside this app's SQLAlchemy metadata).
+    # No server_default — explicitly supplied by app code (the JWT's user id
+    # claim) on profile creation. No FK to any external auth-provider table.
     id: Mapped[uuid.UUID] = mapped_column(
         PG_UUID(as_uuid=True),
-        ForeignKey("auth.users.id", ondelete="CASCADE"),
         primary_key=True,
     )
     email: Mapped[str] = mapped_column(Text, nullable=False)

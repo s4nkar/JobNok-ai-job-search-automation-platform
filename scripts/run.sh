@@ -139,17 +139,11 @@ cmd_setup() {
 
   success "Environment looks good."
 
-  # ── Supabase schema reminder ───────────────────────────────────
+  # ── Schema reminder ─────────────────────────────────────────────
   echo ""
-  echo "  REMINDER: If this is your first time, apply the database schema:"
-  echo "  Open supabase/schema.sql in the Supabase SQL editor and run it."
+  echo "  REMINDER: If this is your first time against a fresh database,"
+  echo "  apply the schema after the containers are up: pnpm api:migrate"
   echo ""
-  read -r -p "  Have you applied the schema? [y/N] " schema_done
-  if [ "$schema_done" != "y" ] && [ "$schema_done" != "Y" ]; then
-    echo ""
-    echo "  Apply the schema first, then run './run.sh setup' again."
-    exit 0
-  fi
 
   # ── Build and start ────────────────────────────────────────────
   info "Building and starting all containers..."

@@ -60,7 +60,7 @@ class StartupScoutContact(Base, UUIDPKMixin, CreatedAtMixin):
     source: Mapped[str | None] = mapped_column(Text, nullable=True)
     confidence: Mapped[float | None] = mapped_column(Numeric, nullable=True)
     # Contact-verification fields (Apollo/web-crawl enrichment stage 2) — added
-    # to the live schema after the table was first created; see schema.sql.
+    # to the live schema after the table was first created.
     source_url: Mapped[str | None] = mapped_column(Text, nullable=True)
     is_verified: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
     verification_url: Mapped[str | None] = mapped_column(Text, nullable=True)

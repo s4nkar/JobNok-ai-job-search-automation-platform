@@ -1,6 +1,6 @@
 # 🏗️ System Architecture
 
-QuickJob is built on a modern, distributed architecture designed for high performance, scalability, and cost efficiency (currently free-tier optimized). The system strictly separates the user interface from business logic, utilizing a robust stack of Next.js, FastAPI, Supabase, Redis, and Celery.
+QuickJob is built on a modern, distributed architecture designed for high performance, scalability, and cost efficiency (currently free-tier optimized). The system strictly separates the user interface from business logic, utilizing a robust stack of Next.js, FastAPI, Neon, Supabase (Auth), Redis, and Celery.
 
 ## High-Level Architecture Diagram
 
@@ -9,7 +9,7 @@ graph TD
     Client[Browser / Client] --> |HTTPS| Vercel[Vercel: Next.js Frontend]
     Vercel --> |API Calls via Proxy /api/*| Nginx[Nginx Proxy]
     Nginx --> |HTTP| FastAPI[Railway: FastAPI Backend]
-    FastAPI --> |SQLAlchemy async ORM| Supabase[(Supabase-hosted Postgres)]
+    FastAPI --> |SQLAlchemy async ORM| Neon[(Neon-hosted Postgres)]
     FastAPI --> |Cache & Rate Limits| Redis[(Upstash Redis)]
     FastAPI --> |Task Queue| Redis
     Redis --> |Consume| Celery[Celery Worker]
@@ -45,12 +45,12 @@ graph TD
 - **Role:** Reverse Proxy.
 - **Responsibilities:** In Docker/production setups, Nginx is used to safely route `/api` traffic directly to the FastAPI container, providing an additional layer of security and load balancing capabilities.
 
-### 4. Database & Auth (Supabase)
-- **Role:** Postgres host and authentication provider.
+### 4. Database (Neon) & Auth (Supabase)
+- **Role:** Neon hosts Postgres; Supabase provides the authentication provider (JWT/OAuth) only — it is not the database host.
 - **Responsibilities:**
   - Managing user sessions via JWT (verified in `app/core/security.py` — pure JWT decoding, no Supabase client dependency).
-  - Storing user data, templates, job applications, and email campaigns, accessed via SQLAlchemy async ORM.
-  - Enforcing **user_id scoping at the application layer**: every SQLAlchemy query goes through `UserScopedRepository` (`app/shared/repository.py`), which requires an explicit `user_id` filter. Postgres RLS policies (`user_id = auth.uid()`) remain defined on each table in `supabase/schema.sql` as a defense-in-depth backstop, but the app connects with an RLS-bypassing Postgres role, so app-level filtering — not RLS — is what actually isolates tenants.
+  - Storing user data, templates, job applications, and email campaigns, accessed via SQLAlchemy async ORM against Neon.
+  - Enforcing **user_id scoping at the application layer**: every SQLAlchemy query goes through `UserScopedRepository` (`app/shared/repository.py`), which requires an explicit `user_id` filter. There is no Row Level Security, no PostgREST, and no `authenticated`/`anon`/`service_role` Postgres roles — the app connects with a single ordinary role, so app-level filtering is the sole enforcement mechanism, not a backstop alongside anything else.
 
 ### 5. Cache & Queues (Redis via Upstash)
 - **Role:** High-speed in-memory datastore.
@@ -66,7 +66,7 @@ graph TD
 
 - **Zero Hardcoding:** All configurations, model names, and keys are injected via environment variables.
 - **Strict Validation:** Inputs are validated on the client (Zod) and re-validated on the server (Pydantic).
-- **Secure Data Access:** Every backend endpoint requires a valid JWT. The FastAPI service layer's explicit `user_id` filtering (via `UserScopedRepository`, not RLS) is what enforces that users can only read and mutate their own rows — the app connects with an RLS-bypassing role, so RLS is a backstop, not the enforcement mechanism.
+- **Secure Data Access:** Every backend endpoint requires a valid JWT. The FastAPI service layer's explicit `user_id` filtering (via `UserScopedRepository`) is what enforces that users can only read and mutate their own rows — there is no Row Level Security layered underneath it; this is the sole enforcement mechanism.
 - **Fail Gracefully:**
   - If a scraper fails, the system falls back to manual entry or cached data.
   - If an AI provider timeouts, automatic retries are triggered.

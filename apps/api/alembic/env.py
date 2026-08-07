@@ -25,18 +25,6 @@ if config.config_file_name is not None:
 target_metadata = Base.metadata
 
 
-def include_object(object, name, type_, reflected, compare_to):
-    """Exclude auth.users — it's a Supabase/GoTrue-managed table that only
-    exists in our metadata so profiles.id's FK can be resolved (see
-    app/shared/models.py). Alembic must never try to create/alter/drop it.
-    """
-    if type_ == "table" and object.info.get("is_external"):
-        return False
-    if type_ == "foreign_key_constraint" and getattr(object.column.table, "info", {}).get("is_external"):
-        return False
-    return True
-
-
 def run_migrations_offline() -> None:
     url = config.get_main_option("sqlalchemy.url")
     context.configure(
@@ -44,7 +32,6 @@ def run_migrations_offline() -> None:
         target_metadata=target_metadata,
         literal_binds=True,
         dialect_opts={"paramstyle": "named"},
-        include_object=include_object,
     )
     with context.begin_transaction():
         context.run_migrations()
@@ -60,7 +47,6 @@ def run_migrations_online() -> None:
         context.configure(
             connection=connection,
             target_metadata=target_metadata,
-            include_object=include_object,
         )
         with context.begin_transaction():
             context.run_migrations()

@@ -15,8 +15,7 @@ class JobSearchApplication(Base, UUIDPKMixin, CreatedAtMixin):
             "application_status in ('saved', 'applied', 'skipped')",
             name="job_search_applications_status_check",
         ),
-        # schema.sql creates this as a unique INDEX, not a table-level UNIQUE
-        # constraint — matched exactly here to avoid an Alembic autogenerate diff.
+        # A unique INDEX, not a table-level UNIQUE constraint.
         Index(
             "job_search_applications_user_job_url_key",
             "user_id",
