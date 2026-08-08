@@ -6,7 +6,7 @@ then falls back to the .env file. The Python default (e.g. "") is ONLY used
 if the variable is absent from both sources — it is never the live value in
 a real deployment.
 
-Example: `supabase_url` ← SUPABASE_URL in .env or OS env
+Example: `clerk_issuer` ← CLERK_ISSUER in .env or OS env
 """
 
 from pydantic_settings import BaseSettings
@@ -121,12 +121,11 @@ class Settings(BaseSettings):
     # Minimum delay between individual emails to avoid spam flags (seconds)
     bulk_email_min_delay_seconds: int = 20
 
-    # ── Supabase ─────────────────────────────────────────────────────────────
-    # Auth has moved to Clerk (see below) — these two remain solely for
-    # Supabase Storage (CV photo uploads, app/modules/profile/routes.py) until
-    # that moves to Cloudinary. Get from Supabase project Settings > API.
-    supabase_url: str = ""
-    supabase_service_role_key: str = ""
+    # ── Cloudinary (CV photo storage) ───────────────────────────────────────
+    # Get from Cloudinary dashboard's Account Details page.
+    cloudinary_cloud_name: str = ""
+    cloudinary_api_key: str = ""
+    cloudinary_api_secret: str = ""
 
     # ── Clerk (Auth) ─────────────────────────────────────────────────────────
     # JWKS endpoint + issuer for verifying Clerk session tokens (RS256) —
@@ -208,11 +207,13 @@ class Settings(BaseSettings):
             if not value:
                 missing.append(f"{env_name} (required when AI_PROVIDER={primary})")
 
-        # Supabase Storage — always required (until Cloudinary migration)
-        if not self.supabase_url:
-            missing.append("SUPABASE_URL")
-        if not self.supabase_service_role_key:
-            missing.append("SUPABASE_SERVICE_ROLE_KEY")
+        # Cloudinary — always required
+        if not self.cloudinary_cloud_name:
+            missing.append("CLOUDINARY_CLOUD_NAME")
+        if not self.cloudinary_api_key:
+            missing.append("CLOUDINARY_API_KEY")
+        if not self.cloudinary_api_secret:
+            missing.append("CLOUDINARY_API_SECRET")
 
         # Clerk — always required
         if not self.clerk_jwks_url:

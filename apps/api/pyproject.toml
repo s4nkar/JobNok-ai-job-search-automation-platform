@@ -42,6 +42,9 @@ dependencies = [
     # File uploads
     "python-multipart==0.0.9",
 
+    # CV photo storage
+    "cloudinary==1.41.0",
+
     # Email
     "resend==2.4.0",
 
