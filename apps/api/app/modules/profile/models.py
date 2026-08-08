@@ -11,12 +11,17 @@ from app.shared.models import Base
 class Profile(Base):
     __tablename__ = "profiles"
 
-    # No server_default — explicitly supplied by app code (the JWT's user id
-    # claim) on profile creation. No FK to any external auth-provider table.
+    # App-generated — Clerk's own user id (a string like "user_xxx", not a
+    # UUID) is never used as the primary key directly; clerk_user_id below
+    # maps it to this internal id instead, so every other table's FK stays a
+    # plain uuid unaffected by the auth-provider's id format.
     id: Mapped[uuid.UUID] = mapped_column(
         PG_UUID(as_uuid=True),
         primary_key=True,
+        default=uuid.uuid4,
     )
+    clerk_user_id: Mapped[str] = mapped_column(Text, nullable=False, unique=True, index=True)
+    role: Mapped[str] = mapped_column(Text, server_default="user", nullable=False)
     email: Mapped[str] = mapped_column(Text, nullable=False)
     full_name: Mapped[str | None] = mapped_column(Text, nullable=True)
     avatar_url: Mapped[str | None] = mapped_column(Text, nullable=True)

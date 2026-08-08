@@ -122,13 +122,20 @@ class Settings(BaseSettings):
     bulk_email_min_delay_seconds: int = 20
 
     # ── Supabase ─────────────────────────────────────────────────────────────
-    # All three required — get from Supabase project Settings > API.
-    # Used for Auth/JWT (supabase_jwt_secret) and, transitionally, for the
-    # supabase-py query client (supabase_url/supabase_service_role_key) until
-    # every module has migrated its queries to SQLAlchemy (see database_url below).
+    # Auth has moved to Clerk (see below) — these two remain solely for
+    # Supabase Storage (CV photo uploads, app/modules/profile/routes.py) until
+    # that moves to Cloudinary. Get from Supabase project Settings > API.
     supabase_url: str = ""
     supabase_service_role_key: str = ""
-    supabase_jwt_secret: str = ""
+
+    # ── Clerk (Auth) ─────────────────────────────────────────────────────────
+    # JWKS endpoint + issuer for verifying Clerk session tokens (RS256) —
+    # both come from the Clerk dashboard's API Keys page. Dev instances serve
+    # JWKS at https://<subdomain>.clerk.accounts.dev/.well-known/jwks.json.
+    clerk_jwks_url: str = ""
+    clerk_issuer: str = ""
+    # Svix signing secret for verifying inbound webhooks (app/modules/auth/routes.py).
+    clerk_webhook_secret: str = ""
 
     # ── Database (SQLAlchemy) ────────────────────────────────────────────────
     # Direct Postgres connection string to the same Supabase project, e.g.
@@ -201,13 +208,19 @@ class Settings(BaseSettings):
             if not value:
                 missing.append(f"{env_name} (required when AI_PROVIDER={primary})")
 
-        # Supabase — always required
+        # Supabase Storage — always required (until Cloudinary migration)
         if not self.supabase_url:
             missing.append("SUPABASE_URL")
         if not self.supabase_service_role_key:
             missing.append("SUPABASE_SERVICE_ROLE_KEY")
-        if not self.supabase_jwt_secret:
-            missing.append("SUPABASE_JWT_SECRET")
+
+        # Clerk — always required
+        if not self.clerk_jwks_url:
+            missing.append("CLERK_JWKS_URL")
+        if not self.clerk_issuer:
+            missing.append("CLERK_ISSUER")
+        if not self.clerk_webhook_secret:
+            missing.append("CLERK_WEBHOOK_SECRET")
 
         # Upstash Redis — always required
         if not self.upstash_redis_rest_url:

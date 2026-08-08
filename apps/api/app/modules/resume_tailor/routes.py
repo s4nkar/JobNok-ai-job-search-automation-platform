@@ -36,7 +36,7 @@ from app.modules.resume_tailor.chunker import chunk_jd, chunk_resume, chunks_fro
 from app.modules.resume_tailor.matcher import match_resume_to_jd
 from app.modules.resume_tailor import service as resume_tailor_service
 from app.ai.embeddings import EmbeddingError, embed
-from app.core.security import get_user_id
+from app.core.security import get_current_user_id
 from app.ai.llm import provider as ai_provider
 from app.shared.utils import _rl_error
 
@@ -95,8 +95,9 @@ async def tailor_resume(
     request: Request,
     resume: UploadFile = File(...),
     job_description: str = Form(...),
+    db: AsyncSession = Depends(get_db),
 ):
-    user_id = get_user_id(request)
+    user_id = await get_current_user_id(request, db)
     allowed, _ = await check_rate_limit(user_id, "resume", settings.rate_limit_resume_per_day)
     if not allowed:
         raise _rl_error("Resume Tailor", settings.rate_limit_resume_per_day)
@@ -528,7 +529,7 @@ async def list_templates():
 @router.post("/tailor/structure-resume")
 async def structure_resume(request: Request, body: dict, db: AsyncSession = Depends(get_db)):
     """LLM-structure the cached resume into cv_data JSON. Called once when the editor loads."""
-    user_id = get_user_id(request)
+    user_id = await get_current_user_id(request, db)
     allowed, _ = await check_rate_limit(user_id, "resume", settings.rate_limit_resume_per_day)
     if not allowed:
         raise _rl_error("Resume Tailor", settings.rate_limit_resume_per_day)
@@ -557,7 +558,7 @@ async def structure_resume(request: Request, body: dict, db: AsyncSession = Depe
 
 @router.post("/tailor/generate-pdf")
 async def generate_cv_pdf(request: Request, body: dict, db: AsyncSession = Depends(get_db)):
-    user_id = get_user_id(request)
+    user_id = await get_current_user_id(request, db)
     allowed, _ = await check_rate_limit(user_id, "resume", settings.rate_limit_resume_per_day)
     if not allowed:
         raise _rl_error("Resume Tailor", settings.rate_limit_resume_per_day)
@@ -632,7 +633,7 @@ async def generate_cv_pdf(request: Request, body: dict, db: AsyncSession = Depen
 @router.post("/tailor/preview-html")
 async def preview_cv_html(request: Request, body: dict, db: AsyncSession = Depends(get_db)):
     """Render CV template to HTML for live preview — no PDF conversion, no rate limit."""
-    user_id = get_user_id(request)
+    user_id = await get_current_user_id(request, db)
 
     template_id = body.get("template_id", "standard")
     if template_id not in TEMPLATE_REGISTRY:

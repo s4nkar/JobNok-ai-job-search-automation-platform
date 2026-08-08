@@ -128,14 +128,15 @@ cmd_setup() {
   _check_env_vars apps/api/.env \
     SUPABASE_URL \
     SUPABASE_SERVICE_ROLE_KEY \
-    SUPABASE_JWT_SECRET \
+    CLERK_JWKS_URL \
+    CLERK_ISSUER \
+    CLERK_WEBHOOK_SECRET \
     UPSTASH_REDIS_REST_URL \
-    UPSTASH_REDIS_REST_TOKEN \
-    REDIS_PASSWORD
+    UPSTASH_REDIS_REST_TOKEN
 
   _check_env_vars apps/web/.env.local \
-    NEXT_PUBLIC_SUPABASE_URL \
-    NEXT_PUBLIC_SUPABASE_ANON_KEY
+    NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY \
+    CLERK_SECRET_KEY
 
   success "Environment looks good."
 

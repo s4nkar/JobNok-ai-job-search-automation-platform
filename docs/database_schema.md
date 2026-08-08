@@ -7,8 +7,8 @@ QuickJob utilizes **Neon (PostgreSQL)** for its primary data store, accessed fro
 ## Core Tables
 
 ### `profiles`
-- **Purpose:** Stores user information. Created lazily by the app on first authenticated request if missing.
-- **Fields:** `id` (app-generated UUID, no external FK), `email`, `full_name`, `avatar_url`, `plan`, and various CV-related fields (job_title, phone, address, etc.).
+- **Purpose:** Stores user information. Provisioned by a Clerk webhook (`app/modules/auth/routes.py`, `user.created`) on signup; a lazy lookup-or-create fallback in `core/security.py`'s auth dependency covers the rare case where a request lands before the webhook has processed.
+- **Fields:** `id` (app-generated UUID), `clerk_user_id` (maps to Clerk's own user id — the actual FK target every other table's `user_id` implicitly relies on existing), `role`, `email`, `full_name`, `avatar_url`, `plan`, and various CV-related fields (job_title, phone, address, etc.).
 - **Access:** Owning user only, enforced by `UserScopedRepository`.
 
 ### `templates`

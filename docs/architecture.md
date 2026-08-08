@@ -1,6 +1,6 @@
 # 🏗️ System Architecture
 
-QuickJob is built on a modern, distributed architecture designed for high performance, scalability, and cost efficiency (currently free-tier optimized). The system strictly separates the user interface from business logic, utilizing a robust stack of Next.js, FastAPI, Neon, Supabase (Auth), Redis, and Celery.
+QuickJob is built on a modern, distributed architecture designed for high performance, scalability, and cost efficiency (currently free-tier optimized). The system strictly separates the user interface from business logic, utilizing a robust stack of Next.js, FastAPI, Neon, Clerk (Auth), Supabase (Storage), Redis, and Celery.
 
 ## High-Level Architecture Diagram
 
@@ -24,7 +24,7 @@ graph TD
 - **Role:** Pure User Interface. Handles rendering, state management, and user interactions.
 - **Responsibilities:**
   - Client-side routing.
-  - Supabase Auth integration (JWTs).
+  - Clerk Auth integration (JWTs, OAuth).
   - Proxying API requests (`/api/*` routes) to the API to avoid CORS issues and obscure backend URLs.
 - **Tech:** React, Tailwind CSS, shadcn/ui, Zustand, React Hook Form + Zod.
 - **Deployment:** Vercel.
@@ -45,10 +45,10 @@ graph TD
 - **Role:** Reverse Proxy.
 - **Responsibilities:** In Docker/production setups, Nginx is used to safely route `/api` traffic directly to the FastAPI container, providing an additional layer of security and load balancing capabilities.
 
-### 4. Database (Neon) & Auth (Supabase)
-- **Role:** Neon hosts Postgres; Supabase provides the authentication provider (JWT/OAuth) only — it is not the database host.
+### 4. Database (Neon) & Auth (Clerk)
+- **Role:** Neon hosts Postgres; Clerk is the authentication provider (JWT/OAuth) — it is not the database host. A Clerk webhook (`app/modules/auth/routes.py`) keeps the `profiles` table's `clerk_user_id` mapping in sync with Clerk-side identity changes.
 - **Responsibilities:**
-  - Managing user sessions via JWT (verified in `app/core/security.py` — pure JWT decoding, no Supabase client dependency).
+  - Managing user sessions via JWT (verified in `app/core/security.py` against Clerk's JWKS — pure crypto/claims verification, no Clerk SDK dependency on the backend).
   - Storing user data, templates, job applications, and email campaigns, accessed via SQLAlchemy async ORM against Neon.
   - Enforcing **user_id scoping at the application layer**: every SQLAlchemy query goes through `UserScopedRepository` (`app/shared/repository.py`), which requires an explicit `user_id` filter. There is no Row Level Security, no PostgREST, and no `authenticated`/`anon`/`service_role` Postgres roles — the app connects with a single ordinary role, so app-level filtering is the sole enforcement mechanism, not a backstop alongside anything else.
 

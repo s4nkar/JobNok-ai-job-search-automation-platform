@@ -3,8 +3,8 @@
 import { useState, useEffect, useCallback } from 'react'
 import Link from 'next/link'
 import { usePathname, useRouter } from 'next/navigation'
+import { useClerk, useUser } from '@clerk/nextjs'
 import { cn } from '@/lib/utils'
-import { createClient } from '@/lib/supabase/client'
 import {
   FileText, Linkedin, FileSearch, PenLine, MessageSquare,
   Briefcase, Compass, DollarSign, Mail, Radar, LogOut,
@@ -30,7 +30,8 @@ export function Sidebar() {
   const pathname = usePathname()
   const router = useRouter()
   const { toast } = useToast()
-  const supabase = createClient()
+  const { signOut } = useClerk()
+  const { user } = useUser()
 
   const [userName, setUserName]       = useState<string | null>(null)
   const [userEmail, setUserEmail]     = useState<string | null>(null)
@@ -61,9 +62,10 @@ export function Sidebar() {
   }
 
   useEffect(() => {
-    supabase.auth.getUser().then(({ data }) => {
-      if (data.user) setUserEmail(data.user.email ?? null)
-    })
+    if (user) setUserEmail(user.primaryEmailAddress?.emailAddress ?? null)
+  }, [user])
+
+  useEffect(() => {
     apiFetch('/api/profile')
       .then(r => r.json())
       .then(p => {
@@ -74,7 +76,7 @@ export function Sidebar() {
   }, [])
 
   async function doSignOut() {
-    await supabase.auth.signOut()
+    await signOut()
     toast({ title: 'Signed out' })
     router.push('/login')
     router.refresh()

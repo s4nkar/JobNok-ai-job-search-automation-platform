@@ -7,7 +7,8 @@ QuickJob is designed to be easily deployed to modern serverless and PaaS provide
 - **Frontend (Next.js):** [Vercel](https://vercel.com/)
 - **Backend (FastAPI & Celery):** [Railway](https://railway.app/)
 - **Database (PostgreSQL):** [Neon](https://neon.com/)
-- **Auth & Storage:** [Supabase](https://supabase.com/)
+- **Auth:** [Clerk](https://clerk.com/)
+- **Storage:** [Supabase](https://supabase.com/) (CV photo uploads only)
 - **Cache & Rate Limits (Redis):** [Upstash](https://upstash.com/)
 - **Email Delivery:** [Resend](https://resend.com/)
 
@@ -22,7 +23,7 @@ QuickJob provides a comprehensive `docker-compose.yml` that orchestrates all loc
 2. Setup environment variables:
    - Copy `apps/web/.env.example` to `apps/web/.env.local`.
    - Copy `apps/api/.env.example` to `apps/api/.env`.
-   - Fill in your API keys (Supabase Auth, Upstash Redis, Resend, AI Provider, Neon's `DATABASE_URL`/`MIGRATIONS_DATABASE_URL`).
+   - Fill in your API keys (Clerk, Supabase Storage, Upstash Redis, Resend, AI Provider, Neon's `DATABASE_URL`/`MIGRATIONS_DATABASE_URL`).
 3. Setup the Database:
    - Provision a Neon project and run `pnpm api:migrate` (Alembic) against it — this creates the full schema on a fresh database. No manual SQL step.
 4. Run Docker Compose:

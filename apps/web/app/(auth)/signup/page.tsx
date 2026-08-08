@@ -3,10 +3,10 @@
 import { useState } from 'react'
 import { useRouter } from 'next/navigation'
 import Link from 'next/link'
+import { useSignUp } from '@clerk/nextjs'
 import { useForm } from 'react-hook-form'
 import { zodResolver } from '@hookform/resolvers/zod'
 import { z } from 'zod'
-import { createClient } from '@/lib/supabase/client'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
@@ -23,38 +23,92 @@ type FormData = z.infer<typeof schema>
 
 export default function SignupPage() {
   const router = useRouter()
+  const { isLoaded, signUp, setActive } = useSignUp()
   const { toast } = useToast()
   const [loading, setLoading] = useState(false)
   const [oauthLoading, setOauthLoading] = useState<string | null>(null)
+  const [awaitingCode, setAwaitingCode] = useState(false)
+  const [code, setCode] = useState('')
+  const [verifying, setVerifying] = useState(false)
 
   const { register, handleSubmit, formState: { errors } } = useForm<FormData>({
     resolver: zodResolver(schema),
   })
 
-  const supabase = createClient()
-
   async function onSubmit(data: FormData) {
+    if (!isLoaded) return
     setLoading(true)
-    const { error } = await supabase.auth.signUp({
-      email: data.email,
-      password: data.password,
-      options: { data: { full_name: data.full_name } },
-    })
-    if (error) {
-      toast({ title: 'Signup failed', description: error.message, variant: 'destructive' })
-    } else {
-      toast({ title: 'Account created!', description: 'Check your email to confirm your account.' })
-      router.push('/login')
+    try {
+      const [firstName, ...rest] = data.full_name.trim().split(' ')
+      const lastName = rest.join(' ') || undefined
+
+      await signUp.create({ emailAddress: data.email, password: data.password, firstName, lastName })
+      await signUp.prepareEmailAddressVerification({ strategy: 'email_code' })
+      setAwaitingCode(true)
+    } catch (err: any) {
+      toast({ title: 'Signup failed', description: err?.errors?.[0]?.message || 'Please try again.', variant: 'destructive' })
     }
     setLoading(false)
   }
 
+  async function verifyCode() {
+    if (!isLoaded || !code) return
+    setVerifying(true)
+    try {
+      const result = await signUp.attemptEmailAddressVerification({ code })
+      if (result.status === 'complete') {
+        await setActive({ session: result.createdSessionId })
+        toast({ title: 'Account created!' })
+        router.push('/templates')
+      } else {
+        toast({ title: 'Verification incomplete', description: 'Please try again.', variant: 'destructive' })
+      }
+    } catch (err: any) {
+      toast({ title: 'Invalid code', description: err?.errors?.[0]?.message || 'Please try again.', variant: 'destructive' })
+    }
+    setVerifying(false)
+  }
+
   async function signUpWithOAuth(provider: 'google' | 'github') {
+    if (!isLoaded) return
     setOauthLoading(provider)
-    await supabase.auth.signInWithOAuth({
-      provider,
-      options: { redirectTo: `${window.location.origin}/api/auth/callback` },
+    await signUp.authenticateWithRedirect({
+      strategy: provider === 'google' ? 'oauth_google' : 'oauth_github',
+      redirectUrl: '/sso-callback',
+      redirectUrlComplete: '/templates',
     })
+  }
+
+  if (awaitingCode) {
+    return (
+      <div className="relative rounded-2xl p-8 shadow-2xl bg-white/[0.04] border border-white/10 backdrop-blur-xl">
+        <div className="absolute inset-x-8 top-0 h-px bg-gradient-to-r from-transparent via-white/25 to-transparent" />
+        <div className="mb-6">
+          <h2 className="text-xl text-white" style={{ fontFamily: 'var(--font-display)', fontWeight: 600 }}>Verify your email</h2>
+          <p className="text-slate-400 text-sm mt-1">Enter the code we just sent you.</p>
+        </div>
+        <div className="space-y-4">
+          <div className="space-y-1.5">
+            <Label className="text-slate-300 text-sm">Verification code</Label>
+            <Input
+              value={code}
+              onChange={e => setCode(e.target.value)}
+              placeholder="123456"
+              className="bg-white/5 border-white/10 text-white placeholder:text-slate-500 focus:border-indigo-500 focus:ring-indigo-500/20 rounded-xl h-11"
+              onKeyDown={e => e.key === 'Enter' && verifyCode()}
+            />
+          </div>
+          <Button
+            onClick={verifyCode}
+            disabled={verifying || !code}
+            className="w-full h-11 gradient-brand text-white font-semibold rounded-xl shadow-brand hover:opacity-90 transition-opacity border-0"
+          >
+            {verifying && <Loader2 className="h-4 w-4 mr-2 animate-spin" />}
+            Verify
+          </Button>
+        </div>
+      </div>
+    )
   }
 
   return (
@@ -140,7 +194,7 @@ export default function SignupPage() {
         <Button
           type="submit"
           className="w-full h-11 gradient-brand text-white font-semibold rounded-xl shadow-brand hover:opacity-90 transition-opacity border-0"
-          disabled={loading}
+          disabled={loading || !isLoaded}
         >
           {loading && <Loader2 className="h-4 w-4 mr-2 animate-spin" />}
           Create account

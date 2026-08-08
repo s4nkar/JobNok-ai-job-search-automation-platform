@@ -4,12 +4,14 @@ Streams the response via Server-Sent Events. Rate limited per user via
 Upstash Redis.
 """
 
-from fastapi import APIRouter, Request
+from fastapi import APIRouter, Depends, Request
 from fastapi.responses import StreamingResponse
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import settings
+from app.core.database import get_db
 from app.services.cache import check_rate_limit
-from app.core.security import get_user_id
+from app.core.security import get_current_user_id
 from app.ai.llm import provider as ai_provider
 from app.shared.utils import _rl_error
 from app.modules.cover_letter.schemas import CoverLetterRequest
@@ -18,8 +20,8 @@ router = APIRouter()
 
 
 @router.post("/cover-letter")
-async def generate_cover_letter(request: Request, body: CoverLetterRequest):
-    user_id = get_user_id(request)
+async def generate_cover_letter(request: Request, body: CoverLetterRequest, db: AsyncSession = Depends(get_db)):
+    user_id = await get_current_user_id(request, db)
     allowed, _ = await check_rate_limit(user_id, "cover_letter", settings.rate_limit_cover_letter_per_day)
     if not allowed:
         raise _rl_error("Cover Letter Generator", settings.rate_limit_cover_letter_per_day)

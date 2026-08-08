@@ -1,49 +1,27 @@
-import { createServerClient, type CookieOptions } from '@supabase/ssr'
-import { NextResponse, type NextRequest } from 'next/server'
+import { clerkMiddleware, createRouteMatcher } from '@clerk/nextjs/server'
+import { NextResponse } from 'next/server'
 
-export async function middleware(request: NextRequest) {
-  let supabaseResponse = NextResponse.next({ request })
+const isAuthRoute = createRouteMatcher(['/login(.*)', '/signup(.*)', '/sso-callback(.*)'])
+const isApiRoute = createRouteMatcher(['/api(.*)'])
 
-  const supabase = createServerClient(
-    process.env.NEXT_PUBLIC_SUPABASE_URL!,
-    process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
-    {
-      cookies: {
-        getAll() {
-          return request.cookies.getAll()
-        },
-        setAll(cookiesToSet: { name: string; value: string; options: CookieOptions }[]) {
-          cookiesToSet.forEach(({ name, value, options }) => {
-            supabaseResponse.cookies.set(name, value, options)
-          })
-        },
-      },
-    }
-  )
+export default clerkMiddleware(async (auth, req) => {
+  if (isApiRoute(req)) return NextResponse.next()
 
-  const {
-    data: { user },
-  } = await supabase.auth.getUser()
+  const { userId } = await auth()
 
-  const { pathname } = request.nextUrl
-  const isAuthRoute = pathname.startsWith('/login') || pathname.startsWith('/signup')
-  const isApiRoute = pathname.startsWith('/api/')
-
-  if (isApiRoute) return supabaseResponse
-
-  if (!user && !isAuthRoute) {
-    const url = request.nextUrl.clone()
+  if (!userId && !isAuthRoute(req)) {
+    const url = req.nextUrl.clone()
     url.pathname = '/login'
-    url.searchParams.set('redirect', pathname)
+    url.searchParams.set('redirect', req.nextUrl.pathname)
     return NextResponse.redirect(url)
   }
 
-  if (user && isAuthRoute) {
-    return NextResponse.redirect(new URL('/templates', request.url))
+  if (userId && isAuthRoute(req)) {
+    return NextResponse.redirect(new URL('/templates', req.url))
   }
 
-  return supabaseResponse
-}
+  return NextResponse.next()
+})
 
 export const config = {
   matcher: ['/((?!_next/static|_next/image|favicon.ico|.*\\.(?:svg|png|jpg|jpeg|gif|webp)$).*)'],

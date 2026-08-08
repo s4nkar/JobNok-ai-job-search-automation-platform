@@ -1,13 +1,13 @@
 'use client'
 
 import { useState, useEffect, useRef } from 'react'
+import { useUser } from '@clerk/nextjs'
 import { User, Camera, Save, Loader2, CheckCircle, KeyRound } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { useToast } from '@/components/ui/use-toast'
 import { apiFetch } from '@/lib/api'
-import { createClient } from '@/lib/supabase/client'
 import { UserProfile } from '@/lib/types'
 
 export default function ProfilePage() {
@@ -17,11 +17,13 @@ export default function ProfilePage() {
   const [uploadingPhoto, setUploadingPhoto] = useState(false)
   const [photoPreview, setPhotoPreview] = useState<string | null>(null)
   const [saved, setSaved] = useState(false)
-  const [sendingReset, setSendingReset] = useState(false)
-  const [resetSent, setResetSent] = useState(false)
+  const [showPasswordForm, setShowPasswordForm] = useState(false)
+  const [currentPassword, setCurrentPassword] = useState('')
+  const [newPassword, setNewPassword] = useState('')
+  const [changingPassword, setChangingPassword] = useState(false)
   const fileRef = useRef<HTMLInputElement>(null)
   const { toast } = useToast()
-  const supabase = createClient()
+  const { user } = useUser()
 
   useEffect(() => {
     apiFetch('/api/profile')
@@ -62,19 +64,22 @@ export default function ProfilePage() {
     }
   }
 
-  async function sendPasswordReset() {
-    if (!profile?.email) return
-    setSendingReset(true)
-    const { error } = await supabase.auth.resetPasswordForEmail(profile.email, {
-      redirectTo: `${window.location.origin}/reset-password`,
-    })
-    setSendingReset(false)
-    if (error) {
-      toast({ title: 'Failed to send reset email', description: error.message, variant: 'destructive' })
-    } else {
-      setResetSent(true)
-      toast({ title: 'Password reset email sent', description: `Check ${profile.email}` })
+  async function changePassword() {
+    if (!user || !newPassword) return
+    setChangingPassword(true)
+    try {
+      await user.updatePassword({
+        newPassword,
+        currentPassword: currentPassword || undefined,
+      })
+      toast({ title: 'Password updated' })
+      setShowPasswordForm(false)
+      setCurrentPassword('')
+      setNewPassword('')
+    } catch (err: any) {
+      toast({ title: 'Could not update password', description: err?.errors?.[0]?.message, variant: 'destructive' })
     }
+    setChangingPassword(false)
   }
 
   async function save() {
@@ -258,27 +263,66 @@ export default function ProfilePage() {
                   Change Password
                 </p>
                 <p className="text-xs text-slate-400 mt-1">
-                  {resetSent
-                    ? `Reset link sent to ${profile?.email} — check your inbox`
-                    : 'We\'ll send a reset link to your login email'
-                  }
+                  Update the password for your login email
                 </p>
               </div>
-              <Button
-                variant="outline"
-                size="sm"
-                onClick={sendPasswordReset}
-                disabled={sendingReset || resetSent}
-                className="rounded-xl text-xs shrink-0"
-              >
-                {sendingReset
-                  ? <Loader2 className="h-3.5 w-3.5 animate-spin" />
-                  : resetSent
-                    ? <><CheckCircle className="h-3.5 w-3.5 mr-1 text-emerald-500" /> Sent</>
-                    : 'Send reset link'
-                }
-              </Button>
+              {!showPasswordForm && (
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => setShowPasswordForm(true)}
+                  className="rounded-xl text-xs shrink-0"
+                >
+                  Change password
+                </Button>
+              )}
             </div>
+
+            {showPasswordForm && (
+              <div className="mt-4 space-y-3">
+                <div className="space-y-1.5">
+                  <Label className="text-xs font-medium text-slate-600">Current password</Label>
+                  <Input
+                    type="password"
+                    value={currentPassword}
+                    onChange={e => setCurrentPassword(e.target.value)}
+                    className="h-9 text-sm rounded-xl border-slate-200"
+                  />
+                </div>
+                <div className="space-y-1.5">
+                  <Label className="text-xs font-medium text-slate-600">New password</Label>
+                  <Input
+                    type="password"
+                    value={newPassword}
+                    onChange={e => setNewPassword(e.target.value)}
+                    className="h-9 text-sm rounded-xl border-slate-200"
+                    onKeyDown={e => e.key === 'Enter' && changePassword()}
+                  />
+                </div>
+                <div className="flex items-center gap-2">
+                  <Button
+                    size="sm"
+                    onClick={changePassword}
+                    disabled={changingPassword || !newPassword}
+                    className="rounded-xl text-xs gradient-brand text-white border-0"
+                  >
+                    {changingPassword
+                      ? <Loader2 className="h-3.5 w-3.5 mr-1 animate-spin" />
+                      : <CheckCircle className="h-3.5 w-3.5 mr-1" />
+                    }
+                    Update password
+                  </Button>
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    onClick={() => { setShowPasswordForm(false); setCurrentPassword(''); setNewPassword('') }}
+                    className="rounded-xl text-xs"
+                  >
+                    Cancel
+                  </Button>
+                </div>
+              </div>
+            )}
           </div>
         </div>
       </div>

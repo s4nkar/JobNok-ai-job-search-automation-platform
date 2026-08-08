@@ -5,6 +5,9 @@ packages:
 # Packages allowed to run install/postinstall scripts (pnpm 11's
 # strictDepBuilds policy blocks all others by default). unrs-resolver is a
 # transitive dep of eslint-config-next (via eslint-import-resolver-typescript)
-# — dev-only tooling, needs its native binary built.
+# — dev-only tooling, needs its native binary built. @clerk/shared's
+# postinstall only writes a one-time telemetry-notice file to the user's
+# config dir and prints a console message — verified, no network calls.
 allowBuilds:
+  '@clerk/shared': true
   unrs-resolver: true

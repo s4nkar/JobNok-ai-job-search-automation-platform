@@ -3,10 +3,10 @@
 import { useState } from 'react'
 import { useRouter, useSearchParams } from 'next/navigation'
 import Link from 'next/link'
+import { useSignIn } from '@clerk/nextjs'
 import { useForm } from 'react-hook-form'
 import { zodResolver } from '@hookform/resolvers/zod'
 import { z } from 'zod'
-import { createClient } from '@/lib/supabase/client'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
@@ -25,6 +25,7 @@ export default function LoginFormClient() {
   const searchParams = useSearchParams()
   const redirect = searchParams.get('redirect') || '/templates'
 
+  const { isLoaded, signIn, setActive } = useSignIn()
   const { toast } = useToast()
   const [loading, setLoading] = useState(false)
   const [oauthLoading, setOauthLoading] = useState<string | null>(null)
@@ -32,47 +33,72 @@ export default function LoginFormClient() {
   const [forgotEmail, setForgotEmail] = useState('')
   const [forgotLoading, setForgotLoading] = useState(false)
   const [forgotSent, setForgotSent] = useState(false)
+  const [resetCode, setResetCode] = useState('')
+  const [newPassword, setNewPassword] = useState('')
+  const [resetLoading, setResetLoading] = useState(false)
 
   const { register, handleSubmit, getValues, formState: { errors } } = useForm<FormData>({
     resolver: zodResolver(schema),
   })
 
-  const supabase = createClient()
-
   async function onSubmit(data: FormData) {
+    if (!isLoaded) return
     setLoading(true)
-    const { error } = await supabase.auth.signInWithPassword(data)
-    if (error) {
-      toast({ title: 'Login failed', description: error.message, variant: 'destructive' })
-    } else {
-      router.push(redirect)
-      router.refresh()
+    try {
+      const result = await signIn.create({ identifier: data.email, password: data.password })
+      if (result.status === 'complete') {
+        await setActive({ session: result.createdSessionId })
+        router.push(redirect)
+        router.refresh()
+      } else {
+        toast({ title: 'Login failed', description: 'Additional verification required.', variant: 'destructive' })
+      }
+    } catch (err: any) {
+      toast({ title: 'Login failed', description: err?.errors?.[0]?.message || 'Check your credentials.', variant: 'destructive' })
     }
     setLoading(false)
   }
 
   async function signInWithOAuth(provider: 'google' | 'github') {
+    if (!isLoaded) return
     setOauthLoading(provider)
-    await supabase.auth.signInWithOAuth({
-      provider,
-      options: {
-        redirectTo: `${window.location.origin}/api/auth/callback?redirect=${encodeURIComponent(redirect)}`,
-      },
+    await signIn.authenticateWithRedirect({
+      strategy: provider === 'google' ? 'oauth_google' : 'oauth_github',
+      redirectUrl: '/sso-callback',
+      redirectUrlComplete: redirect,
     })
   }
 
   async function sendForgotPassword() {
-    if (!forgotEmail) return
+    if (!isLoaded || !forgotEmail) return
     setForgotLoading(true)
-    const { error } = await supabase.auth.resetPasswordForEmail(forgotEmail, {
-      redirectTo: `${window.location.origin}/reset-password`,
-    })
-    setForgotLoading(false)
-    if (error) {
-      toast({ title: 'Failed to send reset email', description: error.message, variant: 'destructive' })
-    } else {
+    try {
+      await signIn.create({ strategy: 'reset_password_email_code', identifier: forgotEmail })
       setForgotSent(true)
+    } catch (err: any) {
+      toast({ title: 'Failed to send reset email', description: err?.errors?.[0]?.message, variant: 'destructive' })
     }
+    setForgotLoading(false)
+  }
+
+  async function submitNewPassword() {
+    if (!isLoaded || !resetCode || !newPassword) return
+    setResetLoading(true)
+    try {
+      const result = await signIn.attemptFirstFactor({
+        strategy: 'reset_password_email_code',
+        code: resetCode,
+        password: newPassword,
+      })
+      if (result.status === 'complete') {
+        await setActive({ session: result.createdSessionId })
+        router.push(redirect)
+        router.refresh()
+      }
+    } catch (err: any) {
+      toast({ title: 'Could not reset password', description: err?.errors?.[0]?.message, variant: 'destructive' })
+    }
+    setResetLoading(false)
   }
 
   // ── Forgot password view ──────────────────────────────────────────
@@ -81,27 +107,56 @@ export default function LoginFormClient() {
       <div className="relative rounded-2xl p-8 shadow-2xl bg-white/[0.04] border border-white/10 backdrop-blur-xl">
         <div className="absolute inset-x-8 top-0 h-px bg-gradient-to-r from-transparent via-white/25 to-transparent" />
         <button
-          onClick={() => { setShowForgot(false); setForgotSent(false); setForgotEmail('') }}
+          onClick={() => { setShowForgot(false); setForgotSent(false); setForgotEmail(''); setResetCode(''); setNewPassword('') }}
           className="flex items-center gap-1.5 text-slate-400 hover:text-slate-200 text-sm mb-6 transition-colors"
         >
           <ArrowLeft className="h-3.5 w-3.5" /> Back to sign in
         </button>
 
         {forgotSent ? (
-          <div className="text-center space-y-3 py-4">
-            <div className="w-12 h-12 rounded-2xl bg-emerald-500/10 flex items-center justify-center mx-auto">
-              <CheckCircle className="h-6 w-6 text-emerald-400" />
+          <div className="space-y-4">
+            <div className="text-center space-y-3 py-2">
+              <div className="w-12 h-12 rounded-2xl bg-emerald-500/10 flex items-center justify-center mx-auto">
+                <CheckCircle className="h-6 w-6 text-emerald-400" />
+              </div>
+              <h2 className="text-lg text-white" style={{ fontFamily: 'var(--font-display)', fontWeight: 600 }}>Check your email</h2>
+              <p className="text-slate-400 text-sm">
+                We sent a code to <strong className="text-slate-200">{forgotEmail}</strong>
+              </p>
             </div>
-            <h2 className="text-lg text-white" style={{ fontFamily: 'var(--font-display)', fontWeight: 600 }}>Check your email</h2>
-            <p className="text-slate-400 text-sm">
-              We sent a password reset link to <strong className="text-slate-200">{forgotEmail}</strong>
-            </p>
-            <p className="text-xs text-slate-500">Didn't receive it? Check your spam folder.</p>
+            <div className="space-y-1.5">
+              <Label className="text-slate-300 text-sm">Reset code</Label>
+              <Input
+                value={resetCode}
+                onChange={e => setResetCode(e.target.value)}
+                placeholder="123456"
+                className="bg-white/5 border-white/10 text-white placeholder:text-slate-500 focus:border-indigo-500 focus:ring-indigo-500/20 rounded-xl h-11"
+              />
+            </div>
+            <div className="space-y-1.5">
+              <Label className="text-slate-300 text-sm">New password</Label>
+              <Input
+                type="password"
+                value={newPassword}
+                onChange={e => setNewPassword(e.target.value)}
+                placeholder="••••••••"
+                className="bg-white/5 border-white/10 text-white placeholder:text-slate-500 focus:border-indigo-500 focus:ring-indigo-500/20 rounded-xl h-11"
+                onKeyDown={e => e.key === 'Enter' && submitNewPassword()}
+              />
+            </div>
+            <Button
+              onClick={submitNewPassword}
+              disabled={resetLoading || !resetCode || !newPassword}
+              className="w-full h-11 gradient-brand text-white font-semibold rounded-xl shadow-brand hover:opacity-90 transition-opacity border-0"
+            >
+              {resetLoading && <Loader2 className="h-4 w-4 mr-2 animate-spin" />}
+              Set new password
+            </Button>
           </div>
         ) : (
           <>
             <h2 className="text-xl text-white mb-1" style={{ fontFamily: 'var(--font-display)', fontWeight: 600 }}>Reset your password</h2>
-            <p className="text-slate-400 text-sm mb-6">Enter your email and we'll send a reset link.</p>
+            <p className="text-slate-400 text-sm mb-6">Enter your email and we'll send a reset code.</p>
             <div className="space-y-4">
               <div className="space-y-1.5">
                 <Label className="text-slate-300 text-sm">Email</Label>
@@ -120,7 +175,7 @@ export default function LoginFormClient() {
                 className="w-full h-11 gradient-brand text-white font-semibold rounded-xl shadow-brand hover:opacity-90 transition-opacity border-0"
               >
                 {forgotLoading && <Loader2 className="h-4 w-4 mr-2 animate-spin" />}
-                Send reset link
+                Send reset code
               </Button>
             </div>
           </>
@@ -215,7 +270,7 @@ export default function LoginFormClient() {
         <Button
           type="submit"
           className="w-full h-11 gradient-brand text-white font-semibold rounded-xl shadow-brand hover:opacity-90 transition-opacity border-0"
-          disabled={loading}
+          disabled={loading || !isLoaded}
         >
           {loading && <Loader2 className="h-4 w-4 mr-2 animate-spin" />}
           Sign in
