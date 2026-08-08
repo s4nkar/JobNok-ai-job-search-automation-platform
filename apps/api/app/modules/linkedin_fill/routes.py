@@ -1,10 +1,12 @@
 """LinkedIn scraping router — hybrid RapidAPI + PhantomBuster fallback + Redis cache."""
 
 import json
-from fastapi import APIRouter, Request, HTTPException
+from fastapi import APIRouter, Depends, Request, HTTPException
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import settings
-from app.core.security import get_user_id
+from app.core.database import get_db
+from app.core.security import get_current_user_id
 from app.services.cache import check_rate_limit, get_cached, set_cached
 from app.integrations import rapidapi, phantombuster
 from app.ai.llm import provider as ai_provider
@@ -16,8 +18,8 @@ CACHE_TTL = settings.linkedin_cache_ttl_days * 86400  # days → seconds
 
 
 @router.post("/linkedin", response_model=ScrapeLinkedInResponse)
-async def scrape_linkedin(request: Request, body: ScrapeLinkedInRequest):
-    user_id = get_user_id(request)
+async def scrape_linkedin(request: Request, body: ScrapeLinkedInRequest, db: AsyncSession = Depends(get_db)):
+    user_id = await get_current_user_id(request, db)
 
     # ── Rate Limit ────────────────────────────────────────────────
     allowed, remaining = await check_rate_limit(

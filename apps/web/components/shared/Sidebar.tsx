@@ -3,40 +3,41 @@
 import { useState, useEffect, useCallback } from 'react'
 import Link from 'next/link'
 import { usePathname, useRouter } from 'next/navigation'
+import { useClerk, useUser } from '@clerk/nextjs'
 import { cn } from '@/lib/utils'
-import { createClient } from '@/lib/supabase/client'
 import {
   FileText, Linkedin, FileSearch, PenLine, MessageSquare,
   Briefcase, Compass, DollarSign, Mail, Radar, LogOut,
-  Zap, Settings, ChevronLeft, ChevronRight, Check, X,
+  Settings, ChevronLeft, ChevronRight, Check, X,
 } from 'lucide-react'
 import { useToast } from '@/components/ui/use-toast'
 import { apiFetch } from '@/lib/api'
 
 const navItems = [
-  { href: '/templates',          label: 'Smart Templates',    icon: FileText },
-  { href: '/linkedin-fill',      label: 'LinkedIn Auto-Fill', icon: Linkedin },
-  { href: '/resume-tailor',      label: 'Resume Tailor',      icon: FileSearch },
-  { href: '/cover-letter',       label: 'Cover Letter',       icon: PenLine },
-  { href: '/interview-prep',     label: 'Interview Prep',     icon: MessageSquare },
-  { href: '/tracker',            label: 'Follow-Up Tracker',  icon: Briefcase },
-  { href: '/startup-scout',      label: 'Startup Scout',      icon: Radar },
-  { href: '/startup-hunt',       label: 'Startup Hunt',       icon: Compass },
-  { href: '/salary',             label: 'Salary Research',    icon: DollarSign },
-  { href: '/bulk-email',         label: 'Bulk Email',         icon: Mail },
+  { href: '/templates', label: 'Smart Templates', icon: FileText },
+  { href: '/linkedin-fill', label: 'LinkedIn Auto-Fill', icon: Linkedin },
+  { href: '/resume-tailor', label: 'Resume Tailor', icon: FileSearch },
+  { href: '/cover-letter', label: 'Cover Letter', icon: PenLine },
+  { href: '/interview-prep', label: 'Interview Prep', icon: MessageSquare },
+  { href: '/tracker', label: 'Follow-Up Tracker', icon: Briefcase },
+  { href: '/startup-scout', label: 'Startup Scout', icon: Radar },
+  { href: '/startup-hunt', label: 'Startup Hunt', icon: Compass },
+  { href: '/salary', label: 'Salary Research', icon: DollarSign },
+  { href: '/bulk-email', label: 'Bulk Email', icon: Mail },
 ]
 
 export function Sidebar() {
   const pathname = usePathname()
   const router = useRouter()
   const { toast } = useToast()
-  const supabase = createClient()
+  const { signOut } = useClerk()
+  const { user } = useUser()
 
-  const [userName, setUserName]       = useState<string | null>(null)
-  const [userEmail, setUserEmail]     = useState<string | null>(null)
-  const [photoUrl, setPhotoUrl]       = useState<string | null>(null)
+  const [userName, setUserName] = useState<string | null>(null)
+  const [userEmail, setUserEmail] = useState<string | null>(null)
+  const [photoUrl, setPhotoUrl] = useState<string | null>(null)
   const [confirmSignOut, setConfirmSignOut] = useState(false)
-  const [collapsed, setCollapsed]     = useState(false)
+  const [collapsed, setCollapsed] = useState(false)
 
   // Single fixed-position tooltip — bypasses all overflow clipping
   const [tooltip, setTooltip] = useState<{ label: string; y: number } | null>(null)
@@ -61,20 +62,21 @@ export function Sidebar() {
   }
 
   useEffect(() => {
-    supabase.auth.getUser().then(({ data }) => {
-      if (data.user) setUserEmail(data.user.email ?? null)
-    })
+    if (user) setUserEmail(user.primaryEmailAddress?.emailAddress ?? null)
+  }, [user])
+
+  useEffect(() => {
     apiFetch('/api/profile')
       .then(r => r.json())
       .then(p => {
         setUserName(p.full_name || null)
         setPhotoUrl(p.cv_photo_url || null)
       })
-      .catch(() => {})
+      .catch(() => { })
   }, [])
 
   async function doSignOut() {
-    await supabase.auth.signOut()
+    await signOut()
     toast({ title: 'Signed out' })
     router.push('/login')
     router.refresh()
@@ -126,15 +128,13 @@ export function Sidebar() {
           className="px-3 py-[18px] border-b flex items-center gap-3"
           style={{ borderColor: 'hsl(var(--sidebar-border))' }}
         >
-          <div className="w-8 h-8 rounded-xl gradient-brand flex items-center justify-center shadow-brand-sm flex-shrink-0">
-            <Zap className="h-4 w-4 text-white" />
-          </div>
+          <img src="/brand-icon.png" alt="" className="w-8 h-8 flex-shrink-0" />
           <div className={cn(
             'min-w-0 transition-all duration-200',
             collapsed ? 'w-0 opacity-0 overflow-hidden' : 'flex-1 opacity-100'
           )}>
-            <p className="font-bold text-white text-sm tracking-tight leading-none whitespace-nowrap">QuickJob</p>
-            <p className="text-[10px] text-slate-500 mt-1 leading-none whitespace-nowrap">AI Job Search Toolkit</p>
+            <img src="/wordmark-white.png" alt="JobNok" className="h-3.5 w-auto" />
+            <p className="text-[10px] text-slate-500 mt-1.5 leading-none whitespace-nowrap">AI Job Search Toolkit</p>
           </div>
         </div>
 
@@ -268,7 +268,7 @@ export function Sidebar() {
             )
           )}
         </div>
-      </aside>
+      </aside >
     </>
   )
 }

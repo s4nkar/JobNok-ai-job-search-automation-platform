@@ -1,5 +1,5 @@
 {
-  "name": "quickjob-frontend",
+  "name": "jobnok-frontend",
   "version": "1.0.0",
   "private": true,
   "scripts": {
@@ -13,8 +13,7 @@
     "next": "14.2.5",
     "react": "^18.3.1",
     "react-dom": "^18.3.1",
-    "@supabase/supabase-js": "^2.45.0",
-    "@supabase/ssr": "^0.5.1",
+    "@clerk/nextjs": "^6.9.0",
     "zustand": "^4.5.4",
     "react-hook-form": "^7.52.2",
     "zod": "^3.23.8",

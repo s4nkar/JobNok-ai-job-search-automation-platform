@@ -1,17 +1,30 @@
-"""Profile CRUD + cross-module profile-existence helper — SQLAlchemy-backed.
+"""Profile CRUD — SQLAlchemy-backed.
 
 profiles.id *is* the user_id (no separate user_id column), so this module
 doesn't use UserScopedRepository — every query is scoped by id directly.
+Profile existence is guaranteed by the time any route here runs (see
+core/security.py::get_current_user_id + app/modules/auth/service.py), so no
+upsert-on-read fallback is needed — a missing row here would be a genuine bug.
 """
 
-from fastapi import HTTPException, Request
+import asyncio
+
+import cloudinary
+import cloudinary.uploader
+from fastapi import HTTPException
 from sqlalchemy import select
-from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.security import verify_jwt
+from app.core.config import settings
 from app.modules.profile.models import Profile
 from app.shared.utils import row_to_dict
+
+cloudinary.config(
+    cloud_name=settings.cloudinary_cloud_name,
+    api_key=settings.cloudinary_api_key,
+    api_secret=settings.cloudinary_api_secret,
+    secure=True,
+)
 
 _ALLOWED_FIELDS = {
     "full_name", "job_title", "cv_email", "phone",
@@ -21,44 +34,10 @@ _ALLOWED_FIELDS = {
 }
 
 
-def _email_from_request(user_id: str, request: Request) -> str:
-    token = request.headers.get("Authorization", "").removeprefix("Bearer ").strip()
-    claims = verify_jwt(token)
-    return claims.get("email") or f"{user_id}@unknown.local"
-
-
-async def ensure_profile_exists(db: AsyncSession, user_id: str, request: Request) -> None:
-    """Upsert a profiles row so FK constraints don't fail for users whose
-    profile trigger missed. Race-safe against a concurrent trigger insert via
-    ON CONFLICT DO NOTHING (mirrors the original upsert(on_conflict='id'))."""
-    try:
-        email = _email_from_request(user_id, request)
-        stmt = (
-            pg_insert(Profile)
-            .values(id=user_id, email=email)
-            .on_conflict_do_nothing(index_elements=["id"])
-        )
-        await db.execute(stmt)
-        await db.flush()
-    except Exception:
-        pass
-
-
-async def get_or_create_profile(db: AsyncSession, user_id: str, request: Request) -> dict:
+async def get_profile(db: AsyncSession, user_id: str) -> dict:
     row = (await db.execute(select(Profile).where(Profile.id == user_id))).scalar_one_or_none()
     if row is None:
-        # Profile row missing (trigger may have failed at signup) — create a minimal one
-        email = _email_from_request(user_id, request)
-        stmt = (
-            pg_insert(Profile)
-            .values(id=user_id, email=email)
-            .on_conflict_do_nothing(index_elements=["id"])
-        )
-        await db.execute(stmt)
-        await db.flush()
-        row = (await db.execute(select(Profile).where(Profile.id == user_id))).scalar_one_or_none()
-    if row is None:
-        raise HTTPException(status_code=500, detail="Could not retrieve or create profile")
+        raise HTTPException(status_code=404, detail="Profile not found")
     return row_to_dict(row)
 
 
@@ -74,6 +53,24 @@ async def update_profile(db: AsyncSession, user_id: str, body: dict) -> dict:
     await db.flush()
     await db.refresh(row)
     return row_to_dict(row)
+
+
+async def upload_cv_photo(user_id: str, data: bytes) -> str:
+    """Upload a CV photo to Cloudinary and return its public URL.
+
+    cloudinary's SDK is sync (blocking network I/O) — offload to a thread so
+    it doesn't stall the event loop for other concurrent requests.
+    """
+    try:
+        result = await asyncio.to_thread(
+            cloudinary.uploader.upload,
+            data,
+            public_id=f"users/{user_id}/avatar",
+            overwrite=True,
+        )
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"Storage upload failed: {exc}")
+    return result["secure_url"]
 
 
 async def update_cv_photo_url(db: AsyncSession, user_id: str, public_url: str) -> None:

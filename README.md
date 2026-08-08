@@ -1,4 +1,4 @@
-# QuickJob
+# JobNok
 
 AI-powered job search automation platform. Eleven tools in one place to cover every repetitive step of the job hunt, from tailoring your resume to sending bulk outreach emails.
 
@@ -78,15 +78,10 @@ If embeddings fail, the matcher falls back to keyword-only and sets `degraded: t
 git clone <repo>
 cp apps/web/.env.example apps/web/.env.local
 cp apps/api/.env.example apps/api/.env
-# fill in keys: Supabase, Upstash, Resend, Groq, Jina, DATABASE_URL
+# fill in keys: Supabase (Auth), Upstash, Resend, Groq, Jina, DATABASE_URL/MIGRATIONS_DATABASE_URL (Neon)
 ```
 
-Run the schema in your Supabase SQL editor:
-```bash
-supabase/schema.sql
-```
-
-Three ways to run it locally, pick one:
+Three ways to run it locally, pick one — then, against a fresh database (first run, or after resetting the local Postgres volume), apply the schema once: `pnpm api:migrate`.
 
 ### 1. Fully Dockerized (recommended for a first run)
 ```bash
@@ -98,7 +93,7 @@ Everything — Postgres, Redis, the API, Celery, and Next.js — runs in Docker 
 ```bash
 pnpm dev:local
 ```
-Runs Postgres/Redis/API/Celery in Docker (same as above) but Next.js natively on the host via `pnpm --filter quickjob-frontend dev`. Sidesteps a real limitation of option 1 on Windows: Docker Desktop's WSL2 inotify layer can miss file-change events on bind-mounted volumes, so hot reload for both the API and Next.js can silently stop working. Requires [pnpm](https://pnpm.io/installation) (Node ≥ 22) on the host — `corepack enable` picks up the pinned version automatically.
+Runs Postgres/Redis/API/Celery in Docker (same as above) but Next.js natively on the host via `pnpm --filter jobnok-frontend dev`. Sidesteps a real limitation of option 1 on Windows: Docker Desktop's WSL2 inotify layer can miss file-change events on bind-mounted volumes, so hot reload for both the API and Next.js can silently stop working. Requires [pnpm](https://pnpm.io/installation) (Node ≥ 22) on the host — `corepack enable` picks up the pinned version automatically.
 
 ### 3. Fully manual (no Docker)
 
@@ -131,20 +126,23 @@ uv run celery -A app.workers.celery_app worker --loglevel=info
 
 | Variable | Purpose |
 |----------|---------|
-| `NEXT_PUBLIC_SUPABASE_URL` | Supabase project URL |
-| `NEXT_PUBLIC_SUPABASE_ANON_KEY` | Supabase anon key (safe for browser) |
+| `NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY` | Clerk publishable key (safe for browser) |
+| `CLERK_SECRET_KEY` | Clerk secret key (server-side only — middleware/server components) |
 | `NEXT_PUBLIC_API_URL` | Backend base URL (used for proxying) |
 
-No API keys or secrets belong in frontend env vars.
+No API keys or secrets other than `CLERK_SECRET_KEY` belong in frontend env vars — and that one is never sent to the browser (Next.js only inlines `NEXT_PUBLIC_`-prefixed vars into the client bundle).
 
 ### Backend (`apps/api/.env`)
 
 | Variable | Purpose |
 |----------|---------|
-| `SUPABASE_URL` | Supabase project URL (Auth only — not used as a query client) |
-| `SUPABASE_SERVICE_KEY` | Service role key (server-only) |
-| `SUPABASE_JWT_SECRET` | JWT secret for token verification |
-| `DATABASE_URL` | Direct Postgres connection string (SQLAlchemy/Alembic) — same Supabase project, `postgresql://postgres:[password]@db.[project-ref].supabase.co:5432/postgres` |
+| `SUPABASE_URL` | Supabase project URL (Storage only — not used for Auth or as a query client) |
+| `SUPABASE_SERVICE_KEY` | Service role key (server-only, Storage) |
+| `CLERK_JWKS_URL` | Clerk JWKS endpoint for verifying session tokens |
+| `CLERK_ISSUER` | Clerk issuer URL (Frontend API URL) |
+| `CLERK_WEBHOOK_SECRET` | Svix signing secret for verifying Clerk webhooks |
+| `DATABASE_URL` | Neon pooled connection string (SQLAlchemy runtime) |
+| `MIGRATIONS_DATABASE_URL` | Neon direct/unpooled connection string (Alembic only — DDL is unreliable through transaction pooling) |
 | `UPSTASH_REDIS_URL` | Redis URL for rate limits + Celery |
 | `GROQ_API_KEY` | Primary AI provider |
 | `CEREBRAS_API_KEY` | AI fallback |
@@ -158,7 +156,7 @@ No API keys or secrets belong in frontend env vars.
 
 ## Database
 
-Core tables in Supabase PostgreSQL, managed via SQLAlchemy models + Alembic migrations (`apps/api/app/modules/<feature>/models.py`, `apps/api/alembic/`). RLS policies remain defined in `supabase/schema.sql` as defense-in-depth, but the app connects with an RLS-bypassing role — the real enforcement is explicit `user_id` filtering in every query (see `UserScopedRepository`):
+Core tables in Neon-hosted PostgreSQL, managed entirely via SQLAlchemy models + Alembic migrations (`apps/api/app/modules/<feature>/models.py`, `apps/api/alembic/`) — no RLS, no PostgREST. Data isolation is enforced purely at the application layer: explicit `user_id` filtering in every query (see `UserScopedRepository`):
 
 | Table | Purpose |
 |-------|---------|

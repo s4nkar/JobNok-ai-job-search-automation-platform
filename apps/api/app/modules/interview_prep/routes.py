@@ -5,11 +5,13 @@ auth-gated but not separately rate limited).
 """
 
 import json
-from fastapi import APIRouter, Request, HTTPException
+from fastapi import APIRouter, Depends, Request, HTTPException
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import settings
+from app.core.database import get_db
 from app.services.cache import check_rate_limit
-from app.core.security import get_user_id
+from app.core.security import get_current_user_id
 from app.ai.llm import provider as ai_provider
 from app.shared.utils import _rl_error
 from app.modules.interview_prep.schemas import InterviewPrepRequest, InterviewRegenerateRequest
@@ -18,8 +20,10 @@ router = APIRouter()
 
 
 @router.post("/interview")
-async def generate_interview_questions(request: Request, body: InterviewPrepRequest):
-    user_id = get_user_id(request)
+async def generate_interview_questions(
+    request: Request, body: InterviewPrepRequest, db: AsyncSession = Depends(get_db)
+):
+    user_id = await get_current_user_id(request, db)
     allowed, _ = await check_rate_limit(user_id, "interview", settings.rate_limit_interview_per_day)
     if not allowed:
         raise _rl_error("Interview Prep", settings.rate_limit_interview_per_day)
@@ -55,8 +59,10 @@ Return ONLY valid JSON."""
 
 
 @router.post("/interview/regenerate")
-async def regenerate_interview_answer(request: Request, body: InterviewRegenerateRequest):
-    get_user_id(request)  # auth check
+async def regenerate_interview_answer(
+    request: Request, body: InterviewRegenerateRequest, db: AsyncSession = Depends(get_db)
+):
+    await get_current_user_id(request, db)  # auth check
 
     prompt = f"""Given this interview question and job context, provide a fresh STAR-method answer framework.
 

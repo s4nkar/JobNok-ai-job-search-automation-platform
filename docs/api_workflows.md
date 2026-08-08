@@ -1,6 +1,6 @@
 # 🔄 API & Tool Workflows
 
-QuickJob provides 11 distinct AI-powered tools and features. All tools communicate with the FastAPI backend, which handles logic, caching, AI generation, and database persistence. 
+JobNok provides 11 distinct AI-powered tools and features. All tools communicate with the FastAPI backend, which handles logic, caching, AI generation, and database persistence. 
 
 ## General Request Flow
 1. **Frontend Authentication:** The Next.js client attaches a Supabase JWT to requests sent to `/api/*`.

@@ -7,7 +7,7 @@
 #   - Next.js:  source mounted, npm run dev, port 3000 exposed directly
 #   - nginx:    disabled (dev hits services directly on their native ports)
 #   - Postgres: local throwaway Postgres for SQLAlchemy/Alembic dev work.
-#     Production points DATABASE_URL at the real Supabase Postgres instead —
+#     Production points DATABASE_URL at the real Neon-hosted Postgres instead —
 #     this local instance is dev-only and never touches production data.
 #
 # Volume notes:
@@ -16,8 +16,11 @@
 #     mount, which would otherwise shadow/erase it at container start.
 #   - /app/node_modules: anonymous volume prevents the host ./apps/web mount
 #     from clobbering the container-installed node_modules.
-#   - postgres_data: persists the local dev DB across restarts. Delete this
-#     volume to reset to a fresh schema (re-runs docker-entrypoint-initdb.d).
+#   - postgres_data: persists the local dev DB across restarts. A fresh
+#     Postgres now boots with an EMPTY database (no docker-entrypoint-initdb.d
+#     bootstrap SQL) — Alembic is the single schema source of truth for both
+#     local dev and real Neon databases. After first boot (or after deleting
+#     this volume to reset), run `pnpm api:migrate` once to create the schema.
 #
 # APP_URL override: the base docker-compose.yml reads APP_URL from apps/api/.env.
 # The environment: block below takes precedence for dev, setting it to localhost:3000
@@ -33,15 +36,11 @@ services:
     environment:
       POSTGRES_USER: postgres
       POSTGRES_PASSWORD: devpassword
-      POSTGRES_DB: quickjob
+      POSTGRES_DB: jobnok
     ports:
       - "5433:5432"
     volumes:
       - postgres_data:/var/lib/postgresql/data
-      # Runs once against an empty data dir, in filename order: stub Supabase's
-      # auth.users (FK target for profiles.id), then the real app schema.
-      - ./docker/postgres-init/00-stub-auth.sql:/docker-entrypoint-initdb.d/00-stub-auth.sql:ro
-      - ./supabase/schema.sql:/docker-entrypoint-initdb.d/01-schema.sql:ro
     networks:
       - backend-net
     healthcheck:
@@ -66,7 +65,9 @@ services:
         condition: service_healthy
     environment:
       - APP_URL=http://localhost:3000
-      - DATABASE_URL=postgresql://postgres:devpassword@postgres:5432/quickjob
+      - DATABASE_URL=postgresql://postgres:devpassword@postgres:5432/jobnok
+      # Local throwaway Postgres has no pooler — same URL serves both roles.
+      - MIGRATIONS_DATABASE_URL=postgresql://postgres:devpassword@postgres:5432/jobnok
 
   celery:
     build:
@@ -79,7 +80,7 @@ services:
       postgres:
         condition: service_healthy
     environment:
-      - DATABASE_URL=postgresql://postgres:devpassword@postgres:5432/quickjob
+      - DATABASE_URL=postgresql://postgres:devpassword@postgres:5432/jobnok
 
   nextjs:
     build:

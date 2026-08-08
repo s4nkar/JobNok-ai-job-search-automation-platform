@@ -4,7 +4,7 @@ import { useEffect, useState, useCallback } from 'react'
 import { useForm } from 'react-hook-form'
 import { zodResolver } from '@hookform/resolvers/zod'
 import { z } from 'zod'
-import { createClient } from '@/lib/supabase/client'
+import { apiFetch } from '@/lib/api'
 import { useTemplateStore } from '@/lib/stores/templates'
 import { PREBUILT_TEMPLATES } from '@/lib/templates/prebuilt'
 import { extractPlaceholders, fillTemplate, cn } from '@/lib/utils'
@@ -55,7 +55,6 @@ export default function TemplatesPage() {
   const [saving, setSaving] = useState(false)
   const [filterCategory, setFilterCategory] = useState<string>('all')
   const { toast } = useToast()
-  const supabase = createClient()
 
   const { register, handleSubmit, setValue, reset, watch, formState: { errors } } = useForm<TemplateFormData>({
     resolver: zodResolver(templateSchema),
@@ -66,14 +65,8 @@ export default function TemplatesPage() {
 
   useEffect(() => {
     async function load() {
-      const { data: { user } } = await supabase.auth.getUser()
-      if (!user) return
-      const { data } = await supabase
-        .from('templates')
-        .select('*')
-        .eq('user_id', user.id)
-        .order('created_at', { ascending: false })
-      if (data) setSavedTemplates(data)
+      const res = await apiFetch('/api/templates')
+      if (res.ok) setSavedTemplates(await res.json())
     }
     load()
   }, [])
@@ -98,39 +91,38 @@ export default function TemplatesPage() {
     setCopied(true)
     toast({ title: 'Copied!', description: 'Message copied to clipboard.' })
     if (selected && !selected.is_prebuilt) {
-      await supabase.from('templates').update({ use_count: (selected.use_count || 0) + 1 }).eq('id', selected.id)
+      await apiFetch(`/api/templates/${selected.id}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ use_count: (selected.use_count || 0) + 1 }),
+      })
     }
     setTimeout(() => setCopied(false), 3000)
   }
 
   async function onSaveTemplate(data: TemplateFormData) {
     setSaving(true)
-    const { data: { user } } = await supabase.auth.getUser()
-    if (!user) return
+    const res = await apiFetch('/api/templates', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(data),
+    })
 
-    const placeholders = extractPlaceholders(data.content)
-    const { data: saved, error } = await supabase.from('templates').insert({
-      user_id: user.id,
-      name: data.name,
-      category: data.category,
-      content: data.content,
-      placeholders,
-    }).select().single()
-
-    if (error) {
-      toast({ title: 'Error saving template', description: error.message, variant: 'destructive' })
-    } else {
-      addTemplate(saved)
+    if (res.ok) {
+      addTemplate(await res.json())
       toast({ title: 'Template saved!' })
       reset()
       setShowCreate(false)
+    } else {
+      const err = await res.json().catch(() => ({}))
+      toast({ title: 'Error saving template', description: err.detail, variant: 'destructive' })
     }
     setSaving(false)
   }
 
   async function deleteTemplate(id: string) {
-    const { error } = await supabase.from('templates').delete().eq('id', id)
-    if (!error) {
+    const res = await apiFetch(`/api/templates/${id}`, { method: 'DELETE' })
+    if (res.ok) {
       removeTemplate(id)
       if (selected?.id === id) setSelected(null)
       toast({ title: 'Template deleted' })

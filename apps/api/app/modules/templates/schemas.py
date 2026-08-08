@@ -28,3 +28,4 @@ class TemplateUpdate(BaseModel):
     name: Optional[str] = None
     category: Optional[str] = None
     content: Optional[str] = None
+    use_count: Optional[int] = None

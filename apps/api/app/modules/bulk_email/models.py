@@ -22,7 +22,7 @@ class EmailCampaign(Base, UUIDPKMixin, CreatedAtMixin):
     subject: Mapped[str] = mapped_column(Text, nullable=False)
     body: Mapped[str] = mapped_column(Text, nullable=False)
     # draft | queued | sending | completed | paused | failed — no DB CHECK constraint,
-    # just a comment in schema.sql; not enforced here either to match the real DB.
+    # validated only at the application layer.
     status: Mapped[str] = mapped_column(Text, server_default="draft", nullable=False)
     delay_seconds: Mapped[int] = mapped_column(Integer, server_default="30", nullable=False)
 

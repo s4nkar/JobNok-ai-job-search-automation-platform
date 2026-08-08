@@ -1,10 +1,10 @@
-"""Generic user-scoped repository — the enforcement layer for per-user data
-isolation now that the app connects to Postgres with an RLS-bypassing role.
+"""Generic user-scoped repository — the sole enforcement layer for per-user
+data isolation. There is no Row Level Security or PostgREST underneath this;
+the app connects to Postgres with a single ordinary role.
 
 Every method requires `user_id` as an explicit argument and bakes it into the
-WHERE clause internally. This is deliberate: RLS policies remain defined in
-supabase/schema.sql as defense-in-depth, but they are not the enforcement
-mechanism for traffic coming through this API — this class is.
+WHERE clause internally. This class is the enforcement mechanism for every
+query made through this API — nothing else scopes access.
 """
 
 from typing import Generic, TypeVar

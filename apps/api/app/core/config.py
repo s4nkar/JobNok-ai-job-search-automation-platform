@@ -6,7 +6,7 @@ then falls back to the .env file. The Python default (e.g. "") is ONLY used
 if the variable is absent from both sources — it is never the live value in
 a real deployment.
 
-Example: `supabase_url` ← SUPABASE_URL in .env or OS env
+Example: `clerk_issuer` ← CLERK_ISSUER in .env or OS env
 """
 
 from pydantic_settings import BaseSettings
@@ -121,14 +121,20 @@ class Settings(BaseSettings):
     # Minimum delay between individual emails to avoid spam flags (seconds)
     bulk_email_min_delay_seconds: int = 20
 
-    # ── Supabase ─────────────────────────────────────────────────────────────
-    # All three required — get from Supabase project Settings > API.
-    # Used for Auth/JWT (supabase_jwt_secret) and, transitionally, for the
-    # supabase-py query client (supabase_url/supabase_service_role_key) until
-    # every module has migrated its queries to SQLAlchemy (see database_url below).
-    supabase_url: str = ""
-    supabase_service_role_key: str = ""
-    supabase_jwt_secret: str = ""
+    # ── Cloudinary (CV photo storage) ───────────────────────────────────────
+    # Get from Cloudinary dashboard's Account Details page.
+    cloudinary_cloud_name: str = ""
+    cloudinary_api_key: str = ""
+    cloudinary_api_secret: str = ""
+
+    # ── Clerk (Auth) ─────────────────────────────────────────────────────────
+    # JWKS endpoint + issuer for verifying Clerk session tokens (RS256) —
+    # both come from the Clerk dashboard's API Keys page. Dev instances serve
+    # JWKS at https://<subdomain>.clerk.accounts.dev/.well-known/jwks.json.
+    clerk_jwks_url: str = ""
+    clerk_issuer: str = ""
+    # Svix signing secret for verifying inbound webhooks (app/modules/auth/routes.py).
+    clerk_webhook_secret: str = ""
 
     # ── Database (SQLAlchemy) ────────────────────────────────────────────────
     # Direct Postgres connection string to the same Supabase project, e.g.
@@ -139,6 +145,11 @@ class Settings(BaseSettings):
     # RLS is not the enforcement layer here.
     database_url: str = ""
 
+    # Session-pooler / direct connection to the same Supabase project (port 5432,
+    # not the transaction pooler's 6543). DDL (CREATE INDEX, ALTER TABLE, etc.) is
+    # unreliable through the transaction pooler, so Alembic needs this instead.
+    migrations_database_url: str = ""
+
     @property
     def database_url_async(self) -> str:
         """asyncpg driver — used by the FastAPI app (app/core/database.py)."""
@@ -146,8 +157,13 @@ class Settings(BaseSettings):
 
     @property
     def database_url_sync(self) -> str:
-        """psycopg driver — used by Celery tasks (no event loop) and Alembic."""
+        """psycopg driver — used by Celery tasks (no event loop)."""
         return self.database_url.replace("postgresql://", "postgresql+psycopg://", 1)
+
+    @property
+    def migrations_database_url_sync(self) -> str:
+        """psycopg driver over the session-pooler/direct URL — used by Alembic only."""
+        return self.migrations_database_url.replace("postgresql://", "postgresql+psycopg://", 1)
 
     # ── Upstash Redis ────────────────────────────────────────────────────────
     # REST-based Redis for rate limiting — get from Upstash console
@@ -155,12 +171,11 @@ class Settings(BaseSettings):
     upstash_redis_rest_token: str = ""
     # TCP Redis URL for Celery broker/backend (can reuse Upstash rediss:// URL)
     redis_url: str = "redis://localhost:6379/0"
-    redis_password: str = ""
 
     # ── Resend ───────────────────────────────────────────────────────────────
     resend_api_key: str = ""
-    resend_from_email: str = "noreply@quickjob.app"
-    resend_from_name: str = "QuickJob"
+    resend_from_email: str = "noreply@jobnok.app"
+    resend_from_name: str = "JobNok"
 
     # ── App ──────────────────────────────────────────────────────────────────
     app_url: str = "http://localhost:3000"
@@ -192,13 +207,21 @@ class Settings(BaseSettings):
             if not value:
                 missing.append(f"{env_name} (required when AI_PROVIDER={primary})")
 
-        # Supabase — always required
-        if not self.supabase_url:
-            missing.append("SUPABASE_URL")
-        if not self.supabase_service_role_key:
-            missing.append("SUPABASE_SERVICE_ROLE_KEY")
-        if not self.supabase_jwt_secret:
-            missing.append("SUPABASE_JWT_SECRET")
+        # Cloudinary — always required
+        if not self.cloudinary_cloud_name:
+            missing.append("CLOUDINARY_CLOUD_NAME")
+        if not self.cloudinary_api_key:
+            missing.append("CLOUDINARY_API_KEY")
+        if not self.cloudinary_api_secret:
+            missing.append("CLOUDINARY_API_SECRET")
+
+        # Clerk — always required
+        if not self.clerk_jwks_url:
+            missing.append("CLERK_JWKS_URL")
+        if not self.clerk_issuer:
+            missing.append("CLERK_ISSUER")
+        if not self.clerk_webhook_secret:
+            missing.append("CLERK_WEBHOOK_SECRET")
 
         # Upstash Redis — always required
         if not self.upstash_redis_rest_url:
