@@ -7,7 +7,7 @@ import { Toaster } from '@/components/ui/toaster'
 const inter = Inter({ subsets: ['latin'] })
 
 export const metadata: Metadata = {
-  title: '⚡ QuickJob | AI Job Search Toolkit',
+  title: 'JobNok | AI Job Search Toolkit',
   description: 'Smart templates, resume tailoring, LinkedIn auto-fill, interview prep, and bulk outreach — all in one free toolkit.',
 }
 

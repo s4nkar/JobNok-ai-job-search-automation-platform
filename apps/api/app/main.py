@@ -1,4 +1,4 @@
-"""QuickJob FastAPI Backend — modular monolith composition root.
+"""JobNok FastAPI Backend — modular monolith composition root.
 
 Registers all feature-module routers, middleware, and startup hooks.
 Heavy operations: LinkedIn scraping, AI generation, bulk email queue.
@@ -35,7 +35,7 @@ setup_logging(settings)
 _debug = settings.app_url.startswith("http://localhost")
 
 app = FastAPI(
-    title="QuickJob API",
+    title="JobNok API",
     version="1.0.0",
     docs_url="/docs" if _debug else None,
     redoc_url=None,

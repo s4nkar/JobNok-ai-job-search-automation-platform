@@ -47,7 +47,7 @@ COPY --from=deps /repo/node_modules ./node_modules
 COPY --from=deps /repo/apps/web/node_modules ./apps/web/node_modules
 COPY . .
 
-RUN pnpm --filter quickjob-frontend build
+RUN pnpm --filter jobnok-frontend build
 
 FROM node:22-alpine AS runner
 WORKDIR /app

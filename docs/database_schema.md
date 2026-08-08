@@ -1,6 +1,6 @@
 # 🗄️ Database Schema & Security
 
-QuickJob utilizes **Neon (PostgreSQL)** for its primary data store, accessed from FastAPI via **SQLAlchemy async ORM + Alembic migrations** (no query-builder client, no PostgREST, no RLS). Every backend request includes a JWT; the app-level `user_id` filtering enforced by `UserScopedRepository` (`apps/api/app/shared/repository.py`) is what isolates users' data — the sole enforcement layer, not a backstop alongside anything else.
+JobNok utilizes **Neon (PostgreSQL)** for its primary data store, accessed from FastAPI via **SQLAlchemy async ORM + Alembic migrations** (no query-builder client, no PostgREST, no RLS). Every backend request includes a JWT; the app-level `user_id` filtering enforced by `UserScopedRepository` (`apps/api/app/shared/repository.py`) is what isolates users' data — the sole enforcement layer, not a backstop alongside anything else.
 
 **Schema ownership:** Alembic (`apps/api/alembic/`) is the single source of truth for table/column DDL — schema changes go through `alembic revision --autogenerate` + `alembic upgrade head`. There is no separate SQL file to keep in sync.
 
@@ -61,4 +61,4 @@ QuickJob utilizes **Neon (PostgreSQL)** for its primary data store, accessed fro
 
 ## Data isolation — application layer only
 
-QuickJob has no Row Level Security, no PostgREST, and no Postgres roles for `authenticated`/`anon`/`service_role` — the app connects to Neon with a single ordinary role and does its own scoping in code. Every user-owned table's queries go through `UserScopedRepository` (`apps/api/app/shared/repository.py`), which every module's `service.py` uses and which requires an explicit `user_id` argument on every query — that argument comes from the verified JWT on each request, never from client-supplied input. This is the sole enforcement mechanism; there is no database-level backstop layered underneath it.
+JobNok has no Row Level Security, no PostgREST, and no Postgres roles for `authenticated`/`anon`/`service_role` — the app connects to Neon with a single ordinary role and does its own scoping in code. Every user-owned table's queries go through `UserScopedRepository` (`apps/api/app/shared/repository.py`), which every module's `service.py` uses and which requires an explicit `user_id` argument on every query — that argument comes from the verified JWT on each request, never from client-supplied input. This is the sole enforcement mechanism; there is no database-level backstop layered underneath it.

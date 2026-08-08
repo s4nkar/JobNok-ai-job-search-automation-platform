@@ -36,7 +36,7 @@ services:
     environment:
       POSTGRES_USER: postgres
       POSTGRES_PASSWORD: devpassword
-      POSTGRES_DB: quickjob
+      POSTGRES_DB: jobnok
     ports:
       - "5433:5432"
     volumes:
@@ -65,9 +65,9 @@ services:
         condition: service_healthy
     environment:
       - APP_URL=http://localhost:3000
-      - DATABASE_URL=postgresql://postgres:devpassword@postgres:5432/quickjob
+      - DATABASE_URL=postgresql://postgres:devpassword@postgres:5432/jobnok
       # Local throwaway Postgres has no pooler — same URL serves both roles.
-      - MIGRATIONS_DATABASE_URL=postgresql://postgres:devpassword@postgres:5432/quickjob
+      - MIGRATIONS_DATABASE_URL=postgresql://postgres:devpassword@postgres:5432/jobnok
 
   celery:
     build:
@@ -80,7 +80,7 @@ services:
       postgres:
         condition: service_healthy
     environment:
-      - DATABASE_URL=postgresql://postgres:devpassword@postgres:5432/quickjob
+      - DATABASE_URL=postgresql://postgres:devpassword@postgres:5432/jobnok
 
   nextjs:
     build:

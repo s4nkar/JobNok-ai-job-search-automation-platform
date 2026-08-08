@@ -1,6 +1,6 @@
 # 🏗️ System Architecture
 
-QuickJob is built on a modern, distributed architecture designed for high performance, scalability, and cost efficiency (currently free-tier optimized). The system strictly separates the user interface from business logic, utilizing a robust stack of Next.js, FastAPI, Neon, Clerk (Auth), Supabase (Storage), Redis, and Celery.
+JobNok is built on a modern, distributed architecture designed for high performance, scalability, and cost efficiency (currently free-tier optimized). The system strictly separates the user interface from business logic, utilizing a robust stack of Next.js, FastAPI, Neon, Clerk (Auth), Supabase (Storage), Redis, and Celery.
 
 ## High-Level Architecture Diagram
 

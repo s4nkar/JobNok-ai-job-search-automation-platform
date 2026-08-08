@@ -1,6 +1,6 @@
 # 🚀 Deployment & Local Development
 
-QuickJob is designed to be easily deployed to modern serverless and PaaS providers. The current Phase 1 architecture is designed specifically to run entirely on **Free Tier** services.
+JobNok is designed to be easily deployed to modern serverless and PaaS providers. The current Phase 1 architecture is designed specifically to run entirely on **Free Tier** services.
 
 ## Production Environments
 
@@ -16,7 +16,7 @@ QuickJob is designed to be easily deployed to modern serverless and PaaS provide
 
 ## Local Development via Docker (Recommended)
 
-QuickJob provides a comprehensive `docker-compose.yml` that orchestrates all local services (Frontend, Backend, Celery Worker, Redis, and Nginx proxy).
+JobNok provides a comprehensive `docker-compose.yml` that orchestrates all local services (Frontend, Backend, Celery Worker, Redis, and Nginx proxy).
 
 ### Setup Steps
 1. Clone the repository.
@@ -71,7 +71,7 @@ uv run celery -A app.workers.celery_app worker --loglevel=info
 In the frontend `next.config.mjs` (or Next.js middleware), calls to `/api/*` are rewritten/proxied to the backend url. In the Docker compose setup, an Nginx container serves as the ingress point handling the routing to the appropriate containers.
 
 ### CORS Configuration
-The FastAPI backend locks down CORS via the `APP_URL` environment variable. Ensure this variable exactly matches the frontend domain in production (e.g., `https://quickjob.app`) to prevent CORS errors.
+The FastAPI backend locks down CORS via the `APP_URL` environment variable. Ensure this variable exactly matches the frontend domain in production (e.g., `https://jobnok.app`) to prevent CORS errors.
 
 ### Background Workers
 Deploying Celery requires a dedicated worker process. On platforms like Railway, you define a secondary service or custom start command:

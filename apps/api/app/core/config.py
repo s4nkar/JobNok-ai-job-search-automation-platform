@@ -174,8 +174,8 @@ class Settings(BaseSettings):
 
     # ── Resend ───────────────────────────────────────────────────────────────
     resend_api_key: str = ""
-    resend_from_email: str = "noreply@quickjob.app"
-    resend_from_name: str = "QuickJob"
+    resend_from_email: str = "noreply@jobnok.app"
+    resend_from_name: str = "JobNok"
 
     # ── App ──────────────────────────────────────────────────────────────────
     app_url: str = "http://localhost:3000"

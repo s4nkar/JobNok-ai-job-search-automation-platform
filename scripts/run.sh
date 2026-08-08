@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# QuickJob runner — all dev and production commands in one place.
+# JobNok runner — all dev and production commands in one place.
 #
 # FIRST TIME
 #   ./run.sh setup      Copy .env files from examples, validate they are filled,
@@ -150,10 +150,10 @@ cmd_setup() {
   info "Building and starting all containers..."
   docker compose up --build -d
 
-  _wait_for_health "http://localhost/api/health" "QuickJob (nginx → FastAPI)"
+  _wait_for_health "http://localhost/api/health" "JobNok (nginx → FastAPI)"
 
   echo ""
-  echo "  QuickJob is running!"
+  echo "  JobNok is running!"
   echo ""
   echo "    App:    http://localhost"
   echo "    API:    http://localhost/api/health"
@@ -165,9 +165,9 @@ cmd_setup() {
 
 cmd_up() {
   _require_docker
-  info "Starting QuickJob (production mode)..."
+  info "Starting JobNok (production mode)..."
   docker compose up --build -d
-  _wait_for_health "http://localhost/api/health" "QuickJob (nginx → FastAPI)"
+  _wait_for_health "http://localhost/api/health" "JobNok (nginx → FastAPI)"
   echo ""
   echo "  App: http://localhost | API: http://localhost/api/health"
 }
@@ -183,7 +183,7 @@ cmd_dev() {
   info "Stopping any existing containers..."
   docker compose down 2>/dev/null || true
 
-  info "Starting QuickJob (dev mode — hot reload, no nginx)..."
+  info "Starting JobNok (dev mode — hot reload, no nginx)..."
   docker compose -f docker-compose.yml -f docker-compose.dev.yml up --build -d
 
   # Poll FastAPI directly — no nginx in dev mode.
@@ -211,10 +211,10 @@ cmd_logs() {
 
 cmd_restart() {
   _require_docker
-  info "Restarting QuickJob..."
+  info "Restarting JobNok..."
   docker compose down
   docker compose up --build -d
-  _wait_for_health "http://localhost/api/health" "QuickJob (nginx → FastAPI)"
+  _wait_for_health "http://localhost/api/health" "JobNok (nginx → FastAPI)"
 }
 
 cmd_ps() {
@@ -250,7 +250,7 @@ cmd_clean() {
 cmd_help() {
   cat <<'EOF'
 
-  QuickJob — available commands
+  JobNok — available commands
 
     ./run.sh setup          First-time init: scaffold .env files, validate config,
                             build containers, start the stack. Safe to re-run.

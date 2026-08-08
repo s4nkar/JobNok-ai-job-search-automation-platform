@@ -12,7 +12,7 @@ resend.api_key = settings.resend_api_key
 UNSUBSCRIBE_FOOTER = """
 
 ---
-You're receiving this email because someone used QuickJob to contact you.
+You're receiving this email because someone used JobNok to contact you.
 To unsubscribe from future emails from this sender, reply with "Unsubscribe".
 """
 

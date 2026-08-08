@@ -1,4 +1,4 @@
-# QuickJob
+# JobNok
 
 AI-powered job search automation platform. Eleven tools in one place to cover every repetitive step of the job hunt, from tailoring your resume to sending bulk outreach emails.
 
@@ -93,7 +93,7 @@ Everything — Postgres, Redis, the API, Celery, and Next.js — runs in Docker 
 ```bash
 pnpm dev:local
 ```
-Runs Postgres/Redis/API/Celery in Docker (same as above) but Next.js natively on the host via `pnpm --filter quickjob-frontend dev`. Sidesteps a real limitation of option 1 on Windows: Docker Desktop's WSL2 inotify layer can miss file-change events on bind-mounted volumes, so hot reload for both the API and Next.js can silently stop working. Requires [pnpm](https://pnpm.io/installation) (Node ≥ 22) on the host — `corepack enable` picks up the pinned version automatically.
+Runs Postgres/Redis/API/Celery in Docker (same as above) but Next.js natively on the host via `pnpm --filter jobnok-frontend dev`. Sidesteps a real limitation of option 1 on Windows: Docker Desktop's WSL2 inotify layer can miss file-change events on bind-mounted volumes, so hot reload for both the API and Next.js can silently stop working. Requires [pnpm](https://pnpm.io/installation) (Node ≥ 22) on the host — `corepack enable` picks up the pinned version automatically.
 
 ### 3. Fully manual (no Docker)
 
