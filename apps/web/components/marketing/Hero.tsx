@@ -25,8 +25,11 @@ export function Hero() {
         <div className="max-w-2xl mx-auto text-center pt-2">
 
 
-          <p className={`${baloo.className} text-lg font-semibold text-indigo-600 mb-2`}>
-            Job <span className="text-gradient-brand">നോക്ക്</span>
+          <p className="flex items-baseline justify-center gap-1 mb-4">
+            <span className="text-2xl sm:text-3xl font-extrabold tracking-tight text-slate-900">Job</span>
+            <span className={`${baloo.className} text-3xl sm:text-4xl font-bold text-gradient-brand`}>
+              നോക്ക്
+            </span>
           </p>
 
           <h1 className="text-4xl sm:text-5xl lg:text-6xl font-bold tracking-tight text-slate-900 mb-5 leading-[1.12]">

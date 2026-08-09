@@ -68,9 +68,12 @@ export default function AuthLayout({ children }: { children: React.ReactNode }) 
           {/* Center content */}
           <div className="absolute inset-0 flex flex-col items-center justify-center text-center px-10">
             <Link href="/" className="flex flex-col items-center">
-              <img src="/brand-icon.png" alt="" className="w-12 h-12 mb-1" />
-              <h1 className={`${baloo.className} text-3xl font-bold text-slate-900 tracking-tight mb-1`}>
-                Job <span className="text-gradient-brand">നോക്ക്</span>
+              <img src="/brand-icon.png" alt="" className="w-12 h-12 mb-2" />
+              <h1 className="flex items-baseline justify-center gap-2 mb-1">
+                <span className="text-4xl font-extrabold tracking-tight text-slate-900">Job</span>
+                <span className={`${baloo.className} text-5xl font-bold text-gradient-brand`}>
+                  നോക്ക്
+                </span>
               </h1>
             </Link>
             <p className="text-slate-500 text-sm leading-relaxed max-w-[260px]">
