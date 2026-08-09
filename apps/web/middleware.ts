@@ -2,6 +2,7 @@ import { clerkMiddleware, createRouteMatcher } from '@clerk/nextjs/server'
 import { NextResponse } from 'next/server'
 
 const isAuthRoute = createRouteMatcher(['/login(.*)', '/signup(.*)', '/sso-callback(.*)'])
+const isPublicMarketingRoute = createRouteMatcher(['/', '/contact(.*)', '/terms(.*)', '/privacy(.*)'])
 const isApiRoute = createRouteMatcher(['/api(.*)'])
 
 export default clerkMiddleware(async (auth, req) => {
@@ -9,7 +10,7 @@ export default clerkMiddleware(async (auth, req) => {
 
   const { userId } = await auth()
 
-  if (!userId && !isAuthRoute(req)) {
+  if (!userId && !isAuthRoute(req) && !isPublicMarketingRoute(req)) {
     const url = req.nextUrl.clone()
     url.pathname = '/login'
     url.searchParams.set('redirect', req.nextUrl.pathname)
