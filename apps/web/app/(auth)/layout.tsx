@@ -1,3 +1,4 @@
+import Link from 'next/link'
 import { Baloo_Chettan_2 } from 'next/font/google'
 import { tools, toolBadgeColors } from '@/lib/tools'
 
@@ -30,7 +31,9 @@ export default function AuthLayout({ children }: { children: React.ReactNode }) 
         <div className="w-full max-w-md">
           {/* Mobile-only brand header — the branded panel takes over from lg: up. */}
           <div className="flex lg:hidden items-center justify-center mb-8">
-            <img src="/logo.png" alt="JobNok" className="h-10 w-auto" />
+            <Link href="/">
+              <img src="/logo.png" alt="JobNok" className="h-10 w-auto" />
+            </Link>
           </div>
           {children}
         </div>
@@ -64,10 +67,12 @@ export default function AuthLayout({ children }: { children: React.ReactNode }) 
 
           {/* Center content */}
           <div className="absolute inset-0 flex flex-col items-center justify-center text-center px-10">
-            <img src="/brand-icon.png" alt="" className="w-12 h-12 mb-1" />
-            <h1 className={`${baloo.className} text-3xl font-bold text-slate-900 tracking-tight mb-1`}>
-              Job <span className="text-gradient-brand">നോക്ക്</span>
-            </h1>
+            <Link href="/" className="flex flex-col items-center">
+              <img src="/brand-icon.png" alt="" className="w-12 h-12 mb-1" />
+              <h1 className={`${baloo.className} text-3xl font-bold text-slate-900 tracking-tight mb-1`}>
+                Job <span className="text-gradient-brand">നോക്ക്</span>
+              </h1>
+            </Link>
             <p className="text-slate-500 text-sm leading-relaxed max-w-[260px]">
               Every tool for your job search resumes, cover letters, interviews, tracking, and outreach in one place.
             </p>
