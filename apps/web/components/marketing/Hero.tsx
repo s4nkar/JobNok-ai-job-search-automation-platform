@@ -8,25 +8,22 @@ const baloo = Baloo_Chettan_2({ subsets: ['latin', 'malayalam'], weight: ['600',
 
 export function Hero() {
   return (
-    <section className="relative overflow-hidden pt-10 pb-28 min-h-[760px] sm:min-h-[820px]">
+    <section className="relative overflow-hidden pt-10 pb-16 sm:pb-24 min-h-[640px] lg:min-h-[820px]">
       {/* Background Orbs */}
       <div className="absolute -top-32 -left-40 w-[550px] h-[550px] rounded-full bg-indigo-500/10 blur-[130px] pointer-events-none" aria-hidden />
       <div className="absolute -top-20 right-0 w-[500px] h-[500px] rounded-full bg-pink-500/10 blur-[120px] pointer-events-none" aria-hidden />
 
-      {/* Full-bleed Flow Canvas overlay */}
-      <div className="absolute inset-0 top-20 w-full h-full z-10">
+      {/* Desktop Full-Bleed Flow Overlay (Large screens >= 1024px) */}
+      <div className="hidden lg:block absolute inset-0 w-full h-full z-10 pointer-events-none">
         <div className="container relative mx-auto h-full max-w-7xl">
           <FlowDiagram />
         </div>
       </div>
 
       {/* Centered Hero Copy in foreground */}
-      <div className="container relative mx-auto px-4 sm:px-6 lg:px-8 max-w-7xl z-20 pointer-events-none">
-        <div className="max-w-2xl mx-auto text-center pt-2 pointer-events-auto">
-          <span className="inline-flex items-center gap-2 px-3.5 py-1.5 rounded-full border border-slate-200 bg-white/95 text-xs font-medium text-slate-600 mb-6 shadow-xs backdrop-blur-xs">
-            <span className="h-2 w-2 rounded-full bg-emerald-500 animate-pulse" />
-            Free · No credit card · 10 tools, one account
-          </span>
+      <div className="container relative mx-auto px-4 sm:px-6 lg:px-8 max-w-7xl z-20">
+        <div className="max-w-2xl mx-auto text-center pt-2">
+
 
           <p className={`${baloo.className} text-lg font-semibold text-indigo-600 mb-2`}>
             Job <span className="text-gradient-brand">നോക്ക്</span>
@@ -55,6 +52,13 @@ export function Hero() {
             >
               See the tools
             </Link>
+          </div>
+        </div>
+
+        {/* Mobile & Tablet Dedicated Flow View (Screens < 1024px) */}
+        <div className="block lg:hidden mt-10 w-full overflow-x-auto pb-4 scrollbar-none">
+          <div className="min-w-[760px] mx-auto">
+            <FlowDiagram />
           </div>
         </div>
       </div>

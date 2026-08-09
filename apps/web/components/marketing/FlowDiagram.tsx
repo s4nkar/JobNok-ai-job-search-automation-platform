@@ -201,7 +201,7 @@ const accentDots: Record<string, string> = {
 export function FlowDiagram() {
   return (
     <div className="relative w-full h-full overflow-x-auto sm:overflow-visible">
-      <div className="relative w-full h-full min-w-[720px] sm:min-w-0" style={{ aspectRatio: `${W} / ${H}` }}>
+      <div className="relative w-full top-20 h-full min-w-[720px] sm:min-w-0" style={{ aspectRatio: `${W} / ${H}` }}>
         {/* SVG Flow Lines */}
         <svg
           viewBox={`0 0 ${W} ${H}`}
