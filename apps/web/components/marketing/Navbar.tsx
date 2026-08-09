@@ -1,16 +1,33 @@
 'use client'
 
+import { useEffect, useState } from 'react'
 import Link from 'next/link'
 import { useUser } from '@clerk/nextjs'
 
+const SCROLL_THRESHOLD = 60
+
 export function Navbar() {
   const { isLoaded, isSignedIn } = useUser()
+  const [scrolled, setScrolled] = useState(false)
+
+  useEffect(() => {
+    const onScroll = () => setScrolled(window.scrollY > SCROLL_THRESHOLD)
+    onScroll()
+    window.addEventListener('scroll', onScroll, { passive: true })
+    return () => window.removeEventListener('scroll', onScroll)
+  }, [])
 
   return (
-    <header className="sticky top-0 z-40 bg-white/80 backdrop-blur border-b border-slate-100">
+    <header
+      className={`fixed top-0 inset-x-0 z-40 transition-colors duration-300 border-b ${
+        scrolled
+          ? 'bg-white/80 backdrop-blur border-slate-100'
+          : 'bg-transparent border-transparent'
+      }`}
+    >
       <div className="container flex items-center justify-between h-16">
         <Link href="/" className="flex items-center shrink-0">
-          <img src="/logo.png" alt="JobNok" className="h-7 w-auto" />
+          <img src="/logo.png" alt="JobNok" className="h-10 w-auto" />
         </Link>
 
         <nav className="hidden md:flex items-center gap-7 text-sm text-slate-600">
