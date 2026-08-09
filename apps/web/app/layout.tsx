@@ -1,10 +1,10 @@
 import type { Metadata } from 'next'
-import { Inter } from 'next/font/google'
+import { Manrope } from 'next/font/google'
 import { ClerkProvider } from '@clerk/nextjs'
 import './globals.css'
 import { Toaster } from '@/components/ui/toaster'
 
-const inter = Inter({ subsets: ['latin'] })
+const manrope = Manrope({ subsets: ['latin'] })
 
 export const metadata: Metadata = {
   title: 'JobNok | AI Job Search Toolkit',
@@ -15,7 +15,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
   return (
     <ClerkProvider signInUrl="/login" signUpUrl="/signup" afterSignInUrl="/templates" afterSignUpUrl="/templates">
       <html lang="en">
-        <body className={inter.className}>
+        <body className={manrope.className}>
           {children}
           <Toaster />
         </body>
