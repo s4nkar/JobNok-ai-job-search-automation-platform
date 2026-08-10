@@ -8,7 +8,7 @@ export function Footer() {
         <div className="col-span-2 md:col-span-1">
           <img src="/logo.png" alt="JobNok" className="h-6 w-auto mb-3" />
           <p className="text-sm text-slate-500 leading-relaxed max-w-[240px]">
-            Every tool for your job search — resumes, cover letters, interviews, tracking, and outreach in one place.
+            Every tool for your job search. Resumes, cover letters, interviews, tracking, and outreach in one place.
           </p>
         </div>
 

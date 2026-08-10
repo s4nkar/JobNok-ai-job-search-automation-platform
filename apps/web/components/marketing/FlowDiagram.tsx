@@ -219,7 +219,7 @@ export function FlowDiagram() {
                 {/* Clear light-medium grey flow path line */}
                 <path
                   d={pathD}
-                  stroke="#cbd5e1"
+                  stroke="#e6e6e6ff"
                   strokeWidth={1.5}
                   strokeOpacity={0.75}
                   fill="none"

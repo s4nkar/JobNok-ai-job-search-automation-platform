@@ -1,7 +1,7 @@
 const stats = [
   { value: '4×', label: 'Cheaper and faster than a single-prompt AI resume tool' },
   { value: '10', label: 'Tools in one free account, no separate subscriptions' },
-  { value: '0', label: 'Invented qualifications — matching is deterministic, not AI guesswork' },
+  { value: '0', label: 'Invented qualifications. Matching is deterministic, not AI guesswork' },
   { value: 'Free', label: 'No credit card, no trial countdown' },
 ]
 

@@ -59,7 +59,7 @@ export default function SignupPage() {
       if (result.status === 'complete') {
         await setActive({ session: result.createdSessionId })
         toast({ title: 'Account created!' })
-        router.push('/templates')
+        router.push('/dashboard')
       } else {
         toast({ title: 'Verification incomplete', description: 'Please try again.', variant: 'destructive' })
       }
@@ -81,7 +81,7 @@ export default function SignupPage() {
     await signUp.authenticateWithRedirect({
       strategy: OAUTH_STRATEGIES[provider],
       redirectUrl: '/sso-callback',
-      redirectUrlComplete: '/templates',
+      redirectUrlComplete: '/dashboard',
     })
   }
 

@@ -13,7 +13,7 @@ export function FinalCta() {
           No subscription, no trial countdown.
         </h2>
         <p className="text-slate-500 text-base leading-relaxed mb-9 max-w-md">
-          Start with whichever tool you need right now — the rest are there when you need them too.
+          Start with whichever tool you need right now. The rest are there when you need them too.
         </p>
 
         <Link

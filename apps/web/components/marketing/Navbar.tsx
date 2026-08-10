@@ -39,7 +39,7 @@ export function Navbar() {
         <div className="flex items-center gap-2">
           {isLoaded && isSignedIn ? (
             <Link
-              href="/templates"
+              href="/dashboard"
               className="inline-flex items-center h-10 px-5 rounded-full text-sm font-medium gradient-brand text-white shadow-brand-sm hover:opacity-90 transition-opacity"
             >
               Dashboard

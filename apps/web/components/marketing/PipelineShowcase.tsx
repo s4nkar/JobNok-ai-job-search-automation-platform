@@ -17,7 +17,7 @@ export function PipelineShowcase() {
           </h2>
           <p className="text-slate-600 text-base leading-relaxed mb-4">
             Resume and job description are chunked and embedded, then matched and scored with
-            a similarity matrix and keyword overlap — plain numpy, deterministic, same inputs
+            a similarity matrix and keyword overlap plain numpy, deterministic, same inputs
             always produce the same score. The LLM is called exactly once, only for prose:
             the headline, the tailored summary, and bullet rewrites, constrained to the evidence
             that was already matched. It can&apos;t invent a qualification you don&apos;t have.
@@ -25,7 +25,7 @@ export function PipelineShowcase() {
           <p className="text-slate-600 text-base leading-relaxed">
             That split makes it about 4× cheaper and faster than a single-prompt AI resume tool,
             and if the embedding provider is ever down, matching falls back to keyword-only
-            instead of failing silently — you still get a result, flagged as reduced-accuracy.
+            instead of failing silently, you still get a result, flagged as reduced-accuracy.
           </p>
         </div>
 
@@ -33,14 +33,12 @@ export function PipelineShowcase() {
           {steps.map((step) => (
             <div
               key={step.label}
-              className={`flex items-center gap-4 rounded-xl border p-4 bg-white ${
-                step.accent ? 'border-indigo-200 ring-1 ring-indigo-100' : 'border-slate-100'
-              }`}
+              className={`flex items-center gap-4 rounded-xl border p-4 bg-white ${step.accent ? 'border-indigo-200 ring-1 ring-indigo-100' : 'border-slate-100'
+                }`}
             >
               <span
-                className={`text-sm font-semibold shrink-0 w-24 ${
-                  step.accent ? 'text-indigo-600' : 'text-slate-700'
-                }`}
+                className={`text-sm font-semibold shrink-0 w-24 ${step.accent ? 'text-indigo-600' : 'text-slate-700'
+                  }`}
               >
                 {step.label}
               </span>
