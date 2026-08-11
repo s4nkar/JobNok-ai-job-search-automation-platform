@@ -4,16 +4,16 @@ import { useState } from 'react'
 import Link from 'next/link'
 import { useRouter } from 'next/navigation'
 import Papa from 'papaparse'
-import { useToast } from '@/components/ui/use-toast'
-import { Button } from '@/components/ui/button'
-import { Input } from '@/components/ui/input'
-import { Label } from '@/components/ui/label'
+import { useToast } from '@jobnok/ui'
+import { Button } from '@jobnok/ui'
+import { Input } from '@jobnok/ui'
+import { Label } from '@jobnok/ui'
 import {
   Select, SelectContent, SelectItem,
   SelectTrigger, SelectValue,
-} from '@/components/ui/select'
+} from '@jobnok/ui'
 import { apiFetch } from '@/lib/api'
-import { cn } from '@/lib/utils'
+import { cn } from '@jobnok/ui'
 import {
   Radar, Search, Loader2, ExternalLink, BookmarkPlus,
   CheckCircle, Building2, MapPin, TrendingUp, Download,

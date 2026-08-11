@@ -17,14 +17,14 @@ import {
   StartupHuntOpportunityStatus,
   OpportunityArtifact,
 } from '@/lib/types'
-import { isOverdue, formatDate, formatCurrency, cn } from '@/lib/utils'
-import { Button } from '@/components/ui/button'
-import { Input } from '@/components/ui/input'
-import { Textarea } from '@/components/ui/textarea'
-import { Label } from '@/components/ui/label'
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
-import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from '@/components/ui/dialog'
-import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
+import { isOverdue, formatDate, formatCurrency, cn } from '@jobnok/ui'
+import { Button } from '@jobnok/ui'
+import { Input } from '@jobnok/ui'
+import { Textarea } from '@jobnok/ui'
+import { Label } from '@jobnok/ui'
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@jobnok/ui'
+import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from '@jobnok/ui'
+import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@jobnok/ui'
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -32,8 +32,8 @@ import {
   DropdownMenuLabel,
   DropdownMenuSeparator,
   DropdownMenuTrigger,
-} from '@/components/ui/dropdown-menu'
-import { useToast } from '@/components/ui/use-toast'
+} from '@jobnok/ui'
+import { useToast } from '@jobnok/ui'
 import {
   Plus, Pencil, Trash2, Briefcase, Loader2, AlertCircle, TrendingUp, CheckCircle,
   Clock, ExternalLink, Compass, Mail, MapPin, MoreHorizontal, FileSearch, PenLine,

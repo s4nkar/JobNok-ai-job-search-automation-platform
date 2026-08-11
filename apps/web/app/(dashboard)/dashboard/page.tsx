@@ -8,10 +8,10 @@ import {
 } from 'lucide-react'
 import { JobApplication, EmailCampaign, StartupHuntSavedOpportunity, StartupHuntSource, Template, UserProfile } from '@/lib/types'
 import { ScoutCompany } from '@/lib/types'
-import { cn, formatDate, isOverdue } from '@/lib/utils'
+import { cn, formatDate, isOverdue } from '@jobnok/ui'
 import { apiGet } from '@/lib/api'
 import { queryKeys } from '@/lib/queryKeys'
-import { tools, toolBadgeColors } from '@/lib/tools'
+import { tools, toolBadgeColors } from '@jobnok/ui'
 
 const ACTIVE_STATUSES = ['Applied', 'Phone Screen', 'Interview'] as const
 const INTERVIEWING_STATUSES = ['Phone Screen', 'Interview'] as const

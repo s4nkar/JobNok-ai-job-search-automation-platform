@@ -89,6 +89,12 @@ services:
     volumes:
       - ./apps/web:/repo/apps/web
       - /repo/apps/web/node_modules
+      # @jobnok/ui is a workspace package consumed as raw TS source (no build
+      # step) — Dockerfile.dev doesn't COPY it in, so it must be bind-mounted
+      # like the app itself, or only package.json (copied at image build time)
+      # would be visible and every @jobnok/ui import would 404 at runtime.
+      - ./packages/ui:/repo/packages/ui
+      - /repo/packages/ui/node_modules
     ports:
       - "3000:3000"
     environment:
@@ -104,6 +110,28 @@ services:
         limits:
           memory: 3G
           cpus: "2.0"
+
+  marketing:
+    build:
+      context: .
+      dockerfile: apps/marketing/Dockerfile.dev
+    volumes:
+      - ./apps/marketing:/repo/apps/marketing
+      - /repo/apps/marketing/node_modules
+      # See the nextjs service's identical mount above — same reason.
+      - ./packages/ui:/repo/packages/ui
+      - /repo/packages/ui/node_modules
+    ports:
+      - "3001:3001"
+    environment:
+      # Points at the dashboard app — marketing's Log in/Sign up/tool links
+      # are absolute URLs since the two apps live on separate subdomains in prod.
+      - NEXT_PUBLIC_APP_URL=http://localhost:3000
+    deploy:
+      resources:
+        limits:
+          memory: 1G
+          cpus: "1.0"
 
 volumes:
   api_venv:

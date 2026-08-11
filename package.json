@@ -16,7 +16,10 @@
     "api:migrate:current": "docker compose exec api alembic current",
     "build": "pnpm --filter jobnok-frontend build",
     "lint": "pnpm --filter jobnok-frontend lint",
-    "typecheck": "pnpm --filter jobnok-frontend type-check"
+    "typecheck": "pnpm --filter jobnok-frontend type-check",
+    "build:marketing": "pnpm --filter jobnok-marketing build",
+    "lint:marketing": "pnpm --filter jobnok-marketing lint",
+    "typecheck:marketing": "pnpm --filter jobnok-marketing type-check"
   },
   "devDependencies": {
     "concurrently": "^9.2.4"

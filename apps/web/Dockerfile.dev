@@ -9,6 +9,7 @@ RUN corepack enable && corepack prepare pnpm@11.20.0 --activate
 
 COPY pnpm-workspace.yaml package.json pnpm-lock.yaml ./
 COPY apps/web/package.json ./apps/web/package.json
+COPY packages/ui/package.json ./packages/ui/package.json
 RUN pnpm install --frozen-lockfile
 
 WORKDIR /repo/apps/web

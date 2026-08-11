@@ -5,9 +5,9 @@ node_modules/
 .pnpm-store/
 
 # Next.js
-apps/web/.next/
-apps/web/out/
-apps/web/build/
+apps/*/.next/
+apps/*/out/
+apps/*/build/
 
 # Python
 apps/api/__pycache__/
@@ -24,8 +24,8 @@ apps/api/.pytest_cache/
 .env.development.local
 .env.test.local
 .env.production.local
-apps/web/.env
-apps/web/.env.local
+apps/*/.env
+apps/*/.env.local
 apps/api/.env
 
 # Logs

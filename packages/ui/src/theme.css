@@ -1,0 +1,85 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  :root {
+    --background: 220 20% 97%;
+    --foreground: 224 47% 10%;
+    --card: 0 0% 100%;
+    --card-foreground: 224 47% 10%;
+    --popover: 0 0% 100%;
+    --popover-foreground: 224 47% 10%;
+    --primary: 239 84% 67%;
+    --primary-foreground: 0 0% 100%;
+    --secondary: 220 14% 93%;
+    --secondary-foreground: 224 47% 10%;
+    --muted: 220 14% 93%;
+    --muted-foreground: 220 9% 46%;
+    --accent: 239 84% 95%;
+    --accent-foreground: 239 70% 45%;
+    --destructive: 0 84% 60%;
+    --destructive-foreground: 0 0% 100%;
+    --border: 220 13% 88%;
+    --input: 220 13% 88%;
+    --ring: 239 84% 67%;
+    --radius: 0.75rem;
+
+    /* Brand */
+    --brand: 239 84% 67%;
+    --brand-foreground: 0 0% 100%;
+  }
+
+  * {
+    @apply border-border;
+  }
+
+  body {
+    @apply bg-background text-foreground;
+    font-feature-settings: "rlig" 1, "calt" 1;
+  }
+}
+
+@layer utilities {
+  .scrollbar-hide {
+    -ms-overflow-style: none;
+    scrollbar-width: none;
+  }
+  .scrollbar-hide::-webkit-scrollbar {
+    display: none;
+  }
+
+  .scrollbar-thin {
+    scrollbar-width: thin;
+    scrollbar-color: hsl(220 13% 80%) transparent;
+  }
+  .scrollbar-thin::-webkit-scrollbar {
+    width: 4px;
+  }
+  .scrollbar-thin::-webkit-scrollbar-track {
+    background: transparent;
+  }
+  .scrollbar-thin::-webkit-scrollbar-thumb {
+    background-color: hsl(220 13% 80%);
+    border-radius: 2px;
+  }
+
+  .gradient-brand {
+    background: linear-gradient(135deg, hsl(239 84% 67%) 0%, hsl(262 83% 68%) 100%);
+  }
+
+  .text-gradient-brand {
+    background: linear-gradient(135deg, hsl(239 84% 67%) 0%, hsl(262 83% 68%) 100%);
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
+    background-clip: text;
+  }
+
+  .card-hover {
+    @apply transition-all duration-200 hover:shadow-md hover:-translate-y-0.5;
+  }
+
+  .page-header-icon {
+    @apply w-9 h-9 rounded-xl flex items-center justify-center shrink-0;
+  }
+}

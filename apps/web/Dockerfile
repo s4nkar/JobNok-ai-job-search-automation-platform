@@ -7,6 +7,7 @@ WORKDIR /repo
 RUN corepack enable && corepack prepare pnpm@11.20.0 --activate
 COPY pnpm-workspace.yaml package.json pnpm-lock.yaml ./
 COPY apps/web/package.json ./apps/web/package.json
+COPY packages/ui/package.json ./packages/ui/package.json
 RUN pnpm install --frozen-lockfile
 
 FROM node:22-alpine AS builder
@@ -45,6 +46,7 @@ ENV NEXT_PUBLIC_LINKEDIN_CACHE_TTL_DAYS=$NEXT_PUBLIC_LINKEDIN_CACHE_TTL_DAYS
 
 COPY --from=deps /repo/node_modules ./node_modules
 COPY --from=deps /repo/apps/web/node_modules ./apps/web/node_modules
+COPY --from=deps /repo/packages/ui/node_modules ./packages/ui/node_modules
 COPY . .
 
 RUN pnpm --filter jobnok-frontend build

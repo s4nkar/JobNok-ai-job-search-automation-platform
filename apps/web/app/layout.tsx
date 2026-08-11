@@ -1,8 +1,9 @@
 import type { Metadata } from 'next'
 import { Manrope } from 'next/font/google'
 import { ClerkProvider } from '@clerk/nextjs'
+import '@jobnok/ui/theme.css'
 import './globals.css'
-import { Toaster } from '@/components/ui/toaster'
+import { Toaster } from '@jobnok/ui'
 import { QueryProvider } from '@/components/providers/QueryProvider'
 
 const manrope = Manrope({ subsets: ['latin'] })

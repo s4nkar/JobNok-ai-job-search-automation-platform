@@ -3,17 +3,17 @@
 import { useState, useRef, useEffect, Suspense } from 'react'
 import { useSearchParams, useRouter } from 'next/navigation'
 import { config } from '@/lib/config'
-import { Button } from '@/components/ui/button'
-import { Textarea } from '@/components/ui/textarea'
-import { Label } from '@/components/ui/label'
-import { useToast } from '@/components/ui/use-toast'
+import { Button } from '@jobnok/ui'
+import { Textarea } from '@jobnok/ui'
+import { Label } from '@jobnok/ui'
+import { useToast } from '@jobnok/ui'
 import {
   Upload, FileText, Loader2, CheckCircle, XCircle, ArrowRight,
   Info, FileSearch, X, Compass, Download, LayoutTemplate,
   Sparkles, AlertTriangle, BarChart3, Pencil,
 } from 'lucide-react'
 import { apiFetch } from '@/lib/api'
-import { cn } from '@/lib/utils'
+import { cn } from '@jobnok/ui'
 import { StartupHuntSavedOpportunity } from '@/lib/types'
 
 interface TailorResult {

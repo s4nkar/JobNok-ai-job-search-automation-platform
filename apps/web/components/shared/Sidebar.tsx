@@ -5,13 +5,13 @@ import Link from 'next/link'
 import { usePathname, useRouter } from 'next/navigation'
 import { useClerk, useUser } from '@clerk/nextjs'
 import { useQuery } from '@tanstack/react-query'
-import { cn } from '@/lib/utils'
+import { cn } from '@jobnok/ui'
 import {
   FileText, Linkedin, FileSearch, PenLine, MessageSquare,
   Briefcase, Compass, DollarSign, Mail, Radar, LogOut,
   Settings, ChevronLeft, ChevronRight, Check, X, LayoutDashboard,
 } from 'lucide-react'
-import { useToast } from '@/components/ui/use-toast'
+import { useToast } from '@jobnok/ui'
 import { apiGet } from '@/lib/api'
 import { queryKeys } from '@/lib/queryKeys'
 import { UserProfile } from '@/lib/types'

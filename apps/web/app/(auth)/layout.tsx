@@ -1,6 +1,6 @@
 import Link from 'next/link'
 import { Baloo_Chettan_2 } from 'next/font/google'
-import { tools, toolBadgeColors } from '@/lib/tools'
+import { tools, toolBadgeColors } from '@jobnok/ui'
 
 // Malayalam-script font for the wordmark ("നോക്ക്" = "look/search" in
 // Malayalam — the second half of "JobNok"). Also covers Latin so "Job"

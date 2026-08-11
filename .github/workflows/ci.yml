@@ -63,6 +63,34 @@ jobs:
       - name: Build
         run: pnpm build
 
+  marketing:
+    name: Marketing (lint, typecheck, build)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      NEXT_PUBLIC_APP_URL: http://localhost:3000
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4 # version auto-detected from package.json's "packageManager"
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Lint
+        run: pnpm lint:marketing
+
+      - name: Type check
+        run: pnpm typecheck:marketing
+
+      - name: Build
+        run: pnpm build:marketing
+
   api:
     name: Backend (lint, test, migrations)
     runs-on: ubuntu-latest
@@ -169,3 +197,14 @@ jobs:
             NEXT_PUBLIC_BULK_EMAIL_MIN_DELAY=20
             NEXT_PUBLIC_BULK_EMAIL_DEFAULT_DELAY=30
             NEXT_PUBLIC_LINKEDIN_CACHE_TTL_DAYS=7
+
+      - name: Build marketing image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: apps/marketing/Dockerfile
+          push: false
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+          build-args: |
+            NEXT_PUBLIC_APP_URL=http://localhost:3000
