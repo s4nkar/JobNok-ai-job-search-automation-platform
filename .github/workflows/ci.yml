@@ -1,0 +1,171 @@
+name: CI
+
+# Validation only — no deploy target has been chosen yet, so this workflow
+# never pushes an image or touches any real infrastructure. Every credential
+# below is a throwaway placeholder that only needs to be *present* (see
+# apps/api/app/core/config.py's fail-fast validator) — nothing here makes a
+# real network call to Clerk/Cloudinary/Groq/Neon/etc.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  UV_VERSION: "0.12.1" # keep in sync with apps/api/Dockerfile
+
+jobs:
+  web:
+    name: Frontend (lint, typecheck, build)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY: pk_test_Y2xlcmsuZXhhbXBsZS5jb20k
+      CLERK_SECRET_KEY: sk_test_ci_placeholder_not_a_real_secret
+      NEXT_PUBLIC_APP_URL: http://localhost:3000
+      BACKEND_URL: http://localhost:8000
+      NEXT_PUBLIC_RATE_LIMIT_LINKEDIN: "10"
+      NEXT_PUBLIC_RATE_LIMIT_RESUME: "5"
+      NEXT_PUBLIC_RATE_LIMIT_COVER_LETTER: "5"
+      NEXT_PUBLIC_RATE_LIMIT_INTERVIEW: "10"
+      NEXT_PUBLIC_RATE_LIMIT_SALARY: "5"
+      NEXT_PUBLIC_RATE_LIMIT_JOB_SEARCH: "10"
+      NEXT_PUBLIC_RATE_LIMIT_STARTUP_HUNT: "8"
+      NEXT_PUBLIC_RATE_LIMIT_BULK_CAMPAIGN: "500"
+      NEXT_PUBLIC_RATE_LIMIT_BULK_MONTH: "3000"
+      NEXT_PUBLIC_BULK_EMAIL_MIN_DELAY: "20"
+      NEXT_PUBLIC_BULK_EMAIL_DEFAULT_DELAY: "30"
+      NEXT_PUBLIC_LINKEDIN_CACHE_TTL_DAYS: "7"
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4 # version auto-detected from package.json's "packageManager"
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Lint
+        run: pnpm lint
+
+      - name: Type check
+        run: pnpm typecheck
+
+      - name: Build
+        run: pnpm build
+
+  api:
+    name: Backend (lint, test, migrations)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    defaults:
+      run:
+        working-directory: apps/api
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: jobnok_ci
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 10
+    env:
+      # Dummy values — Settings' fail-fast validator (app/core/config.py) just
+      # needs these present; this job never makes a real network/AI call.
+      GROQ_API_KEY: ci-placeholder
+      CLOUDINARY_CLOUD_NAME: ci-placeholder
+      CLOUDINARY_API_KEY: ci-placeholder
+      CLOUDINARY_API_SECRET: ci-placeholder
+      CLERK_JWKS_URL: https://example.clerk.accounts.dev/.well-known/jwks.json
+      CLERK_ISSUER: https://example.clerk.accounts.dev
+      CLERK_WEBHOOK_SECRET: ci-placeholder
+      UPSTASH_REDIS_REST_URL: https://example.upstash.io
+      UPSTASH_REDIS_REST_TOKEN: ci-placeholder
+      # Real connection — points at this job's throwaway Postgres service container.
+      DATABASE_URL: postgresql://postgres:postgres@localhost:5432/jobnok_ci
+      MIGRATIONS_DATABASE_URL: postgresql://postgres:postgres@localhost:5432/jobnok_ci
+    steps:
+      - uses: actions/checkout@v4
+
+      # Keep in sync with apps/api/Dockerfile's "WeasyPrint system dependencies" step.
+      - name: Install WeasyPrint system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            libcairo2 libpango-1.0-0 libpangocairo-1.0-0 libpangoft2-1.0-0 \
+            libharfbuzz0b libgdk-pixbuf-2.0-0 libffi-dev shared-mime-info \
+            fontconfig fonts-liberation
+
+      - uses: astral-sh/setup-uv@v3
+        with:
+          version: ${{ env.UV_VERSION }}
+          enable-cache: true
+          cache-dependency-glob: apps/api/uv.lock
+
+      - name: Install dependencies
+        run: uv sync --frozen --all-groups
+
+      - name: Lint (ruff)
+        run: uv run ruff check .
+
+      - name: Apply migrations to a throwaway Postgres
+        run: uv run alembic upgrade head
+
+      - name: Run tests
+        run: uv run pytest
+
+  docker-build:
+    name: Docker images build
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: docker/setup-buildx-action@v3
+
+      - name: Build API image
+        uses: docker/build-push-action@v6
+        with:
+          context: apps/api
+          push: false
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Build web image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: apps/web/Dockerfile
+          push: false
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+          build-args: |
+            NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY=pk_test_Y2xlcmsuZXhhbXBsZS5jb20k
+            NEXT_PUBLIC_APP_URL=http://localhost:3000
+            NEXT_PUBLIC_RATE_LIMIT_LINKEDIN=10
+            NEXT_PUBLIC_RATE_LIMIT_RESUME=5
+            NEXT_PUBLIC_RATE_LIMIT_COVER_LETTER=5
+            NEXT_PUBLIC_RATE_LIMIT_INTERVIEW=10
+            NEXT_PUBLIC_RATE_LIMIT_SALARY=5
+            NEXT_PUBLIC_RATE_LIMIT_JOB_SEARCH=10
+            NEXT_PUBLIC_RATE_LIMIT_STARTUP_HUNT=8
+            NEXT_PUBLIC_RATE_LIMIT_BULK_CAMPAIGN=500
+            NEXT_PUBLIC_RATE_LIMIT_BULK_MONTH=3000
+            NEXT_PUBLIC_BULK_EMAIL_MIN_DELAY=20
+            NEXT_PUBLIC_BULK_EMAIL_DEFAULT_DELAY=30
+            NEXT_PUBLIC_LINKEDIN_CACHE_TTL_DAYS=7
