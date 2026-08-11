@@ -27,3 +27,18 @@ export async function apiFetch(input: string, init: RequestInit = {}): Promise<R
 
   return fetch(input, { ...init, headers })
 }
+
+/**
+ * GET + parse-JSON in one call, throwing on a non-2xx response. Built for
+ * react-query's queryFn contract (it needs a rejected promise to enter the
+ * query's error state — apiFetch alone only returns a Response, it never
+ * rejects on a 4xx/5xx).
+ */
+export async function apiGet<T>(input: string): Promise<T> {
+  const res = await apiFetch(input)
+  if (!res.ok) {
+    const body = await res.json().catch(() => ({}))
+    throw new Error(body.detail || `Request failed: ${res.status}`)
+  }
+  return res.json()
+}

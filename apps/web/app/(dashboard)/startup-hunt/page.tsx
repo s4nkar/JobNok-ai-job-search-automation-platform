@@ -2,6 +2,7 @@
 
 import Link from 'next/link'
 import { useState } from 'react'
+import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { useForm } from 'react-hook-form'
 import { zodResolver } from '@hookform/resolvers/zod'
 import { z } from 'zod'
@@ -12,7 +13,8 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@
 import { Textarea } from '@/components/ui/textarea'
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from '@/components/ui/dialog'
 import { useToast } from '@/components/ui/use-toast'
-import { apiFetch } from '@/lib/api'
+import { apiFetch, apiGet } from '@/lib/api'
+import { queryKeys } from '@/lib/queryKeys'
 import { config } from '@/lib/config'
 import { formatDate } from '@/lib/utils'
 import { StartupHuntResponse, StartupHuntResult, StartupHuntSource, StartupHuntSourceType } from '@/lib/types'
@@ -159,10 +161,13 @@ export default function StartupHuntPage() {
   })
 
   // ── My Sources dialog ──────────────────────────────────────────────
+  const queryClient = useQueryClient()
   const [sourcesOpen, setSourcesOpen] = useState(false)
-  const [sourcesLoaded, setSourcesLoaded] = useState(false)
-  const [sourcesLoading, setSourcesLoading] = useState(false)
-  const [sources, setSources] = useState<StartupHuntSource[]>([])
+  const { data: sources = [], isLoading: sourcesLoading } = useQuery({
+    queryKey: queryKeys.startupHuntSources,
+    queryFn: () => apiGet<StartupHuntSource[]>('/api/startup-hunt/sources'),
+    enabled: sourcesOpen,
+  })
   const [addingSource, setAddingSource] = useState(false)
   const [deletingSourceId, setDeletingSourceId] = useState<string | null>(null)
 
@@ -178,14 +183,8 @@ export default function StartupHuntPage() {
     defaultValues: { type: 'greenhouse', name: '', company: '', slug: '', url: '' },
   })
 
-  async function openSources() {
+  function openSources() {
     setSourcesOpen(true)
-    if (sourcesLoaded) return
-    setSourcesLoading(true)
-    const res = await apiFetch('/api/startup-hunt/sources')
-    if (res.ok) setSources(await res.json())
-    setSourcesLoading(false)
-    setSourcesLoaded(true)
   }
 
   async function onAddSource(data: SourceFormData) {
@@ -207,7 +206,7 @@ export default function StartupHuntPage() {
       setAddingSource(false)
       return
     }
-    setSources((prev) => [json, ...prev])
+    queryClient.setQueryData<StartupHuntSource[]>(queryKeys.startupHuntSources, (prev) => [json, ...(prev || [])])
     resetSourceForm({ type: data.type, name: '', company: '', slug: '', url: '' })
     toast({ title: 'Source added', description: 'It will be included in your next search.' })
     setAddingSource(false)
@@ -217,7 +216,7 @@ export default function StartupHuntPage() {
     setDeletingSourceId(id)
     const res = await apiFetch(`/api/startup-hunt/sources/${id}`, { method: 'DELETE' })
     if (res.ok) {
-      setSources((prev) => prev.filter((s) => s.id !== id))
+      queryClient.setQueryData<StartupHuntSource[]>(queryKeys.startupHuntSources, (prev) => (prev || []).filter((s) => s.id !== id))
       toast({ title: 'Source removed' })
     } else {
       toast({ title: 'Could not remove source', variant: 'destructive' })
@@ -438,7 +437,7 @@ export default function StartupHuntPage() {
                     placeholder="Berlin, Munich, Hamburg, Frankfurt, Cologne, Remote"
                     {...register('location')}
                   />
-                  <p className="text-xs text-muted-foreground">Comma-separated. Each city runs in parallel; add "Remote" to include remote roles.</p>
+                  <p className="text-xs text-muted-foreground">Comma-separated. Each city runs in parallel; add &quot;Remote&quot; to include remote roles.</p>
                   {errors.location && <p className="text-xs text-destructive">{errors.location.message}</p>}
                 </div>
                 <div className="space-y-1.5">

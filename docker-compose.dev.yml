@@ -96,6 +96,14 @@ services:
       # Server-side only — used by Next.js rewrites to reach the API inside Docker.
       # Never exposed to the browser (no NEXT_PUBLIC_ prefix).
       - BACKEND_URL=http://api:8000
+    # The base docker-compose.yml's 512M/1.0cpu limit is sized for a built
+    # production server — dev-mode webpack/HMR needs much more headroom, or
+    # compiles thrash at the memory ceiling and crawl (observed at 97%+ usage).
+    deploy:
+      resources:
+        limits:
+          memory: 3G
+          cpus: "2.0"
 
 volumes:
   api_venv:

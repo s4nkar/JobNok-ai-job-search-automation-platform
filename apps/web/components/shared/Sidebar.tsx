@@ -4,6 +4,7 @@ import { useState, useEffect, useCallback } from 'react'
 import Link from 'next/link'
 import { usePathname, useRouter } from 'next/navigation'
 import { useClerk, useUser } from '@clerk/nextjs'
+import { useQuery } from '@tanstack/react-query'
 import { cn } from '@/lib/utils'
 import {
   FileText, Linkedin, FileSearch, PenLine, MessageSquare,
@@ -11,7 +12,9 @@ import {
   Settings, ChevronLeft, ChevronRight, Check, X, LayoutDashboard,
 } from 'lucide-react'
 import { useToast } from '@/components/ui/use-toast'
-import { apiFetch } from '@/lib/api'
+import { apiGet } from '@/lib/api'
+import { queryKeys } from '@/lib/queryKeys'
+import { UserProfile } from '@/lib/types'
 
 const navItems = [
   { href: '/dashboard', label: 'Dashboard', icon: LayoutDashboard },
@@ -34,9 +37,7 @@ export function Sidebar() {
   const { signOut } = useClerk()
   const { user } = useUser()
 
-  const [userName, setUserName] = useState<string | null>(null)
   const [userEmail, setUserEmail] = useState<string | null>(null)
-  const [photoUrl, setPhotoUrl] = useState<string | null>(null)
   const [confirmSignOut, setConfirmSignOut] = useState(false)
   const [collapsed, setCollapsed] = useState(false)
 
@@ -66,15 +67,12 @@ export function Sidebar() {
     if (user) setUserEmail(user.primaryEmailAddress?.emailAddress ?? null)
   }, [user])
 
-  useEffect(() => {
-    apiFetch('/api/profile')
-      .then(r => r.json())
-      .then(p => {
-        setUserName(p.full_name || null)
-        setPhotoUrl(p.cv_photo_url || null)
-      })
-      .catch(() => { })
-  }, [])
+  const { data: profile } = useQuery({
+    queryKey: queryKeys.profile,
+    queryFn: () => apiGet<UserProfile>('/api/profile'),
+  })
+  const userName = profile?.full_name || null
+  const photoUrl = profile?.cv_photo_url || null
 
   async function doSignOut() {
     await signOut()

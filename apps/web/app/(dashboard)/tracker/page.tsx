@@ -3,7 +3,8 @@
 import React from 'react'
 import Link from 'next/link'
 import { useRouter } from 'next/navigation'
-import { useEffect, useRef, useState } from 'react'
+import { useRef, useState } from 'react'
+import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { useForm } from 'react-hook-form'
 import { zodResolver } from '@hookform/resolvers/zod'
 import { z } from 'zod'
@@ -40,7 +41,8 @@ import {
   StopCircle, Building2, BookmarkCheck, ScanSearch,
 } from 'lucide-react'
 import { ScoutCompany, ScoutContact, ScoutCrawlStatus } from '@/lib/types'
-import { apiFetch } from '@/lib/api'
+import { apiFetch, apiGet } from '@/lib/api'
+import { queryKeys } from '@/lib/queryKeys'
 
 const schema = z.object({
   company: z.string().min(1, 'Required'),
@@ -91,26 +93,38 @@ const SCOUT_STAGE_PILL: Record<string, string> = {
 
 export default function TrackerPage() {
   const router = useRouter()
+  const queryClient = useQueryClient()
   const [tab, setTab] = useState<'applications' | 'leads' | 'scout'>('applications')
-  const [applications, setApplications] = useState<JobApplication[]>([])
-  const [leads, setLeads] = useState<StartupHuntSavedOpportunity[]>([])
-  const [scoutCompanies, setScoutCompanies] = useState<ScoutCompany[]>([])
-  const [scoutLoading, setScoutLoading] = useState(false)
+
+  const { data: applications = [], isLoading: appsLoading } = useQuery({
+    queryKey: queryKeys.tracker,
+    queryFn: () => apiGet<JobApplication[]>('/api/tracker'),
+  })
+  const { data: leads = [], isLoading: leadsLoading } = useQuery({
+    queryKey: queryKeys.startupHuntOpportunities,
+    queryFn: () => apiGet<StartupHuntSavedOpportunity[]>('/api/startup-hunt/opportunities'),
+  })
+  const { data: artifactCounts = {} } = useQuery({
+    queryKey: queryKeys.startupHuntArtifactCounts,
+    queryFn: () => apiGet<Record<string, number>>('/api/startup-hunt/artifact-counts'),
+  })
+  const { data: scoutCompanies = [], isLoading: scoutLoading } = useQuery({
+    queryKey: queryKeys.startupScoutCompanies,
+    queryFn: () => apiGet<ScoutCompany[]>('/api/startup-scout/companies'),
+    enabled: tab === 'scout',
+  })
+
   const [crawlingIds, setCrawlingIds] = useState<Set<string>>(new Set())
   const [stoppingIds, setStoppingIds] = useState<Set<string>>(new Set())
   const [expandedContacts, setExpandedContacts] = useState<Record<string, boolean>>({})
   const [contactsCache, setContactsCache] = useState<Record<string, ScoutContact[]>>({})
   const [contactsLoading, setContactsLoading] = useState<Record<string, boolean>>({})
-  const scoutLoadedRef = useRef(false)
   const crawlIntervalsRef = useRef<Record<string, ReturnType<typeof setInterval>>>({})
-  const [appsLoading, setAppsLoading] = useState(true)
-  const [leadsLoading, setLeadsLoading] = useState(true)
   const [showForm, setShowForm] = useState(false)
   const [editing, setEditing] = useState<JobApplication | null>(null)
   const [saving, setSaving] = useState(false)
   const [updatingLeadId, setUpdatingLeadId] = useState<string | null>(null)
   const [leadStatusFilter, setLeadStatusFilter] = useState<StartupHuntOpportunityStatus | 'all'>('all')
-  const [artifactCounts, setArtifactCounts] = useState<Record<string, number>>({})
   const [expandedDocs, setExpandedDocs] = useState<Record<string, boolean>>({})
   const [docsCache, setDocsCache] = useState<Record<string, OpportunityArtifact[]>>({})
   const [docsLoading, setDocsLoading] = useState<Record<string, boolean>>({})
@@ -122,47 +136,17 @@ export default function TrackerPage() {
   })
   const watchStatus = watch('status')
 
-  useEffect(() => {
-    fetchApplications()
-    fetchLeads()
-    // Scout tab is lazy-loaded on first open (see tab effect below)
-    return () => {
-      // Clean up any running poll intervals on unmount
-      Object.values(crawlIntervalsRef.current).forEach(clearInterval)
-    }
-  }, [])
-
-  // Lazy-load scout companies on first switch to the scout tab
-  useEffect(() => {
-    if (tab === 'scout' && !scoutLoadedRef.current) {
-      scoutLoadedRef.current = true
-      fetchScoutCompanies()
-    }
-  }, [tab])
-
-  async function fetchApplications() {
-    setAppsLoading(true)
-    const res = await apiFetch('/api/tracker')
-    if (res.ok) setApplications(await res.json())
-    setAppsLoading(false)
+  function setScoutCompanies(updater: (prev: ScoutCompany[]) => ScoutCompany[]) {
+    queryClient.setQueryData<ScoutCompany[]>(queryKeys.startupScoutCompanies, (prev) => updater(prev || []))
   }
-
-  async function fetchLeads() {
-    setLeadsLoading(true)
-    const [leadsRes, countsRes] = await Promise.all([
-      apiFetch('/api/startup-hunt/opportunities'),
-      apiFetch('/api/startup-hunt/artifact-counts'),
-    ])
-    if (leadsRes.ok) setLeads(await leadsRes.json())
-    if (countsRes.ok) setArtifactCounts(await countsRes.json())
-    setLeadsLoading(false)
+  function setApplications(updater: (prev: JobApplication[]) => JobApplication[]) {
+    queryClient.setQueryData<JobApplication[]>(queryKeys.tracker, (prev) => updater(prev || []))
   }
-
-  async function fetchScoutCompanies() {
-    setScoutLoading(true)
-    const res = await apiFetch('/api/startup-scout/companies')
-    if (res.ok) setScoutCompanies(await res.json())
-    setScoutLoading(false)
+  function setLeads(updater: (prev: StartupHuntSavedOpportunity[]) => StartupHuntSavedOpportunity[]) {
+    queryClient.setQueryData<StartupHuntSavedOpportunity[]>(queryKeys.startupHuntOpportunities, (prev) => updater(prev || []))
+  }
+  function setArtifactCounts(updater: (prev: Record<string, number>) => Record<string, number>) {
+    queryClient.setQueryData<Record<string, number>>(queryKeys.startupHuntArtifactCounts, (prev) => updater(prev || {}))
   }
 
   function _clearCrawlInterval(id: string) {
@@ -276,7 +260,7 @@ export default function TrackerPage() {
     const url = editing ? `/api/tracker/${editing.id}` : '/api/tracker'
     const res = await apiFetch(url, { method, headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(data) })
     if (res.ok) {
-      await fetchApplications()
+      await queryClient.invalidateQueries({ queryKey: queryKeys.tracker })
       setShowForm(false)
       toast({ title: editing ? 'Application updated' : 'Application added' })
     } else {

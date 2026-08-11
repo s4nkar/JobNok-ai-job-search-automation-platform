@@ -3,6 +3,7 @@ import { Manrope } from 'next/font/google'
 import { ClerkProvider } from '@clerk/nextjs'
 import './globals.css'
 import { Toaster } from '@/components/ui/toaster'
+import { QueryProvider } from '@/components/providers/QueryProvider'
 
 const manrope = Manrope({ subsets: ['latin'] })
 
@@ -16,8 +17,10 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
     <ClerkProvider signInUrl="/login" signUpUrl="/signup" afterSignInUrl="/dashboard" afterSignUpUrl="/dashboard">
       <html lang="en">
         <body className={manrope.className}>
-          {children}
-          <Toaster />
+          <QueryProvider>
+            {children}
+            <Toaster />
+          </QueryProvider>
         </body>
       </html>
     </ClerkProvider>

@@ -2,13 +2,15 @@
 
 import { useState, useEffect, Suspense } from 'react'
 import { useSearchParams } from 'next/navigation'
+import { useQuery } from '@tanstack/react-query'
 import { config } from '@/lib/config'
 import { Button } from '@/components/ui/button'
 import { Textarea } from '@/components/ui/textarea'
 import { Label } from '@/components/ui/label'
 import { useToast } from '@/components/ui/use-toast'
 import { MessageSquare, Loader2, RefreshCw, ChevronDown, ChevronUp, Info, Compass, X } from 'lucide-react'
-import { apiFetch } from '@/lib/api'
+import { apiFetch, apiGet } from '@/lib/api'
+import { queryKeys } from '@/lib/queryKeys'
 import { cn } from '@/lib/utils'
 import { StartupHuntSavedOpportunity } from '@/lib/types'
 
@@ -46,18 +48,20 @@ function InterviewPrepInner() {
   const [error, setError] = useState<string | null>(null)
   const { toast } = useToast()
 
+  const { data: opportunities } = useQuery({
+    queryKey: queryKeys.startupHuntOpportunities,
+    queryFn: () => apiGet<StartupHuntSavedOpportunity[]>('/api/startup-hunt/opportunities'),
+    enabled: !!opportunityId,
+  })
+
   useEffect(() => {
-    if (!opportunityId) return
-    apiFetch('/api/startup-hunt/opportunities')
-      .then((r) => r.json())
-      .then((rows: StartupHuntSavedOpportunity[]) => {
-        const found = rows.find((r) => r.id === opportunityId)
-        if (found) {
-          setLead(found)
-          setJd(buildJdFromOpportunity(found))
-        }
-      })
-  }, [opportunityId])
+    if (!opportunityId || !opportunities) return
+    const found = opportunities.find((r) => r.id === opportunityId)
+    if (found) {
+      setLead(found)
+      setJd(buildJdFromOpportunity(found))
+    }
+  }, [opportunityId, opportunities])
 
   async function generateQuestions() {
     if (!jd.trim()) return

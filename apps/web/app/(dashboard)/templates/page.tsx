@@ -1,11 +1,12 @@
 'use client'
 
-import { useEffect, useState, useCallback } from 'react'
+import { useState, useCallback } from 'react'
+import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { useForm } from 'react-hook-form'
 import { zodResolver } from '@hookform/resolvers/zod'
 import { z } from 'zod'
-import { apiFetch } from '@/lib/api'
-import { useTemplateStore } from '@/lib/stores/templates'
+import { apiFetch, apiGet } from '@/lib/api'
+import { queryKeys } from '@/lib/queryKeys'
 import { PREBUILT_TEMPLATES } from '@/lib/templates/prebuilt'
 import { extractPlaceholders, fillTemplate, cn } from '@/lib/utils'
 import { TEMPLATE_CATEGORIES, type Template, type TemplateCategory } from '@/lib/types'
@@ -46,7 +47,11 @@ function CategoryBadge({ category }: { category: string }) {
 }
 
 export default function TemplatesPage() {
-  const { savedTemplates, setSavedTemplates, addTemplate, removeTemplate } = useTemplateStore()
+  const queryClient = useQueryClient()
+  const { data: savedTemplates = [] } = useQuery({
+    queryKey: queryKeys.templates,
+    queryFn: () => apiGet<Template[]>('/api/templates'),
+  })
   const [selected, setSelected] = useState<Template | null>(null)
   const [fillValues, setFillValues] = useState<Record<string, string>>({})
   const [filledContent, setFilledContent] = useState('')
@@ -62,14 +67,6 @@ export default function TemplatesPage() {
   })
 
   const watchContent = watch('content', '')
-
-  useEffect(() => {
-    async function load() {
-      const res = await apiFetch('/api/templates')
-      if (res.ok) setSavedTemplates(await res.json())
-    }
-    load()
-  }, [])
 
   function selectTemplate(t: Template) {
     setSelected(t)
@@ -109,7 +106,8 @@ export default function TemplatesPage() {
     })
 
     if (res.ok) {
-      addTemplate(await res.json())
+      const created: Template = await res.json()
+      queryClient.setQueryData<Template[]>(queryKeys.templates, (prev) => [created, ...(prev || [])])
       toast({ title: 'Template saved!' })
       reset()
       setShowCreate(false)
@@ -123,7 +121,7 @@ export default function TemplatesPage() {
   async function deleteTemplate(id: string) {
     const res = await apiFetch(`/api/templates/${id}`, { method: 'DELETE' })
     if (res.ok) {
-      removeTemplate(id)
+      queryClient.setQueryData<Template[]>(queryKeys.templates, (prev) => (prev || []).filter((t) => t.id !== id))
       if (selected?.id === id) setSelected(null)
       toast({ title: 'Template deleted' })
     }

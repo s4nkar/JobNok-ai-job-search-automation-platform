@@ -161,7 +161,7 @@ export default function LoginFormClient() {
         ) : (
           <>
             <h2 className="text-xl font-bold text-slate-900 mb-1">Reset your password</h2>
-            <p className="text-slate-500 text-sm mb-6">Enter your email and we'll send a reset code.</p>
+            <p className="text-slate-500 text-sm mb-6">Enter your email and we&apos;ll send a reset code.</p>
             <div className="space-y-4">
               <div className="space-y-1.5">
                 <Label className="text-sm font-medium text-slate-700">Email</Label>

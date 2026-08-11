@@ -1,10 +1,12 @@
 'use client'
 
-import { useEffect, useState, useRef } from 'react'
+import { useState, useRef } from 'react'
+import { useQuery, useQueryClient } from '@tanstack/react-query'
 import Papa from 'papaparse'
 import { config } from '@/lib/config'
 import { EmailCampaign, EmailRecipient } from '@/lib/types'
 import { extractPlaceholders } from '@/lib/utils'
+import { queryKeys } from '@/lib/queryKeys'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Textarea } from '@/components/ui/textarea'
@@ -17,7 +19,7 @@ import {
   Mail, Plus, Upload, Play, Pause, Loader2, CheckCircle, XCircle,
   Clock, Send, RefreshCw, Info
 } from 'lucide-react'
-import { apiFetch } from '@/lib/api'
+import { apiFetch, apiGet } from '@/lib/api'
 
 const STATUS_BADGE: Record<string, JSX.Element> = {
   queued:    <Badge variant="secondary"><Clock className="h-3 w-3 mr-1" />Queued</Badge>,
@@ -32,7 +34,11 @@ const STATUS_BADGE: Record<string, JSX.Element> = {
 interface RecipientRow { email: string; name: string; [key: string]: string }
 
 export default function BulkEmailPage() {
-  const [campaigns, setCampaigns] = useState<EmailCampaign[]>([])
+  const queryClient = useQueryClient()
+  const { data: campaigns = [] } = useQuery({
+    queryKey: queryKeys.campaigns,
+    queryFn: () => apiGet<EmailCampaign[]>('/api/campaigns'),
+  })
   const [activeCampaign, setActiveCampaign] = useState<EmailCampaign | null>(null)
   const [recipients, setRecipients] = useState<EmailRecipient[]>([])
   const [polling, setPolling] = useState(false)
@@ -48,13 +54,6 @@ export default function BulkEmailPage() {
   const fileRef = useRef<HTMLInputElement>(null)
   const { toast } = useToast()
   const pollRef = useRef<NodeJS.Timeout | null>(null)
-
-  useEffect(() => { fetchCampaigns() }, [])
-
-  async function fetchCampaigns() {
-    const res = await apiFetch('/api/campaigns')
-    if (res.ok) setCampaigns(await res.json())
-  }
 
   async function openCampaign(c: EmailCampaign) {
     setActiveCampaign(c)
@@ -121,7 +120,7 @@ export default function BulkEmailPage() {
 
     if (res.ok) {
       const campaign = await res.json()
-      setCampaigns((prev) => [campaign, ...prev])
+      queryClient.setQueryData<EmailCampaign[]>(queryKeys.campaigns, (prev) => [campaign, ...(prev || [])])
       toast({ title: 'Campaign launched!', description: 'Emails are being queued.' })
       setName(''); setSubject(''); setBody(''); setCsvRows([])
       openCampaign(campaign)
@@ -134,7 +133,7 @@ export default function BulkEmailPage() {
 
   async function pauseCampaign(id: string) {
     await apiFetch(`/api/email/${id}/pause`, { method: 'POST' })
-    await fetchCampaigns()
+    await queryClient.invalidateQueries({ queryKey: queryKeys.campaigns })
     if (activeCampaign?.id === id) setActiveCampaign((p) => p ? { ...p, status: 'paused' } : p)
     stopPolling()
   }
