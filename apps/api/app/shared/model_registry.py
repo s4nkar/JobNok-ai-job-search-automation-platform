@@ -18,6 +18,7 @@ from app.modules.startup_hunt.models import (  # noqa: F401
     StartupHuntOpportunity,
     StartupHuntContact,
     OpportunityArtifact,
+    StartupHuntSource,
 )
 from app.modules.startup_scout.models import StartupScoutCompany, StartupScoutContact  # noqa: F401
 from app.modules.linkedin_fill.models import LinkedinCache  # noqa: F401

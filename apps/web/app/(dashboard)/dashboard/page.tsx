@@ -4,9 +4,9 @@ import Link from 'next/link'
 import { useEffect, useState } from 'react'
 import {
   LayoutDashboard, Briefcase, TrendingUp, Users, Award, AlertCircle,
-  Loader2, Clock, ArrowRight, Compass, FileText, Mail, ChevronRight, Sparkles,
+  Loader2, Clock, ArrowRight, Compass, FileText, Mail, ChevronRight, Sparkles, Target,
 } from 'lucide-react'
-import { JobApplication, EmailCampaign, StartupHuntSavedOpportunity, Template, UserProfile } from '@/lib/types'
+import { JobApplication, EmailCampaign, StartupHuntSavedOpportunity, StartupHuntSource, Template, UserProfile } from '@/lib/types'
 import { ScoutCompany } from '@/lib/types'
 import { cn, formatDate, isOverdue } from '@/lib/utils'
 import { apiFetch } from '@/lib/api'
@@ -39,10 +39,11 @@ export default function DashboardPage() {
   const [campaigns, setCampaigns] = useState<EmailCampaign[]>([])
   const [profile, setProfile] = useState<UserProfile | null>(null)
   const [toolUsage, setToolUsage] = useState<ToolUsage[]>([])
+  const [huntSources, setHuntSources] = useState<StartupHuntSource[]>([])
 
   useEffect(() => {
     async function fetchAll() {
-      const [apps, tpls, leadList, scout, camps, prof, usage] = await Promise.all([
+      const [apps, tpls, leadList, scout, camps, prof, usage, huntSrc] = await Promise.all([
         apiFetch('/api/tracker').then(r => r.ok ? r.json() : []).catch(() => []),
         apiFetch('/api/templates').then(r => r.ok ? r.json() : []).catch(() => []),
         apiFetch('/api/startup-hunt/opportunities').then(r => r.ok ? r.json() : []).catch(() => []),
@@ -50,6 +51,7 @@ export default function DashboardPage() {
         apiFetch('/api/campaigns').then(r => r.ok ? r.json() : []).catch(() => []),
         apiFetch('/api/profile').then(r => r.ok ? r.json() : null).catch(() => null),
         apiFetch('/api/usage/tools').then(r => r.ok ? r.json() : []).catch(() => []),
+        apiFetch('/api/startup-hunt/sources').then(r => r.ok ? r.json() : []).catch(() => []),
       ])
       setApplications(apps)
       setTemplates(tpls)
@@ -58,6 +60,7 @@ export default function DashboardPage() {
       setCampaigns(camps)
       setProfile(prof)
       setToolUsage(usage)
+      setHuntSources(huntSrc)
       setLoading(false)
     }
     fetchAll()
@@ -279,6 +282,7 @@ export default function DashboardPage() {
             {[
               { href: '/templates', Icon: FileText, label: 'Templates saved', value: templates.length },
               { href: '/startup-scout', Icon: Compass, label: 'Companies watched', value: scoutCompanies.length },
+              { href: '/startup-hunt', Icon: Target, label: 'Target companies', value: huntSources.length, badge: huntSources.length === 0 ? 'Add targets' : undefined },
               { href: '/bulk-email', Icon: Mail, label: 'Email campaigns', value: campaigns.length, badge: sendingCampaigns.length > 0 ? `${sendingCampaigns.length} sending` : undefined },
             ].map(({ href, Icon, label, value, badge }) => (
               <Link key={label} href={href} className="flex items-center justify-between group">

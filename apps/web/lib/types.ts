@@ -342,6 +342,22 @@ export interface OpportunityArtifact {
   created_at: string
 }
 
+export type StartupHuntSourceType =
+  | 'greenhouse' | 'lever' | 'ashby' | 'startup_company' | 'startup_directory'
+  | 'google_web' | 'web_search' | 'ats_discovery' | 'apify_actor' | 'indeed_search' | 'theirstack_search'
+
+export interface StartupHuntSource {
+  id: string
+  user_id: string | null
+  type: StartupHuntSourceType
+  name: string
+  company: string
+  slug: string | null
+  url: string | null
+  metadata: Record<string, unknown>
+  created_at: string
+}
+
 export interface StartupHuntSavedOpportunity {
   id: string
   company_name: string

@@ -14,16 +14,18 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.shared.repository import UserScopedRepository
 from app.shared.utils import row_to_dict
-from app.modules.startup_hunt.engine import canonicalize_url, extract_domain, search_startup_hunt
+from app.modules.startup_hunt.engine import build_seeded_sources, canonicalize_url, extract_domain, search_startup_hunt
 from app.modules.startup_hunt.models import (
     OpportunityArtifact,
     StartupHuntCompany,
     StartupHuntContact,
     StartupHuntOpportunity,
+    StartupHuntSource,
 )
 from app.modules.startup_hunt.schemas import (
     StartupHuntOpportunityCreateRequest,
     StartupHuntOpportunityUpdateRequest,
+    StartupHuntSourceIn,
 )
 from app.modules.tracker.models import JobApplication
 
@@ -61,10 +63,16 @@ async def _load_opportunity_map(db: AsyncSession, user_id: str) -> dict[str, dic
 
 async def search_startup_hunt_opportunities(db: AsyncSession, user_id: str, body) -> dict:
     existing = await _load_opportunity_map(db, user_id)
+    # Global curated sources stay gated behind include_seeded_sources + the
+    # "crawler" bucket toggle (unchanged). A user's own sources are always
+    # searched when present — there's no reason to hide something they
+    # explicitly added behind an unrelated flag.
+    global_sources = build_seeded_sources(await list_global_startup_hunt_sources(db))
+    user_sources = build_seeded_sources(await list_user_startup_hunt_sources(db, user_id))
     (
         results, overflow_results, filtered_out, parsed_strategy,
         configured_source_count, source_result_counts, source_diagnostics,
-    ) = await search_startup_hunt(body.model_dump(), existing)
+    ) = await search_startup_hunt(body.model_dump(), existing, global_sources, user_sources)
     return {
         "results": results,
         "overflow_results": overflow_results,
@@ -377,5 +385,44 @@ async def update_startup_hunt_opportunity(
 
 async def delete_startup_hunt_opportunity(db: AsyncSession, user_id: str, opportunity_id: str) -> None:
     ok = await OpportunityRepository(db).delete(user_id, opportunity_id)
+    if not ok:
+        raise HTTPException(status_code=404, detail="Not found")
+
+
+# ── Startup Hunt Sources (global curated + per-user custom) ──────────────
+
+class StartupHuntSourceRepository(UserScopedRepository[StartupHuntSource]):
+    model = StartupHuntSource
+
+
+async def list_global_startup_hunt_sources(db: AsyncSession) -> list[dict]:
+    """The curated source list visible to every user (user_id IS NULL) — still
+    gated behind include_seeded_sources + the "crawler" bucket toggle."""
+    stmt = select(StartupHuntSource).where(StartupHuntSource.user_id.is_(None))
+    rows = (await db.execute(stmt)).scalars().all()
+    return [row_to_dict(r) for r in rows]
+
+
+async def list_user_startup_hunt_sources(db: AsyncSession, user_id: str) -> list[dict]:
+    """This user's own sources only — for the source-management UI."""
+    rows = await StartupHuntSourceRepository(db).list(user_id, order_by=StartupHuntSource.created_at.desc())
+    return [row_to_dict(r) for r in rows]
+
+
+async def create_startup_hunt_source(db: AsyncSession, user_id: str, body: StartupHuntSourceIn) -> dict:
+    obj = await StartupHuntSourceRepository(db).create(
+        user_id,
+        type=body.type,
+        name=body.name,
+        company=body.company or body.name,
+        slug=body.slug,
+        url=str(body.url) if body.url else None,
+        metadata_=body.metadata,
+    )
+    return row_to_dict(obj)
+
+
+async def delete_startup_hunt_source(db: AsyncSession, user_id: str, source_id: str) -> None:
+    ok = await StartupHuntSourceRepository(db).delete(user_id, source_id)
     if not ok:
         raise HTTPException(status_code=404, detail="Not found")

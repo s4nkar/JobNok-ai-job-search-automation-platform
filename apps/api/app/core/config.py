@@ -94,10 +94,9 @@ class Settings(BaseSettings):
     job_search_sources_json: str = "[]"
     job_search_timeout_seconds: int = 12
 
-    # Startup Hunt v2 sources support ATS feeds plus startup/company lead sources.
-    # Example:
-    # [{"type":"startup_company","name":"Acme","company":"Acme","url":"https://acme.com","metadata":{"country":"germany","city":"berlin","stage":"seed","careers_url":"https://acme.com/careers","contacts":[{"name":"Jane Doe","title":"Founder","email":"jane@acme.com"}]}}]
-    startup_hunt_sources_json: str = "[]"
+    # Startup Hunt v2 seeded sources (global curated + per-user custom) now live in
+    # the startup_hunt_sources table (see app/modules/startup_hunt/models.py) —
+    # migrated off this env var by alembic/versions/*_add_startup_hunt_sources_table.py.
     startup_hunt_timeout_seconds: int = 20
     startup_hunt_apify_poll_seconds: int = 60
     startup_hunt_total_budget_seconds: int = 30

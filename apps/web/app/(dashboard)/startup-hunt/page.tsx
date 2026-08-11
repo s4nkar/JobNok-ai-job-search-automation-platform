@@ -10,11 +10,12 @@ import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { Textarea } from '@/components/ui/textarea'
+import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from '@/components/ui/dialog'
 import { useToast } from '@/components/ui/use-toast'
 import { apiFetch } from '@/lib/api'
 import { config } from '@/lib/config'
 import { formatDate } from '@/lib/utils'
-import { StartupHuntResponse, StartupHuntResult } from '@/lib/types'
+import { StartupHuntResponse, StartupHuntResult, StartupHuntSource, StartupHuntSourceType } from '@/lib/types'
 import {
   Building2,
   ChevronDown,
@@ -22,10 +23,13 @@ import {
   Compass,
   ExternalLink,
   Info,
+  ListPlus,
   Loader2,
   Mail,
   MapPin,
+  Plus,
   Sparkles,
+  Trash2,
   UserRound,
 } from 'lucide-react'
 
@@ -115,6 +119,22 @@ function bucketLabel(bucket: string) {
   return PROVIDER_META[bucket as ProviderBucket]?.label || bucket
 }
 
+const USER_SOURCE_TYPES: { value: StartupHuntSourceType; label: string; hint: string }[] = [
+  { value: 'greenhouse', label: 'Greenhouse', hint: 'Board slug from boards.greenhouse.io/<slug>' },
+  { value: 'lever', label: 'Lever', hint: 'Board slug from jobs.lever.co/<slug>' },
+  { value: 'ashby', label: 'Ashby', hint: 'Board slug from jobs.ashbyhq.com/<slug>' },
+  { value: 'startup_company', label: 'Company to watch', hint: 'A general company/startup lead, no ATS board' },
+]
+
+const sourceSchema = z.object({
+  type: z.enum(['greenhouse', 'lever', 'ashby', 'startup_company']),
+  name: z.string().min(1, 'Required'),
+  company: z.string().optional(),
+  slug: z.string().optional(),
+  url: z.string().optional(),
+})
+type SourceFormData = z.infer<typeof sourceSchema>
+
 function compactReasons(reasons: string[]) {
   return reasons.slice(0, 2)
 }
@@ -137,6 +157,73 @@ export default function StartupHuntPage() {
     resolver: zodResolver(schema),
     defaultValues: DEFAULT_VALUES,
   })
+
+  // ── My Sources dialog ──────────────────────────────────────────────
+  const [sourcesOpen, setSourcesOpen] = useState(false)
+  const [sourcesLoaded, setSourcesLoaded] = useState(false)
+  const [sourcesLoading, setSourcesLoading] = useState(false)
+  const [sources, setSources] = useState<StartupHuntSource[]>([])
+  const [addingSource, setAddingSource] = useState(false)
+  const [deletingSourceId, setDeletingSourceId] = useState<string | null>(null)
+
+  const {
+    register: registerSource,
+    handleSubmit: handleSubmitSource,
+    reset: resetSourceForm,
+    setValue: setSourceValue,
+    watch: watchSource,
+    formState: { errors: sourceErrors },
+  } = useForm<SourceFormData>({
+    resolver: zodResolver(sourceSchema),
+    defaultValues: { type: 'greenhouse', name: '', company: '', slug: '', url: '' },
+  })
+
+  async function openSources() {
+    setSourcesOpen(true)
+    if (sourcesLoaded) return
+    setSourcesLoading(true)
+    const res = await apiFetch('/api/startup-hunt/sources')
+    if (res.ok) setSources(await res.json())
+    setSourcesLoading(false)
+    setSourcesLoaded(true)
+  }
+
+  async function onAddSource(data: SourceFormData) {
+    setAddingSource(true)
+    const res = await apiFetch('/api/startup-hunt/sources', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        type: data.type,
+        name: data.name.trim(),
+        company: data.company?.trim() || undefined,
+        slug: data.slug?.trim() || undefined,
+        url: data.url?.trim() || undefined,
+      }),
+    })
+    const json = await res.json()
+    if (!res.ok) {
+      toast({ title: 'Could not add source', description: json.detail || 'Please check the fields and try again.', variant: 'destructive' })
+      setAddingSource(false)
+      return
+    }
+    setSources((prev) => [json, ...prev])
+    resetSourceForm({ type: data.type, name: '', company: '', slug: '', url: '' })
+    toast({ title: 'Source added', description: 'It will be included in your next search.' })
+    setAddingSource(false)
+  }
+
+  async function deleteSource(id: string) {
+    setDeletingSourceId(id)
+    const res = await apiFetch(`/api/startup-hunt/sources/${id}`, { method: 'DELETE' })
+    if (res.ok) {
+      setSources((prev) => prev.filter((s) => s.id !== id))
+      toast({ title: 'Source removed' })
+    } else {
+      toast({ title: 'Could not remove source', variant: 'destructive' })
+    }
+    setDeletingSourceId(null)
+  }
 
   async function onSubmit(data: FormData) {
     setLoading(true)
@@ -306,16 +393,21 @@ export default function StartupHuntPage() {
 
   return (
     <div className="animate-fade-in">
-      <div className="flex items-center gap-4 mb-6">
-        <div className="page-header-icon bg-orange-100">
-          <Compass className="h-5 w-5 text-orange-600" />
+      <div className="flex items-start justify-between gap-4 mb-6">
+        <div className="flex items-center gap-4">
+          <div className="page-header-icon bg-orange-100">
+            <Compass className="h-5 w-5 text-orange-600" />
+          </div>
+          <div>
+            <h1 className="text-2xl font-bold text-slate-900 tracking-tight">Startup Hunt</h1>
+            <p className="text-slate-500 text-sm mt-0.5">
+              Hunt AI/ML startup roles in Germany, surface hidden gems, and save founder-friendly outreach leads
+            </p>
+          </div>
         </div>
-        <div>
-          <h1 className="text-2xl font-bold text-slate-900 tracking-tight">Startup Hunt</h1>
-          <p className="text-slate-500 text-sm mt-0.5">
-            Hunt AI/ML startup roles in Germany, surface hidden gems, and save founder-friendly outreach leads
-          </p>
-        </div>
+        <Button type="button" variant="outline" className="rounded-xl flex-shrink-0 border-primary" onClick={openSources}>
+          <ListPlus className="h-4 w-4 mr-2" /> My Sources
+        </Button>
       </div>
 
       <div className="flex items-start gap-2.5 bg-indigo-50 border border-indigo-100 text-indigo-700 rounded-xl px-4 py-3 mb-6 text-sm">
@@ -952,6 +1044,89 @@ export default function StartupHuntPage() {
           )}
         </div>
       </div>
+
+      {/* My Sources dialog */}
+      <Dialog open={sourcesOpen} onOpenChange={setSourcesOpen}>
+        <DialogContent className="max-w-lg rounded-2xl">
+          <DialogHeader>
+            <DialogTitle className="text-lg font-bold">My Sources</DialogTitle>
+          </DialogHeader>
+          <p className="text-sm text-muted-foreground -mt-2">
+            ATS boards or companies you want searched every time — always included, independent of the seeded-sources toggle.
+          </p>
+
+          <form onSubmit={handleSubmitSource(onAddSource)} className="space-y-3 border-b border-slate-100 pb-4">
+            <div className="grid grid-cols-2 gap-3">
+              <div className="space-y-1.5">
+                <Label className="text-xs font-medium">Type</Label>
+                <Select value={watchSource('type')} onValueChange={(v) => setSourceValue('type', v as SourceFormData['type'])}>
+                  <SelectTrigger className="rounded-xl h-9"><SelectValue /></SelectTrigger>
+                  <SelectContent>
+                    {USER_SOURCE_TYPES.map((t) => (
+                      <SelectItem key={t.value} value={t.value}>{t.label}</SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+              <div className="space-y-1.5">
+                <Label className="text-xs font-medium">Name</Label>
+                <Input placeholder="Acme Corp" className="rounded-xl h-9" {...registerSource('name')} />
+                {sourceErrors.name && <p className="text-xs text-destructive">{sourceErrors.name.message}</p>}
+              </div>
+            </div>
+            <p className="text-[11px] text-muted-foreground">
+              {USER_SOURCE_TYPES.find((t) => t.value === watchSource('type'))?.hint}
+            </p>
+            <div className="grid grid-cols-2 gap-3">
+              <div className="space-y-1.5">
+                <Label className="text-xs font-medium">Board slug</Label>
+                <Input placeholder="acme" className="rounded-xl h-9" {...registerSource('slug')} />
+              </div>
+              <div className="space-y-1.5">
+                <Label className="text-xs font-medium">Careers/company URL</Label>
+                <Input placeholder="https://acme.com/careers" className="rounded-xl h-9" {...registerSource('url')} />
+              </div>
+            </div>
+            <Button type="submit" disabled={addingSource} className="w-full rounded-xl h-9 gradient-brand text-white border-0">
+              {addingSource ? <Loader2 className="h-3.5 w-3.5 mr-2 animate-spin" /> : <Plus className="h-3.5 w-3.5 mr-2" />}
+              Add source
+            </Button>
+          </form>
+
+          <div className="space-y-2 max-h-64 overflow-y-auto">
+            {sourcesLoading ? (
+              <div className="flex items-center gap-2 text-sm text-slate-400 py-4 justify-center">
+                <Loader2 className="h-4 w-4 animate-spin" /> Loading…
+              </div>
+            ) : sources.length === 0 ? (
+              <p className="text-sm text-slate-400 text-center py-4">No sources added yet.</p>
+            ) : (
+              sources.map((s) => (
+                <div key={s.id} className="flex items-center justify-between gap-3 rounded-xl border border-slate-100 px-3 py-2">
+                  <div className="min-w-0">
+                    <p className="text-sm font-semibold text-slate-800 truncate">{s.name}</p>
+                    <p className="text-xs text-slate-500 truncate">
+                      {USER_SOURCE_TYPES.find((t) => t.value === s.type)?.label || s.type}
+                      {s.slug ? ` · ${s.slug}` : ''}
+                    </p>
+                  </div>
+                  <button
+                    onClick={() => deleteSource(s.id)}
+                    disabled={deletingSourceId === s.id}
+                    className="h-7 w-7 rounded-lg flex items-center justify-center text-slate-400 hover:text-red-500 hover:bg-red-50 transition-colors flex-shrink-0"
+                  >
+                    {deletingSourceId === s.id ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Trash2 className="h-3.5 w-3.5" />}
+                  </button>
+                </div>
+              ))
+            )}
+          </div>
+
+          <DialogFooter>
+            <Button type="button" variant="outline" onClick={() => setSourcesOpen(false)} className="rounded-xl">Done</Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   )
 }
