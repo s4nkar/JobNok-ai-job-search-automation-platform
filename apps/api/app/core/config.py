@@ -65,7 +65,7 @@ class Settings(BaseSettings):
     cohere_embedding_model: str = "embed-english-v3.0"
     cohere_base_url: str = "https://api.cohere.com/v2"
 
-    # ── Rate Limits (enforced via Redis sliding window) ──────────────────────
+    # ── Rate Limits (enforced via a Redis fixed window counter, reset at midnight UTC) ──
     # All limits are per-user per-day unless stated otherwise
     rate_limit_linkedin_per_day: int = 10
     rate_limit_resume_per_day: int = 5
@@ -119,6 +119,8 @@ class Settings(BaseSettings):
     # ── Bulk Email ───────────────────────────────────────────────────────────
     # Minimum delay between individual emails to avoid spam flags (seconds)
     bulk_email_min_delay_seconds: int = 20
+    # Worker-side token-bucket cap on Resend sends across all campaigns combined
+    bulk_email_sends_per_second: int = 5
 
     # ── Cloudinary (CV photo storage) ───────────────────────────────────────
     # Get from Cloudinary dashboard's Account Details page.
@@ -151,13 +153,8 @@ class Settings(BaseSettings):
 
     @property
     def database_url_async(self) -> str:
-        """asyncpg driver — used by the FastAPI app (app/core/database.py)."""
+        """asyncpg driver — used by the FastAPI app and ARQ worker (app/core/database.py)."""
         return self.database_url.replace("postgresql://", "postgresql+asyncpg://", 1)
-
-    @property
-    def database_url_sync(self) -> str:
-        """psycopg driver — used by Celery tasks (no event loop)."""
-        return self.database_url.replace("postgresql://", "postgresql+psycopg://", 1)
 
     @property
     def migrations_database_url_sync(self) -> str:
@@ -168,7 +165,7 @@ class Settings(BaseSettings):
     # REST-based Redis for rate limiting — get from Upstash console
     upstash_redis_rest_url: str = ""
     upstash_redis_rest_token: str = ""
-    # TCP Redis URL for Celery broker/backend (can reuse Upstash rediss:// URL)
+    # TCP Redis URL for the ARQ broker (can reuse Upstash rediss:// URL)
     redis_url: str = "redis://localhost:6379/0"
 
     # ── Resend ───────────────────────────────────────────────────────────────

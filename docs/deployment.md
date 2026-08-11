@@ -5,7 +5,7 @@ JobNok is designed to be easily deployed to modern serverless and PaaS providers
 ## Production Environments
 
 - **Frontend (Next.js):** [Vercel](https://vercel.com/)
-- **Backend (FastAPI & Celery):** [Railway](https://railway.app/)
+- **Backend (FastAPI & ARQ):** [Railway](https://railway.app/)
 - **Database (PostgreSQL):** [Neon](https://neon.com/)
 - **Auth:** [Clerk](https://clerk.com/)
 - **Storage:** [Supabase](https://supabase.com/) (CV photo uploads only)
@@ -16,7 +16,7 @@ JobNok is designed to be easily deployed to modern serverless and PaaS providers
 
 ## Local Development via Docker (Recommended)
 
-JobNok provides a comprehensive `docker-compose.yml` that orchestrates all local services (Frontend, Backend, Celery Worker, Redis, and Nginx proxy).
+JobNok provides a comprehensive `docker-compose.yml` that orchestrates all local services (Frontend, Backend, ARQ Worker, Redis, and Nginx proxy).
 
 ### Setup Steps
 1. Clone the repository.
@@ -56,11 +56,11 @@ uv run uvicorn app.main:app --reload --port 8000
 # Running on http://localhost:8000
 ```
 
-### 3. Celery Worker (Required for Bulk Email)
+### 3. ARQ Worker (Required for Bulk Email)
 In a separate terminal:
 ```bash
 cd apps/api
-uv run celery -A app.workers.celery_app worker --loglevel=info
+uv run arq app.workers.arq_worker.WorkerSettings
 ```
 
 ---
@@ -74,16 +74,16 @@ In the frontend `next.config.mjs` (or Next.js middleware), calls to `/api/*` are
 The FastAPI backend locks down CORS via the `APP_URL` environment variable. Ensure this variable exactly matches the frontend domain in production (e.g., `https://jobnok.app`) to prevent CORS errors.
 
 ### Background Workers
-Deploying Celery requires a dedicated worker process. On platforms like Railway, you define a secondary service or custom start command:
+Deploying ARQ requires a dedicated worker process. On platforms like Railway, you define a secondary service or custom start command:
 ```bash
-celery -A app.workers.celery_app worker --loglevel=info
+arq app.workers.arq_worker.WorkerSettings
 ```
-Ensure both the FastAPI web service and the Celery worker service share the exact same environment variables (including `DATABASE_URL`) and connect to the same Redis instance.
+Ensure both the FastAPI web service and the ARQ worker service share the exact same environment variables (including `DATABASE_URL`) and connect to the same Redis instance.
 
 ### Database Migrations (Alembic)
 Alembic is the single source of truth for the schema — `alembic revision --autogenerate` + `alembic upgrade head`. Against a fresh Neon database, `alembic upgrade head` creates every table from scratch (including the `uuid-ossp` extension the baseline migration now provisions itself). No RLS policies, triggers, or grants to manage outside Alembic — those were Supabase-specific and were removed when the database moved to Neon.
 
 ### Post-Migration Manual Steps (one-time)
 This repo was reorganized from `backend`/`frontend` to `apps/api`/`apps/web`, and the frontend moved from npm to a pnpm workspace rooted at the repo root. Since Railway and Vercel projects are configured via their dashboards (no config files checked into this repo), update each service's settings once:
-- **Railway** (FastAPI service and Celery worker service): Root Directory `backend` → `apps/api`.
+- **Railway** (FastAPI service and ARQ worker service): Root Directory `backend` → `apps/api`.
 - **Vercel** (frontend project): Root Directory `frontend` → `apps/web`. Vercel auto-detects pnpm from `pnpm-lock.yaml` at the repo root and understands the monorepo layout automatically once Root Directory is set — no extra build-command config needed.

@@ -17,8 +17,6 @@ apps/api/*.pyo
 apps/api/.venv/
 apps/api/venv/
 apps/api/.pytest_cache/
-apps/api/celerybeat-schedule
-apps/api/celerybeat.pid
 
 # Environment
 .env

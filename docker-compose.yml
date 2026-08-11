@@ -37,10 +37,10 @@ services:
           cpus: "1.0"
     restart: unless-stopped
 
-  celery:
+  worker:
     build:
       context: ./apps/api
-    command: celery -A app.workers.celery_app worker --loglevel=info
+    command: arq app.workers.arq_worker.WorkerSettings
     env_file:
       - ./apps/api/.env
     networks:

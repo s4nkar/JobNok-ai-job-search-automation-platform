@@ -4,6 +4,10 @@ Registers all feature-module routers, middleware, and startup hooks.
 Heavy operations: LinkedIn scraping, AI generation, bulk email queue.
 """
 
+from contextlib import asynccontextmanager
+
+from arq import create_pool
+from arq.connections import RedisSettings
 from fastapi import FastAPI
 
 from app.core.config import settings
@@ -32,6 +36,14 @@ from app.modules.usage.routes import router as usage_router
 
 setup_logging(settings)
 
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    app.state.arq_pool = await create_pool(RedisSettings.from_dsn(settings.redis_url))
+    yield
+    await app.state.arq_pool.close()
+
+
 # ── App ───────────────────────────────────────────────────────────
 _debug = settings.app_url.startswith("http://localhost")
 
@@ -40,6 +52,7 @@ app = FastAPI(
     version="1.0.0",
     docs_url="/docs" if _debug else None,
     redoc_url=None,
+    lifespan=lifespan,
 )
 
 setup_middleware(app, settings)

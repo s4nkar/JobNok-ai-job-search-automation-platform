@@ -23,7 +23,7 @@ dependencies = [
     "numpy>=1.26,<3.0",
 
     # Background Tasks
-    "celery==5.4.0",
+    "arq==0.26.1",
     "redis==5.0.8",
 
     # Database — direct Postgres access via SQLAlchemy, hosted on Neon.

@@ -3,7 +3,7 @@
 #
 # Changes from production:
 #   - FastAPI:  source mounted, uvicorn --reload, port 8000 exposed directly
-#   - Celery:   source mounted
+#   - Worker:   source mounted (ARQ)
 #   - Next.js:  source mounted, npm run dev, port 3000 exposed directly
 #   - nginx:    disabled (dev hits services directly on their native ports)
 #   - Postgres: local throwaway Postgres for SQLAlchemy/Alembic dev work.
@@ -69,7 +69,7 @@ services:
       # Local throwaway Postgres has no pooler — same URL serves both roles.
       - MIGRATIONS_DATABASE_URL=postgresql://postgres:devpassword@postgres:5432/jobnok
 
-  celery:
+  worker:
     build:
       context: ./apps/api
       dockerfile: Dockerfile.dev

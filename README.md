@@ -35,8 +35,8 @@ Nginx
   v
 Railway (FastAPI)
   |-- Supabase (PostgreSQL + Auth) — accessed via SQLAlchemy + Alembic
-  |-- Upstash Redis (rate limits + Celery broker)
-  |-- Celery Worker (bulk email, background tasks)
+  |-- Upstash Redis (rate limits + ARQ broker)
+  |-- ARQ Worker (bulk email, background tasks)
   |-- Groq / Cerebras / HuggingFace (AI generation, fallback chain)
   |-- Jina / Cohere (embeddings, fallback chain)
   |-- Resend (transactional + bulk email)
@@ -49,7 +49,7 @@ The frontend is UI-only. All business logic lives in FastAPI. Next.js `/api/*` r
 
 **Frontend:** Next.js 14, TypeScript, Tailwind CSS, shadcn/ui, Zustand, React Hook Form, Zod
 
-**Backend:** FastAPI, Python 3.12, Pydantic v2, SQLAlchemy (async) + Alembic, Celery, PyMuPDF, WeasyPrint, httpx, Sentry — modular monolith at `apps/api/app/`, one module per feature under `app/modules/`
+**Backend:** FastAPI, Python 3.12, Pydantic v2, SQLAlchemy (async) + Alembic, ARQ, PyMuPDF, WeasyPrint, httpx, Sentry — modular monolith at `apps/api/app/`, one module per feature under `app/modules/`
 
 **AI:** Groq (primary), Cerebras (fallback), HuggingFace (last resort) via `app/ai/llm/provider.py`
 
@@ -87,13 +87,13 @@ Three ways to run it locally, pick one — then, against a fresh database (first
 ```bash
 pnpm dev          # or: docker compose -f docker-compose.yml -f docker-compose.dev.yml up --build
 ```
-Everything — Postgres, Redis, the API, Celery, and Next.js — runs in Docker with hot reload via bind mounts.
+Everything — Postgres, Redis, the API, the ARQ worker, and Next.js — runs in Docker with hot reload via bind mounts.
 
 ### 2. Native frontend + Dockerized backend (`dev:local`)
 ```bash
 pnpm dev:local
 ```
-Runs Postgres/Redis/API/Celery in Docker (same as above) but Next.js natively on the host via `pnpm --filter jobnok-frontend dev`. Sidesteps a real limitation of option 1 on Windows: Docker Desktop's WSL2 inotify layer can miss file-change events on bind-mounted volumes, so hot reload for both the API and Next.js can silently stop working. Requires [pnpm](https://pnpm.io/installation) (Node ≥ 22) on the host — `corepack enable` picks up the pinned version automatically.
+Runs Postgres/Redis/API/worker in Docker (same as above) but Next.js natively on the host via `pnpm --filter jobnok-frontend dev`. Sidesteps a real limitation of option 1 on Windows: Docker Desktop's WSL2 inotify layer can miss file-change events on bind-mounted volumes, so hot reload for both the API and Next.js can silently stop working. Requires [pnpm](https://pnpm.io/installation) (Node ≥ 22) on the host — `corepack enable` picks up the pinned version automatically.
 
 ### 3. Fully manual (no Docker)
 
@@ -111,10 +111,10 @@ uv sync --frozen
 uv run uvicorn app.main:app --reload --port 8000
 ```
 
-**Celery worker** (required for bulk email — separate terminal):
+**ARQ worker** (required for bulk email — separate terminal):
 ```bash
 cd apps/api
-uv run celery -A app.workers.celery_app worker --loglevel=info
+uv run arq app.workers.arq_worker.WorkerSettings
 ```
 
 - Frontend: http://localhost:3000
@@ -143,7 +143,7 @@ No API keys or secrets other than `CLERK_SECRET_KEY` belong in frontend env vars
 | `CLERK_WEBHOOK_SECRET` | Svix signing secret for verifying Clerk webhooks |
 | `DATABASE_URL` | Neon pooled connection string (SQLAlchemy runtime) |
 | `MIGRATIONS_DATABASE_URL` | Neon direct/unpooled connection string (Alembic only — DDL is unreliable through transaction pooling) |
-| `UPSTASH_REDIS_URL` | Redis URL for rate limits + Celery |
+| `UPSTASH_REDIS_URL` | Redis URL for rate limits + ARQ |
 | `GROQ_API_KEY` | Primary AI provider |
 | `CEREBRAS_API_KEY` | AI fallback |
 | `HUGGINGFACE_API_KEY` | AI last resort |
@@ -164,7 +164,7 @@ Core tables in Neon-hosted PostgreSQL, managed entirely via SQLAlchemy models + 
 | `templates` | Saved message templates |
 | `job_applications` | Follow-up tracker entries |
 | `email_campaigns` | Bulk email campaign metadata |
-| `email_recipients` | Individual recipients per campaign, processed by Celery |
+| `email_recipients` | Individual recipients per campaign, processed by the ARQ worker |
 | `job_search_applications` | Jobs found or applied to via job search |
 | `startup_hunt_companies` | Tracked startups |
 | `startup_hunt_opportunities` | Leads and roles within tracked companies |
