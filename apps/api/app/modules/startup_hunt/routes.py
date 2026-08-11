@@ -15,6 +15,7 @@ from app.modules.startup_hunt.schemas import (
     StartupHuntSearchRequest,
 )
 from app.modules.startup_hunt import service
+from app.modules.usage.service import record_event as record_tool_usage
 
 router = APIRouter()
 
@@ -37,6 +38,7 @@ async def search_startup_hunt_opportunities(
 ):
     user_id = await get_current_user_id(request, db)
     await _check_rate_limit_fail_open(user_id)
+    await record_tool_usage(db, user_id, "startup-hunt")
     return await service.search_startup_hunt_opportunities(db, user_id, body)
 
 

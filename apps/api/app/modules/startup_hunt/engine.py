@@ -3536,7 +3536,6 @@ def _score_opportunity(
     direct_url = item.get("direct_apply_url")
     contacts = item.get("contacts", [])
     posted_at: datetime | None = item.get("posted_at")
-    source_type = item["source_type"]
     source_bucket = _result_source_bucket(item)
     seniority_preference = (
         _normalize_seniority_preference(strategy.get("seniority_preference"))

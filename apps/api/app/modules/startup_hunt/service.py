@@ -5,7 +5,7 @@ query using JobApplication, not an ORM relationship()) when an opportunity is
 marked "applied" — mirrors the pre-migration supabase-py behavior exactly.
 """
 
-from datetime import date, datetime, timezone
+from datetime import datetime, timezone
 from decimal import Decimal
 
 from fastapi import HTTPException

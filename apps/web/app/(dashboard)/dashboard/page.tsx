@@ -4,7 +4,7 @@ import Link from 'next/link'
 import { useEffect, useState } from 'react'
 import {
   LayoutDashboard, Briefcase, TrendingUp, Users, Award, AlertCircle,
-  Loader2, Clock, ArrowRight, Compass, FileText, Mail, ChevronRight,
+  Loader2, Clock, ArrowRight, Compass, FileText, Mail, ChevronRight, Sparkles,
 } from 'lucide-react'
 import { JobApplication, EmailCampaign, StartupHuntSavedOpportunity, Template, UserProfile } from '@/lib/types'
 import { ScoutCompany } from '@/lib/types'
@@ -14,6 +14,12 @@ import { tools, toolBadgeColors } from '@/lib/tools'
 
 const ACTIVE_STATUSES = ['Applied', 'Phone Screen', 'Interview'] as const
 const INTERVIEWING_STATUSES = ['Phone Screen', 'Interview'] as const
+
+interface ToolUsage {
+  tool_slug: string
+  use_count: number
+  last_used_at: string
+}
 
 const PROFILE_FIELDS: Array<{ key: keyof UserProfile; label: string }> = [
   { key: 'full_name', label: 'Full name' },
@@ -32,16 +38,18 @@ export default function DashboardPage() {
   const [scoutCompanies, setScoutCompanies] = useState<ScoutCompany[]>([])
   const [campaigns, setCampaigns] = useState<EmailCampaign[]>([])
   const [profile, setProfile] = useState<UserProfile | null>(null)
+  const [toolUsage, setToolUsage] = useState<ToolUsage[]>([])
 
   useEffect(() => {
     async function fetchAll() {
-      const [apps, tpls, leadList, scout, camps, prof] = await Promise.all([
+      const [apps, tpls, leadList, scout, camps, prof, usage] = await Promise.all([
         apiFetch('/api/tracker').then(r => r.ok ? r.json() : []).catch(() => []),
         apiFetch('/api/templates').then(r => r.ok ? r.json() : []).catch(() => []),
         apiFetch('/api/startup-hunt/opportunities').then(r => r.ok ? r.json() : []).catch(() => []),
         apiFetch('/api/startup-scout/companies').then(r => r.ok ? r.json() : []).catch(() => []),
         apiFetch('/api/campaigns').then(r => r.ok ? r.json() : []).catch(() => []),
         apiFetch('/api/profile').then(r => r.ok ? r.json() : null).catch(() => null),
+        apiFetch('/api/usage/tools').then(r => r.ok ? r.json() : []).catch(() => []),
       ])
       setApplications(apps)
       setTemplates(tpls)
@@ -49,6 +57,7 @@ export default function DashboardPage() {
       setScoutCompanies(scout)
       setCampaigns(camps)
       setProfile(prof)
+      setToolUsage(usage)
       setLoading(false)
     }
     fetchAll()
@@ -59,6 +68,12 @@ export default function DashboardPage() {
   const offers = applications.filter((a) => a.status === 'Offer')
   const openLeads = leads.filter((l) => l.opportunity_status !== 'skipped')
   const sendingCampaigns = campaigns.filter((c) => c.status === 'sending' || c.status === 'queued')
+
+  const mostUsedTools = [...toolUsage]
+    .sort((a, b) => b.use_count - a.use_count)
+    .slice(0, 5)
+    .map((u) => ({ usage: u, tool: tools.find((t) => t.slug === u.tool_slug) }))
+    .filter((u): u is { usage: ToolUsage; tool: (typeof tools)[number] } => Boolean(u.tool))
 
   const needsAttention = applications
     .filter((a) => a.follow_up_date && !['Rejected', 'Withdrawn'].includes(a.status))
@@ -223,7 +238,40 @@ export default function DashboardPage() {
             </div>
           )}
 
-
+          {/* Most used tools */}
+          <div className="bg-white rounded-2xl border border-slate-100 shadow-card p-5">
+            <h2 className="text-sm font-semibold text-slate-800 mb-3">Most Used Tools</h2>
+            {mostUsedTools.length === 0 ? (
+              <div className="flex flex-col items-center text-center py-4">
+                <div className="w-9 h-9 rounded-xl bg-indigo-50 flex items-center justify-center mb-2">
+                  <Sparkles className="h-4 w-4 text-indigo-400" />
+                </div>
+                <p className="text-xs text-slate-500">No tool usage yet — pick a tool from the sidebar to get started</p>
+              </div>
+            ) : (
+              <div className="space-y-1">
+                {mostUsedTools.map(({ usage, tool }) => {
+                  const Icon = tool.icon
+                  return (
+                    <Link
+                      key={tool.slug}
+                      href={tool.href}
+                      className="flex items-center gap-2.5 px-2 py-1.5 -mx-2 rounded-xl hover:bg-slate-50 transition-colors"
+                    >
+                      <div className={cn('w-7 h-7 rounded-lg flex items-center justify-center flex-shrink-0 border', toolBadgeColors[tool.color])}>
+                        <Icon className="h-3.5 w-3.5" />
+                      </div>
+                      <div className="min-w-0 flex-1">
+                        <p className="text-xs font-medium text-slate-700 truncate">{tool.label}</p>
+                        <p className="text-[10px] text-slate-400">Last used {formatDate(usage.last_used_at)}</p>
+                      </div>
+                      <span className="text-xs font-semibold text-slate-500 tabular-nums flex-shrink-0">{usage.use_count}×</span>
+                    </Link>
+                  )
+                })}
+              </div>
+            )}
+          </div>
 
           {/* Activity summary */}
           <div className="bg-white rounded-2xl border border-slate-100 shadow-card p-5 space-y-3">

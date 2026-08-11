@@ -39,6 +39,7 @@ from app.ai.embeddings import EmbeddingError, embed
 from app.core.security import get_current_user_id
 from app.ai.llm import provider as ai_provider
 from app.shared.utils import _rl_error
+from app.modules.usage.service import record_event as record_tool_usage
 
 router = APIRouter()
 
@@ -101,6 +102,7 @@ async def tailor_resume(
     allowed, _ = await check_rate_limit(user_id, "resume", settings.rate_limit_resume_per_day)
     if not allowed:
         raise _rl_error("Resume Tailor", settings.rate_limit_resume_per_day)
+    await record_tool_usage(db, user_id, "resume-tailor")
 
     _MAX_PDF_BYTES = 5 * 1024 * 1024  # 5 MB
     pdf_bytes = await resume.read(_MAX_PDF_BYTES + 1)

@@ -15,6 +15,7 @@ from app.core.security import get_current_user_id
 from app.ai.llm import provider as ai_provider
 from app.shared.utils import _rl_error
 from app.modules.cover_letter.schemas import CoverLetterRequest
+from app.modules.usage.service import record_event as record_tool_usage
 
 router = APIRouter()
 
@@ -25,6 +26,7 @@ async def generate_cover_letter(request: Request, body: CoverLetterRequest, db: 
     allowed, _ = await check_rate_limit(user_id, "cover_letter", settings.rate_limit_cover_letter_per_day)
     if not allowed:
         raise _rl_error("Cover Letter Generator", settings.rate_limit_cover_letter_per_day)
+    await record_tool_usage(db, user_id, "cover-letter")
 
     system = """You are a professional cover letter writer. Write compelling, personalized cover letters that:
 - Open with a strong, specific hook (not "I am writing to apply for...")

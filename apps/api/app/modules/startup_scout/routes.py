@@ -11,6 +11,7 @@ from app.modules.startup_scout.engine import search_startups
 from app.core.security import get_current_user_id
 from app.modules.startup_scout.schemas import ScoutSearchRequest, SaveCompanyRequest
 from app.modules.startup_scout import service
+from app.modules.usage.service import record_event as record_tool_usage
 
 router = APIRouter()
 
@@ -35,6 +36,7 @@ async def scout_search(req: ScoutSearchRequest, request: Request, db: AsyncSessi
     """Phase A: discover startups matching location/stage/industry."""
     user_id = await get_current_user_id(request, db)
     await _rate_check(user_id, "startup_scout_search", RATE_LIMIT_SCOUT_SEARCH_PER_DAY)
+    await record_tool_usage(db, user_id, "startup-scout")
 
     if not req.location.strip():
         raise HTTPException(status_code=422, detail="location is required")

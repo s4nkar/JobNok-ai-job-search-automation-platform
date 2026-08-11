@@ -11,6 +11,7 @@ from app.services.cache import check_rate_limit, get_cached, set_cached
 from app.integrations import rapidapi, phantombuster
 from app.ai.llm import provider as ai_provider
 from app.modules.linkedin_fill.schemas import ScrapeLinkedInRequest, ScrapeLinkedInResponse
+from app.modules.usage.service import record_event as record_tool_usage
 
 router = APIRouter()
 
@@ -30,6 +31,7 @@ async def scrape_linkedin(request: Request, body: ScrapeLinkedInRequest, db: Asy
             status_code=429,
             detail=f"Daily limit of {settings.rate_limit_linkedin_per_day} LinkedIn scrapes reached. Resets at midnight UTC."
         )
+    await record_tool_usage(db, user_id, "linkedin-fill")
 
     cache_key = f"linkedin:{body.linkedin_url}"
 
