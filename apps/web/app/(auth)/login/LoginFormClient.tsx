@@ -23,7 +23,7 @@ type FormData = z.infer<typeof schema>
 export default function LoginFormClient() {
   const router = useRouter()
   const searchParams = useSearchParams()
-  const redirect = searchParams.get('redirect') || '/templates'
+  const redirect = searchParams.get('redirect') || '/dashboard'
 
   const { isLoaded, signIn, setActive } = useSignIn()
   const { toast } = useToast()

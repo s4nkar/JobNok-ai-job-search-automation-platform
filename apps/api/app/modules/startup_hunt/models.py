@@ -124,6 +124,30 @@ class StartupHuntContact(Base, UUIDPKMixin, CreatedAtMixin):
     provider_chain: Mapped[list[str]] = mapped_column(ARRAY(Text), server_default="{}", nullable=False)
 
 
+class StartupHuntSource(Base, UUIDPKMixin, CreatedAtMixin):
+    """A source config fed into search_startup_hunt's seeded-source list.
+
+    user_id NULL = globally curated, visible to every user (replaces the old
+    STARTUP_HUNT_SOURCES_JSON env var). user_id set = one user's own private
+    addition, only ever merged into that user's own searches.
+    """
+
+    __tablename__ = "startup_hunt_sources"
+    __table_args__ = (
+        Index("startup_hunt_sources_user_id_idx", "user_id"),
+    )
+
+    user_id: Mapped[uuid.UUID | None] = mapped_column(
+        PG_UUID(as_uuid=True), ForeignKey("profiles.id", ondelete="CASCADE"), nullable=True
+    )
+    type: Mapped[str] = mapped_column(Text, nullable=False)
+    name: Mapped[str] = mapped_column(Text, nullable=False)
+    company: Mapped[str] = mapped_column(Text, nullable=False)
+    slug: Mapped[str | None] = mapped_column(Text, nullable=True)
+    url: Mapped[str | None] = mapped_column(Text, nullable=True)
+    metadata_: Mapped[dict] = mapped_column("metadata", JSONB, server_default="{}", nullable=False)
+
+
 class OpportunityArtifact(Base, UUIDPKMixin, CreatedAtMixin):
     __tablename__ = "opportunity_artifacts"
     __table_args__ = (

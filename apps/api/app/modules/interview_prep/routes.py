@@ -15,6 +15,7 @@ from app.core.security import get_current_user_id
 from app.ai.llm import provider as ai_provider
 from app.shared.utils import _rl_error
 from app.modules.interview_prep.schemas import InterviewPrepRequest, InterviewRegenerateRequest
+from app.modules.usage.service import record_event as record_tool_usage
 
 router = APIRouter()
 
@@ -27,6 +28,7 @@ async def generate_interview_questions(
     allowed, _ = await check_rate_limit(user_id, "interview", settings.rate_limit_interview_per_day)
     if not allowed:
         raise _rl_error("Interview Prep", settings.rate_limit_interview_per_day)
+    await record_tool_usage(db, user_id, "interview-prep")
 
     system = """You are an expert interview coach. Generate interview questions based on job descriptions.
 Return exactly 10 questions as a JSON object:

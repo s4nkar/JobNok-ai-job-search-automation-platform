@@ -10,6 +10,7 @@ from app.core.database import get_db
 from app.core.security import get_current_user_id
 from app.modules.bulk_email.schemas import CreateCampaignRequest
 from app.modules.bulk_email import service
+from app.modules.usage.service import record_event as record_tool_usage
 
 router = APIRouter()
 
@@ -17,6 +18,7 @@ router = APIRouter()
 @router.post("/campaign")
 async def create_campaign(request: Request, body: CreateCampaignRequest, db: AsyncSession = Depends(get_db)):
     user_id = await get_current_user_id(request, db)
+    await record_tool_usage(db, user_id, "bulk-email")
     return await service.create_campaign(db, user_id, body)
 
 

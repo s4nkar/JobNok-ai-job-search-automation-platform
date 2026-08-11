@@ -7,6 +7,7 @@ from app.core.database import get_db
 from app.core.security import get_current_user_id
 from app.modules.templates.schemas import TemplateIn, TemplateUpdate
 from app.modules.templates import service
+from app.modules.usage.service import record_event as record_tool_usage
 
 router = APIRouter()
 
@@ -20,6 +21,7 @@ async def list_templates(request: Request, db: AsyncSession = Depends(get_db)):
 @router.post("", status_code=201)
 async def create_template(request: Request, body: TemplateIn, db: AsyncSession = Depends(get_db)):
     user_id = await get_current_user_id(request, db)
+    await record_tool_usage(db, user_id, "templates")
     return await service.create_template(db, user_id, body)
 
 

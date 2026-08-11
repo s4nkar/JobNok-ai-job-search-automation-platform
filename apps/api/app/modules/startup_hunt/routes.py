@@ -13,8 +13,10 @@ from app.modules.startup_hunt.schemas import (
     StartupHuntOpportunityCreateRequest,
     StartupHuntOpportunityUpdateRequest,
     StartupHuntSearchRequest,
+    StartupHuntSourceIn,
 )
 from app.modules.startup_hunt import service
+from app.modules.usage.service import record_event as record_tool_usage
 
 router = APIRouter()
 
@@ -37,6 +39,7 @@ async def search_startup_hunt_opportunities(
 ):
     user_id = await get_current_user_id(request, db)
     await _check_rate_limit_fail_open(user_id)
+    await record_tool_usage(db, user_id, "startup-hunt")
     return await service.search_startup_hunt_opportunities(db, user_id, body)
 
 
@@ -108,3 +111,23 @@ async def update_startup_hunt_opportunity(
 async def delete_startup_hunt_opportunity(opportunity_id: str, request: Request, db: AsyncSession = Depends(get_db)):
     user_id = await get_current_user_id(request, db)
     await service.delete_startup_hunt_opportunity(db, user_id, opportunity_id)
+
+
+@router.get("/sources")
+async def list_startup_hunt_sources(request: Request, db: AsyncSession = Depends(get_db)):
+    user_id = await get_current_user_id(request, db)
+    return await service.list_user_startup_hunt_sources(db, user_id)
+
+
+@router.post("/sources", status_code=201)
+async def create_startup_hunt_source(
+    request: Request, body: StartupHuntSourceIn, db: AsyncSession = Depends(get_db)
+):
+    user_id = await get_current_user_id(request, db)
+    return await service.create_startup_hunt_source(db, user_id, body)
+
+
+@router.delete("/sources/{source_id}", status_code=204)
+async def delete_startup_hunt_source(source_id: str, request: Request, db: AsyncSession = Depends(get_db)):
+    user_id = await get_current_user_id(request, db)
+    await service.delete_startup_hunt_source(db, user_id, source_id)

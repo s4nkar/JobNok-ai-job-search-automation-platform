@@ -3,6 +3,8 @@
 from typing import Any
 from pydantic import BaseModel, HttpUrl, field_validator
 
+from app.modules.startup_hunt.engine import ALLOWED_SOURCE_TYPES
+
 
 class StartupHuntSearchRequest(BaseModel):
     query: str
@@ -16,21 +18,21 @@ class StartupHuntSearchRequest(BaseModel):
     english_friendly_only: bool = False
     company_stage: str | None = None
     strategy_prompt: str | None = None
-    crawler_enabled: bool = True
-    startupmap_enabled: bool = True
-    web_enabled: bool = True
-    indeed_enabled: bool = True
+    crawler_enabled: bool = False
+    startupmap_enabled: bool = False
+    web_enabled: bool = False
+    indeed_enabled: bool = False
     theirstack_enabled: bool = True
-    apify_enabled: bool = True
+    apify_enabled: bool = False
     ats_enabled: bool = True
     seeded_limit: int = 0
-    crawler_limit: int = 20
-    startupmap_limit: int = 10
-    web_limit: int = 10
-    indeed_limit: int = 10
-    theirstack_limit: int = 10
-    apify_limit: int = 10
-    ats_limit: int = 10
+    crawler_limit: int = 0
+    startupmap_limit: int = 0
+    web_limit: int = 0
+    indeed_limit: int = 0
+    theirstack_limit: int = 15
+    apify_limit: int = 0
+    ats_limit: int = 15
 
     @field_validator("query", "location")
     @classmethod
@@ -153,3 +155,40 @@ class StartupHuntOpportunityUpdateRequest(BaseModel):
         if value not in {"saved", "applied", "contacted", "skipped"}:
             raise ValueError("opportunity_status must be saved, applied, contacted, or skipped")
         return value
+
+
+class StartupHuntSourceIn(BaseModel):
+    """A user's own ATS/company source to merge into their startup-hunt searches."""
+
+    type: str
+    name: str
+    company: str | None = None
+    slug: str | None = None
+    url: HttpUrl | None = None
+    metadata: dict[str, Any] = {}
+
+    @field_validator("type")
+    @classmethod
+    def validate_type(cls, v: str) -> str:
+        value = v.strip().lower()
+        if value not in ALLOWED_SOURCE_TYPES:
+            raise ValueError(f"type must be one of: {', '.join(sorted(ALLOWED_SOURCE_TYPES))}")
+        return value
+
+    @field_validator("name")
+    @classmethod
+    def validate_name(cls, v: str) -> str:
+        value = v.strip()
+        if not value:
+            raise ValueError("name is required")
+        return value
+
+    @field_validator("company")
+    @classmethod
+    def normalize_company(cls, v: str | None) -> str | None:
+        return v.strip() if v and v.strip() else None
+
+    @field_validator("slug")
+    @classmethod
+    def normalize_slug(cls, v: str | None) -> str | None:
+        return v.strip() if v and v.strip() else None

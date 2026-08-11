@@ -59,6 +59,29 @@ dependencies = [
     "svix==1.61.0",
 ]
 
+[dependency-groups]
+dev = [
+    "ruff>=0.6",
+    "pytest>=8.3",
+    "pytest-asyncio>=0.24",
+]
+
 [tool.setuptools.packages.find]
 where = ["."]
 include = ["app*"]
+
+[tool.ruff]
+line-length = 120
+target-version = "py312"
+
+[tool.ruff.lint]
+# Scoped to real bugs (unused imports/vars, undefined names) for now — the
+# existing codebase has never been import-sorted or line-length-formatted,
+# so E/I/UP are left off until a dedicated cleanup pass runs `ruff format` +
+# `ruff check --fix` across the repo. CI runs this exact ruleset (`ruff check .`),
+# so local and CI results always match.
+select = ["F"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+asyncio_mode = "auto"

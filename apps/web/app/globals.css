@@ -29,9 +29,9 @@
     --brand: 239 84% 67%;
     --brand-foreground: 0 0% 100%;
 
-    /* Sidebar */
-    --sidebar-bg: 222 47% 7%;
-    --sidebar-border: 222 47% 12%;
+    /* Sidebar — clean white panel matching the overall dashboard aesthetic */
+    --sidebar-bg: 0 0% 100%;
+    --sidebar-border: 220 13% 91%;
   }
 
   * {

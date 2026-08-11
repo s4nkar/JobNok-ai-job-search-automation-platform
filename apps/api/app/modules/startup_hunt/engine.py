@@ -254,24 +254,28 @@ def extract_domain(url: str | None) -> str | None:
     return host or None
 
 
-def load_startup_hunt_sources() -> list[StartupHuntSourceConfig]:
-    try:
-        raw = json.loads(settings.startup_hunt_sources_json or "[]")
-    except json.JSONDecodeError:
-        return []
+ALLOWED_SOURCE_TYPES = {
+    "greenhouse", "lever", "ashby", "startup_company", "startup_directory",
+    "google_web", "web_search", "ats_discovery", "apify_actor", "indeed_search", "theirstack_search",
+}
 
+
+def build_seeded_sources(rows: list[dict[str, Any]]) -> list[StartupHuntSourceConfig]:
+    """Convert startup_hunt_sources DB rows (global + this user's own, already
+    merged by the caller) into the config shape the search engine consumes.
+
+    Replaces the old STARTUP_HUNT_SOURCES_JSON env parsing — same validation
+    rules, just fed from the DB instead of a static env blob.
+    """
     sources: list[StartupHuntSourceConfig] = []
-    allowed_types = {"greenhouse", "lever", "ashby", "startup_company", "startup_directory", "google_web", "web_search", "ats_discovery", "apify_actor", "indeed_search", "theirstack_search"}
-    for item in raw:
-        if not isinstance(item, dict):
-            continue
+    for item in rows:
         source_type = str(item.get("type", "")).strip().lower()
         name = str(item.get("name", "")).strip()
         company = str(item.get("company", "")).strip() or name
         slug = str(item.get("slug", "")).strip() or None
         url = str(item.get("url", "")).strip() or None
         metadata = item.get("metadata") if isinstance(item.get("metadata"), dict) else {}
-        if not name or source_type not in allowed_types:
+        if not name or source_type not in ALLOWED_SOURCE_TYPES:
             continue
         sources.append(
             StartupHuntSourceConfig(
@@ -351,10 +355,15 @@ Normalize values into short lowercase phrases."""
 async def search_startup_hunt(
     payload: dict[str, Any],
     existing_opportunities: dict[str, dict[str, Any]],
+    global_sources: list[StartupHuntSourceConfig] | None = None,
+    user_sources: list[StartupHuntSourceConfig] | None = None,
 ) -> tuple[list[dict[str, Any]], list[dict[str, Any]], list[dict[str, Any]], dict[str, Any], int, dict[str, int], dict[str, dict[str, Any]]]:
     sources: list[StartupHuntSourceConfig] = []
     if payload.get("include_seeded_sources") and _bucket_enabled(payload, "crawler"):
-        sources.extend(load_startup_hunt_sources())
+        sources.extend(global_sources or [])
+    # A user's own explicitly-added sources are always searched — no reason to
+    # hide them behind the (currently off-by-default) crawler bucket toggle.
+    sources.extend(user_sources or [])
     sources.extend(_auto_sources_from_integrations(payload))
     sources.extend(_auto_dynamic_sources(payload))
     strategy = await parse_strategy_prompt(payload.get("strategy_prompt"))
@@ -835,15 +844,15 @@ def _bucket_limit(payload: dict[str, Any], bucket: str) -> int:
 
 def _bucket_enabled(payload: dict[str, Any], bucket: str) -> bool:
     flag_map = {
-        "crawler": bool(payload.get("crawler_enabled", True)),
-        "startupmap": bool(payload.get("startupmap_enabled", True)),
-        "web": bool(payload.get("web_enabled", True)),
-        "indeed": bool(payload.get("indeed_enabled", True)),
+        "crawler": bool(payload.get("crawler_enabled", False)),
+        "startupmap": bool(payload.get("startupmap_enabled", False)),
+        "web": bool(payload.get("web_enabled", False)),
+        "indeed": bool(payload.get("indeed_enabled", False)),
         "theirstack": bool(payload.get("theirstack_enabled", True)),
-        "apify": bool(payload.get("apify_enabled", True)),
+        "apify": bool(payload.get("apify_enabled", False)),
         "ats": bool(payload.get("ats_enabled", True)),
     }
-    return flag_map.get(bucket, True)
+    return flag_map.get(bucket, False)
 
 
 def _bucket_available(payload: dict[str, Any], bucket: str) -> bool:
@@ -3536,7 +3545,6 @@ def _score_opportunity(
     direct_url = item.get("direct_apply_url")
     contacts = item.get("contacts", [])
     posted_at: datetime | None = item.get("posted_at")
-    source_type = item["source_type"]
     source_bucket = _result_source_bucket(item)
     seniority_preference = (
         _normalize_seniority_preference(strategy.get("seniority_preference"))
