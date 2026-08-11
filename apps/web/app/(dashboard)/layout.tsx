@@ -2,7 +2,21 @@
 
 import { useAuth } from '@clerk/nextjs'
 import { Loader2 } from 'lucide-react'
+import { cn } from '@jobnok/ui'
 import { Sidebar } from '@/components/shared/Sidebar'
+import { SidebarProvider, useSidebar } from '@/components/providers/SidebarProvider'
+
+function DashboardContent({ children }: { children: React.ReactNode }) {
+  const { collapsed } = useSidebar()
+
+  return (
+    <main className="flex-1 overflow-auto">
+      <div className={cn('mx-auto px-8 py-8', collapsed ? 'max-w-none' : 'max-w-6xl')}>
+        {children}
+      </div>
+    </main>
+  )
+}
 
 export default function DashboardLayout({ children }: { children: React.ReactNode }) {
   const { isLoaded } = useAuth()
@@ -19,13 +33,11 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
   }
 
   return (
-    <div className="flex min-h-screen bg-background">
-      <Sidebar />
-      <main className="flex-1 overflow-auto">
-        <div className="max-w-6xl mx-auto px-8 py-8">
-          {children}
-        </div>
-      </main>
-    </div>
+    <SidebarProvider>
+      <div className="flex min-h-screen bg-background">
+        <Sidebar />
+        <DashboardContent>{children}</DashboardContent>
+      </div>
+    </SidebarProvider>
   )
 }

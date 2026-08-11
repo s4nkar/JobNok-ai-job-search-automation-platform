@@ -15,6 +15,7 @@ import { useToast } from '@jobnok/ui'
 import { apiGet } from '@/lib/api'
 import { queryKeys } from '@/lib/queryKeys'
 import { UserProfile } from '@/lib/types'
+import { useSidebar } from '@/components/providers/SidebarProvider'
 
 const navItems = [
   { href: '/dashboard', label: 'Dashboard', icon: LayoutDashboard },
@@ -39,7 +40,7 @@ export function Sidebar() {
 
   const [userEmail, setUserEmail] = useState<string | null>(null)
   const [confirmSignOut, setConfirmSignOut] = useState(false)
-  const [collapsed, setCollapsed] = useState(false)
+  const { collapsed, toggleCollapsed: toggleCollapsedShared } = useSidebar()
 
   // Single fixed-position tooltip — bypasses all overflow clipping
   const [tooltip, setTooltip] = useState<{ label: string; y: number } | null>(null)
@@ -50,17 +51,9 @@ export function Sidebar() {
   }, [])
   const hideTip = useCallback(() => setTooltip(null), [])
 
-  useEffect(() => {
-    if (localStorage.getItem('sidebar_collapsed') === 'true') setCollapsed(true)
-  }, [])
-
   function toggleCollapsed() {
-    setCollapsed(prev => {
-      const next = !prev
-      localStorage.setItem('sidebar_collapsed', String(next))
-      if (next) setTooltip(null)   // clear any visible tip on collapse
-      return next
-    })
+    if (!collapsed) setTooltip(null)   // clear any visible tip when collapsing
+    toggleCollapsedShared()
   }
 
   useEffect(() => {
