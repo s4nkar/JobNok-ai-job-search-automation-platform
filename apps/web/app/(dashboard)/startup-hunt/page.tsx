@@ -41,12 +41,12 @@ const schema = z.object({
   english_friendly_only: z.enum(['false', 'true']).default('false'),
   company_stage: z.string().optional(),
   strategy_prompt: z.string().optional(),
-  crawler_enabled: z.enum(['false', 'true']).default('true'),
-  startupmap_enabled: z.enum(['false', 'true']).default('true'),
-  web_enabled: z.enum(['false', 'true']).default('true'),
-  indeed_enabled: z.enum(['false', 'true']).default('true'),
+  crawler_enabled: z.enum(['false', 'true']).default('false'),
+  startupmap_enabled: z.enum(['false', 'true']).default('false'),
+  web_enabled: z.enum(['false', 'true']).default('false'),
+  indeed_enabled: z.enum(['false', 'true']).default('false'),
   theirstack_enabled: z.enum(['false', 'true']).default('true'),
-  apify_enabled: z.enum(['false', 'true']).default('true'),
+  apify_enabled: z.enum(['false', 'true']).default('false'),
   ats_enabled: z.enum(['false', 'true']).default('true'),
   seeded_limit: z.coerce.number().int().min(0).max(50),
   crawler_limit: z.coerce.number().int().min(0).max(50),
@@ -73,20 +73,20 @@ const DEFAULT_VALUES: FormData = {
   english_friendly_only: 'false',
   company_stage: '',
   strategy_prompt: 'applied ai engineer, mid-level, 3+ years experience, not senior/staff/principal, early-stage, founder-led, english friendly, relocation friendly, modern AI stack (LLMs, RAG, agents, FastAPI, MLOps), fresh hiring momentum, avoid recruiters and large enterprises.',
-  crawler_enabled: 'true',
-  startupmap_enabled: 'true',
-  web_enabled: 'true',
-  indeed_enabled: 'true',
+  crawler_enabled: 'false',
+  startupmap_enabled: 'false',
+  web_enabled: 'false',
+  indeed_enabled: 'false',
   theirstack_enabled: 'true',
-  apify_enabled: 'true',
+  apify_enabled: 'false',
   ats_enabled: 'true',
-  seeded_limit: 10,
-  crawler_limit: 15,
-  startupmap_limit: 15,
-  web_limit: 15,
-  indeed_limit: 20,
+  seeded_limit: 0,
+  crawler_limit: 0,
+  startupmap_limit: 0,
+  web_limit: 0,
+  indeed_limit: 0,
   theirstack_limit: 15,
-  apify_limit: 15,
+  apify_limit: 0,
   ats_limit: 15,
 }
 
@@ -99,7 +99,7 @@ const labelClasses: Record<string, string> = {
   'AI/ML Fit': 'bg-violet-100 text-violet-900 hover:bg-violet-100',
 }
 
-const SOURCE_DIAGNOSTIC_ORDER: ProviderBucket[] = ['crawler', 'startupmap', 'web', 'indeed', 'theirstack', 'apify', 'ats']
+const SOURCE_DIAGNOSTIC_ORDER: ProviderBucket[] = ['ats', 'theirstack']
 
 const PROVIDER_META: Record<ProviderBucket, { label: string; enabledField: keyof FormData; limitField: keyof FormData; hint: string }> = {
   crawler: { label: 'Crawler', enabledField: 'crawler_enabled', limitField: 'crawler_limit', hint: 'Curated watchlist and seeded startup sources.' },

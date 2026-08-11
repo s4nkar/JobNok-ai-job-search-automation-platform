@@ -835,15 +835,15 @@ def _bucket_limit(payload: dict[str, Any], bucket: str) -> int:
 
 def _bucket_enabled(payload: dict[str, Any], bucket: str) -> bool:
     flag_map = {
-        "crawler": bool(payload.get("crawler_enabled", True)),
-        "startupmap": bool(payload.get("startupmap_enabled", True)),
-        "web": bool(payload.get("web_enabled", True)),
-        "indeed": bool(payload.get("indeed_enabled", True)),
+        "crawler": bool(payload.get("crawler_enabled", False)),
+        "startupmap": bool(payload.get("startupmap_enabled", False)),
+        "web": bool(payload.get("web_enabled", False)),
+        "indeed": bool(payload.get("indeed_enabled", False)),
         "theirstack": bool(payload.get("theirstack_enabled", True)),
-        "apify": bool(payload.get("apify_enabled", True)),
+        "apify": bool(payload.get("apify_enabled", False)),
         "ats": bool(payload.get("ats_enabled", True)),
     }
-    return flag_map.get(bucket, True)
+    return flag_map.get(bucket, False)
 
 
 def _bucket_available(payload: dict[str, Any], bucket: str) -> bool:

@@ -16,21 +16,21 @@ class StartupHuntSearchRequest(BaseModel):
     english_friendly_only: bool = False
     company_stage: str | None = None
     strategy_prompt: str | None = None
-    crawler_enabled: bool = True
-    startupmap_enabled: bool = True
-    web_enabled: bool = True
-    indeed_enabled: bool = True
+    crawler_enabled: bool = False
+    startupmap_enabled: bool = False
+    web_enabled: bool = False
+    indeed_enabled: bool = False
     theirstack_enabled: bool = True
-    apify_enabled: bool = True
+    apify_enabled: bool = False
     ats_enabled: bool = True
     seeded_limit: int = 0
-    crawler_limit: int = 20
-    startupmap_limit: int = 10
-    web_limit: int = 10
-    indeed_limit: int = 10
-    theirstack_limit: int = 10
-    apify_limit: int = 10
-    ats_limit: int = 10
+    crawler_limit: int = 0
+    startupmap_limit: int = 0
+    web_limit: int = 0
+    indeed_limit: int = 0
+    theirstack_limit: int = 15
+    apify_limit: int = 0
+    ats_limit: int = 15
 
     @field_validator("query", "location")
     @classmethod

@@ -98,9 +98,9 @@ class Settings(BaseSettings):
     # Example:
     # [{"type":"startup_company","name":"Acme","company":"Acme","url":"https://acme.com","metadata":{"country":"germany","city":"berlin","stage":"seed","careers_url":"https://acme.com/careers","contacts":[{"name":"Jane Doe","title":"Founder","email":"jane@acme.com"}]}}]
     startup_hunt_sources_json: str = "[]"
-    startup_hunt_timeout_seconds: int = 90
+    startup_hunt_timeout_seconds: int = 20
     startup_hunt_apify_poll_seconds: int = 60
-    startup_hunt_total_budget_seconds: int = 150
+    startup_hunt_total_budget_seconds: int = 30
     google_cse_api_key: str = ""
     google_cse_cx: str = ""
     apify_api_token: str = ""
