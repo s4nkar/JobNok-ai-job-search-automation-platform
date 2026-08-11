@@ -30,6 +30,7 @@ import {
   Mail,
   MapPin,
   Plus,
+  SlidersHorizontal,
   Sparkles,
   Trash2,
   UserRound,
@@ -404,12 +405,17 @@ export default function StartupHuntPage() {
             </p>
           </div>
         </div>
-        <Button type="button" variant="outline" className="rounded-xl flex-shrink-0 border-primary" onClick={openSources}>
-          <ListPlus className="h-4 w-4 mr-2" /> My Sources
+        <Button
+          type="button"
+          variant="outline"
+          onClick={openSources}
+          className="h-9 px-3.5 rounded-xl text-sm border-slate-200 text-slate-600 hover:text-slate-900 hover:border-slate-300 gap-1.5 flex-shrink-0"
+        >
+          <ListPlus className="h-3.5 w-3.5" /> My Sources
         </Button>
       </div>
 
-      <div className="flex items-start gap-2.5 bg-indigo-50 border border-indigo-100 text-indigo-700 rounded-xl px-4 py-3 mb-6 text-sm">
+      <div className="flex items-start gap-2.5 bg-indigo-50 border border-indigo-100 text-indigo-700 rounded-xl px-4 py-2.5 mb-6 text-sm">
         <Info className="h-4 w-4 flex-shrink-0 text-indigo-500 mt-0.5" />
         <span>
           <strong>{config.rateLimits.startupHuntPerDay} hunts/day</strong> on the free tier. This tool blends ATS roles with startup
@@ -417,182 +423,211 @@ export default function StartupHuntPage() {
         </span>
       </div>
 
-      <div className="grid grid-cols-3 gap-6">
-        <div className="col-span-1">
-          <form onSubmit={handleSubmit(onSubmit)} className="space-y-4">
-            <div className="bg-white rounded-2xl border border-slate-100 shadow-card p-5">
-              <p className="text-sm font-semibold text-slate-700 mb-4">Hunt Strategy</p>
-              <div className="space-y-4">
-                <div className="space-y-1.5">
-                  <Label className="text-sm font-medium">Target role</Label>
-                  <Input placeholder="AI Engineer" className="rounded-xl border-slate-200" {...register('query')} />
-                  {errors.query && <p className="text-xs text-destructive">{errors.query.message}</p>}
-                </div>
+      <div className="grid grid-cols-[320px_1fr] gap-5 items-start">
+        <form
+          onSubmit={handleSubmit(onSubmit)}
+          className="bg-white rounded-2xl border border-slate-100 shadow-sm p-5 space-y-5 sticky top-6"
+        >
+          <div className="flex items-center gap-2 pb-1 border-b border-slate-100">
+            <SlidersHorizontal className="h-3.5 w-3.5 text-slate-400" />
+            <span className="text-xs font-semibold text-slate-500 uppercase tracking-wider">Hunt Strategy</span>
+          </div>
 
+          <div className="space-y-1.5">
+            <Label className="text-xs font-medium text-slate-600">Target role</Label>
+            <Input
+              placeholder="AI Engineer"
+              className="rounded-xl h-9 text-sm border-slate-200 focus:border-indigo-300 focus:ring-1 focus:ring-indigo-200"
+              {...register('query')}
+            />
+            {errors.query && <p className="text-xs text-destructive">{errors.query.message}</p>}
+          </div>
 
-                <div className="space-y-1.5">
-                  <Label className="text-sm font-medium">Cities / regions</Label>
-                  <Textarea
-                    rows={2}
-                    placeholder="Berlin, Munich, Hamburg, Frankfurt, Cologne, Remote"
-                    {...register('location')}
-                  />
-                  <p className="text-xs text-muted-foreground">Comma-separated. Each city runs in parallel; add &quot;Remote&quot; to include remote roles.</p>
-                  {errors.location && <p className="text-xs text-destructive">{errors.location.message}</p>}
-                </div>
-                <div className="space-y-1.5">
-                  <Label className="text-sm font-medium">Country</Label>
-                  <Input placeholder="Germany" className="rounded-xl border-slate-200" {...register('country')} />
-                </div>
+          <div className="space-y-1.5">
+            <Label className="text-xs font-medium text-slate-600">Cities / regions</Label>
+            <Textarea
+              rows={2}
+              placeholder="Berlin, Munich, Hamburg, Frankfurt, Cologne, Remote"
+              className="rounded-xl text-sm border-slate-200 focus:border-indigo-300 focus:ring-1 focus:ring-indigo-200"
+              {...register('location')}
+            />
+            <p className="text-[10px] text-slate-400 leading-relaxed">Comma-separated. Each city runs in parallel; add &quot;Remote&quot; to include remote roles.</p>
+            {errors.location && <p className="text-xs text-destructive">{errors.location.message}</p>}
+          </div>
 
+          <div className="space-y-1.5">
+            <Label className="text-xs font-medium text-slate-600">Country</Label>
+            <Input
+              placeholder="Germany"
+              className="rounded-xl h-9 text-sm border-slate-200 focus:border-indigo-300 focus:ring-1 focus:ring-indigo-200"
+              {...register('country')}
+            />
+          </div>
 
-                <div className="grid grid-cols-2 gap-4">
-                  <div className="space-y-1">
-                    <Label>Freshness</Label>
-                    <Select value={String(watch('posted_within_hours'))} onValueChange={(v) => setValue('posted_within_hours', parseInt(v, 10))}>
-                      <SelectTrigger><SelectValue /></SelectTrigger>
-                      <SelectContent>
-                        <SelectItem value="24">24 hours</SelectItem>
-                        <SelectItem value="72">72 hours</SelectItem>
-                        <SelectItem value="168">7 days</SelectItem>
-                      </SelectContent>
-                    </Select>
-                  </div>
-                  <div className="space-y-1">
-                    <Label>Startup stage</Label>
-                    <Select value={watch('company_stage') || 'any'} onValueChange={(v) => setValue('company_stage', v === 'any' ? '' : v)}>
-                      <SelectTrigger><SelectValue /></SelectTrigger>
-                      <SelectContent>
-                        <SelectItem value="any">Any stage</SelectItem>
-                        <SelectItem value="pre-seed">Pre-seed</SelectItem>
-                        <SelectItem value="seed">Seed</SelectItem>
-                        <SelectItem value="series a">Series A</SelectItem>
-                      </SelectContent>
-                    </Select>
-                  </div>
-                </div>
+          <div className="grid grid-cols-2 gap-3">
+            <div className="space-y-1.5">
+              <Label className="text-xs font-medium text-slate-600">Freshness</Label>
+              <Select value={String(watch('posted_within_hours'))} onValueChange={(v) => setValue('posted_within_hours', parseInt(v, 10))}>
+                <SelectTrigger className="rounded-xl h-9 text-sm border-slate-200"><SelectValue /></SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="24" className="text-sm">24 hours</SelectItem>
+                  <SelectItem value="72" className="text-sm">72 hours</SelectItem>
+                  <SelectItem value="168" className="text-sm">7 days</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+            <div className="space-y-1.5">
+              <Label className="text-xs font-medium text-slate-600">Startup stage</Label>
+              <Select value={watch('company_stage') || 'any'} onValueChange={(v) => setValue('company_stage', v === 'any' ? '' : v)}>
+                <SelectTrigger className="rounded-xl h-9 text-sm border-slate-200"><SelectValue /></SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="any" className="text-sm">Any stage</SelectItem>
+                  <SelectItem value="pre-seed" className="text-sm">Pre-seed</SelectItem>
+                  <SelectItem value="seed" className="text-sm">Seed</SelectItem>
+                  <SelectItem value="series a" className="text-sm">Series A</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+          </div>
 
-                <div className="space-y-1">
-                  <Label>Result limit</Label>
-                  <Input type="number" min={1} max={50} {...register('result_limit')} />
-                </div>
+          <div className="space-y-1.5">
+            <Label className="text-xs font-medium text-slate-600">Result limit</Label>
+            <Input
+              type="number"
+              min={1}
+              max={50}
+              className="rounded-xl h-9 text-sm border-slate-200 focus:border-indigo-300 focus:ring-1 focus:ring-indigo-200"
+              {...register('result_limit')}
+            />
+          </div>
 
-                <div className="space-y-1">
-                  <Label>Use curated watchlist</Label>
-                  <Select value={watch('include_seeded_sources')} onValueChange={(v) => setValue('include_seeded_sources', v as 'false' | 'true')}>
-                    <SelectTrigger><SelectValue /></SelectTrigger>
-                    <SelectContent>
-                      <SelectItem value="false">Off</SelectItem>
-                      <SelectItem value="true">On</SelectItem>
-                    </SelectContent>
-                  </Select>
-                </div>
+          <div className="space-y-1.5">
+            <Label className="text-xs font-medium text-slate-600">Use curated watchlist</Label>
+            <Select value={watch('include_seeded_sources')} onValueChange={(v) => setValue('include_seeded_sources', v as 'false' | 'true')}>
+              <SelectTrigger className="rounded-xl h-9 text-sm border-slate-200"><SelectValue /></SelectTrigger>
+              <SelectContent>
+                <SelectItem value="false" className="text-sm">Off</SelectItem>
+                <SelectItem value="true" className="text-sm">On</SelectItem>
+              </SelectContent>
+            </Select>
+          </div>
 
-                <div className="space-y-1">
-                  <Label>Remote only</Label>
-                  <Select value={watch('remote_only')} onValueChange={(v) => setValue('remote_only', v as 'false' | 'true')}>
-                    <SelectTrigger><SelectValue /></SelectTrigger>
-                    <SelectContent>
-                      <SelectItem value="false">Include onsite and hybrid</SelectItem>
-                      <SelectItem value="true">Remote only</SelectItem>
-                    </SelectContent>
-                  </Select>
-                </div>
+          <div className="space-y-1.5">
+            <Label className="text-xs font-medium text-slate-600">Remote only</Label>
+            <Select value={watch('remote_only')} onValueChange={(v) => setValue('remote_only', v as 'false' | 'true')}>
+              <SelectTrigger className="rounded-xl h-9 text-sm border-slate-200"><SelectValue /></SelectTrigger>
+              <SelectContent>
+                <SelectItem value="false" className="text-sm">Include onsite and hybrid</SelectItem>
+                <SelectItem value="true" className="text-sm">Remote only</SelectItem>
+              </SelectContent>
+            </Select>
+          </div>
 
-                <div className="space-y-1">
-                  <Label>Direct links only</Label>
-                  <Select value={watch('direct_links_only')} onValueChange={(v) => setValue('direct_links_only', v as 'false' | 'true')}>
-                    <SelectTrigger><SelectValue /></SelectTrigger>
-                    <SelectContent>
-                      <SelectItem value="false">Allow ATS and lead sources</SelectItem>
-                      <SelectItem value="true">Only show direct company links</SelectItem>
-                    </SelectContent>
-                  </Select>
-                </div>
+          <div className="space-y-1.5">
+            <Label className="text-xs font-medium text-slate-600">Direct links only</Label>
+            <Select value={watch('direct_links_only')} onValueChange={(v) => setValue('direct_links_only', v as 'false' | 'true')}>
+              <SelectTrigger className="rounded-xl h-9 text-sm border-slate-200"><SelectValue /></SelectTrigger>
+              <SelectContent>
+                <SelectItem value="false" className="text-sm">Allow ATS and lead sources</SelectItem>
+                <SelectItem value="true" className="text-sm">Only show direct company links</SelectItem>
+              </SelectContent>
+            </Select>
+          </div>
 
-                <div className="space-y-1">
-                  <Label>English-friendly only</Label>
-                  <Select value={watch('english_friendly_only')} onValueChange={(v) => setValue('english_friendly_only', v as 'false' | 'true')}>
-                    <SelectTrigger><SelectValue /></SelectTrigger>
-                    <SelectContent>
-                      <SelectItem value="true">Prefer English-friendly teams</SelectItem>
-                      <SelectItem value="false">Show all teams</SelectItem>
-                    </SelectContent>
-                  </Select>
-                </div>
+          <div className="space-y-1.5">
+            <Label className="text-xs font-medium text-slate-600">English-friendly only</Label>
+            <Select value={watch('english_friendly_only')} onValueChange={(v) => setValue('english_friendly_only', v as 'false' | 'true')}>
+              <SelectTrigger className="rounded-xl h-9 text-sm border-slate-200"><SelectValue /></SelectTrigger>
+              <SelectContent>
+                <SelectItem value="true" className="text-sm">Prefer English-friendly teams</SelectItem>
+                <SelectItem value="false" className="text-sm">Show all teams</SelectItem>
+              </SelectContent>
+            </Select>
+          </div>
 
-                <div className="space-y-1">
-                  <Label>Strategy prompt</Label>
-                  <Textarea
-                    rows={5}
-                    placeholder="hidden gems, small startups, founder-led teams, low-competition, english-friendly, relocation support"
-                    {...register('strategy_prompt')}
-                  />
-                </div>
+          <div className="space-y-1.5">
+            <Label className="text-xs font-medium text-slate-600">Strategy prompt</Label>
+            <Textarea
+              rows={4}
+              placeholder="hidden gems, small startups, founder-led teams, low-competition, english-friendly, relocation support"
+              className="rounded-xl text-sm border-slate-200 focus:border-indigo-300 focus:ring-1 focus:ring-indigo-200"
+              {...register('strategy_prompt')}
+            />
+          </div>
 
-                <div className="space-y-3 pt-2 border-t border-slate-100">
-                  <Label>Provider controls</Label>
-                  <div className="space-y-3">
-                    {SOURCE_DIAGNOSTIC_ORDER.map((bucket) => {
-                      const meta = PROVIDER_META[bucket]
-                      return (
-                        <div key={bucket} className="rounded-xl border border-slate-100 bg-slate-50 p-3">
-                          <div className="flex items-start justify-between gap-3">
-                            <div className="min-w-0">
-                              <p className="text-sm font-semibold text-slate-800">{meta.label}</p>
-                              <p className="text-xs text-slate-500 mt-0.5">{meta.hint}</p>
-                            </div>
-                            <div className="w-28">
-                              <Select value={watch(meta.enabledField) as string} onValueChange={(v) => setValue(meta.enabledField, v as never)}>
-                                <SelectTrigger><SelectValue /></SelectTrigger>
-                                <SelectContent>
-                                  <SelectItem value="true">Enabled</SelectItem>
-                                  <SelectItem value="false">Disabled</SelectItem>
-                                </SelectContent>
-                              </Select>
-                            </div>
-                          </div>
-                          <div className="grid grid-cols-2 gap-3 mt-3">
-                            <div className="space-y-1">
-                              <Label className="text-xs text-slate-500">Cap</Label>
-                              <Input type="number" min={0} max={50} {...register(meta.limitField)} />
-                            </div>
-                            {bucket === 'crawler' ? (
-                              <div className="space-y-1">
-                                <Label className="text-xs text-slate-500">Watchlist cap</Label>
-                                <Input type="number" min={0} max={50} {...register('seeded_limit')} disabled={watch('include_seeded_sources') !== 'true'} />
-                              </div>
-                            ) : (
-                              <div className="space-y-1">
-                                <Label className="text-xs text-slate-500">Status</Label>
-                                <div className="h-10 rounded-xl border border-slate-200 bg-white px-3 flex items-center text-xs text-slate-500">
-                                  {watch(meta.enabledField) === 'true' ? 'Will run if available' : 'Skipped for this hunt'}
-                                </div>
-                              </div>
-                            )}
+          <div className="space-y-2.5 pt-1 border-t border-slate-100">
+            <Label className="text-xs font-medium text-slate-600">Provider controls</Label>
+            <div className="space-y-2.5">
+              {SOURCE_DIAGNOSTIC_ORDER.map((bucket) => {
+                const meta = PROVIDER_META[bucket]
+                return (
+                  <div key={bucket} className="rounded-xl border border-slate-100 bg-slate-50 p-3">
+                    <div className="flex items-start justify-between gap-3">
+                      <div className="min-w-0">
+                        <p className="text-[13px] font-semibold text-slate-700">{meta.label}</p>
+                        <p className="text-[11px] text-slate-500 mt-0.5">{meta.hint}</p>
+                      </div>
+                      <div className="w-[104px] flex-shrink-0">
+                        <Select value={watch(meta.enabledField) as string} onValueChange={(v) => setValue(meta.enabledField, v as never)}>
+                          <SelectTrigger className="rounded-lg h-8 text-xs border-slate-200"><SelectValue /></SelectTrigger>
+                          <SelectContent>
+                            <SelectItem value="true" className="text-sm">Enabled</SelectItem>
+                            <SelectItem value="false" className="text-sm">Disabled</SelectItem>
+                          </SelectContent>
+                        </Select>
+                      </div>
+                    </div>
+                    <div className="grid grid-cols-2 gap-2.5 mt-2.5">
+                      <div className="space-y-1">
+                        <Label className="text-[10px] text-slate-500">Cap</Label>
+                        <Input
+                          type="number"
+                          min={0}
+                          max={50}
+                          className="rounded-lg h-8 text-xs border-slate-200 bg-white"
+                          {...register(meta.limitField)}
+                        />
+                      </div>
+                      {bucket === 'crawler' ? (
+                        <div className="space-y-1">
+                          <Label className="text-[10px] text-slate-500">Watchlist cap</Label>
+                          <Input
+                            type="number"
+                            min={0}
+                            max={50}
+                            className="rounded-lg h-8 text-xs border-slate-200 bg-white"
+                            {...register('seeded_limit')}
+                            disabled={watch('include_seeded_sources') !== 'true'}
+                          />
+                        </div>
+                      ) : (
+                        <div className="space-y-1">
+                          <Label className="text-[10px] text-slate-500">Status</Label>
+                          <div className="h-8 rounded-lg border border-slate-200 bg-white px-2.5 flex items-center text-[11px] text-slate-500 truncate">
+                            {watch(meta.enabledField) === 'true' ? 'Will run if available' : 'Skipped for this hunt'}
                           </div>
                         </div>
-                      )
-                    })}
+                      )}
+                    </div>
                   </div>
-                </div>
-              </div>
+                )
+              })}
             </div>
+          </div>
 
-            <Button
-              type="submit"
-              className="w-full h-11 gradient-brand text-white border-0 shadow-brand-sm hover:opacity-90 transition-opacity rounded-xl font-semibold"
-              disabled={loading}
-            >
-              {loading
-                ? <><Loader2 className="h-4 w-4 mr-2 animate-spin" /> Hunting...</>
-                : <><Compass className="h-4 w-4 mr-2" /> Run Startup Hunt</>
-              }
-            </Button>
-          </form>
-        </div>
+          <Button
+            type="submit"
+            disabled={loading}
+            className="w-full gradient-brand text-white border-0 shadow-sm hover:opacity-90 transition-opacity rounded-xl h-9 text-sm font-semibold"
+          >
+            {loading
+              ? <><Loader2 className="h-3.5 w-3.5 mr-2 animate-spin" />Hunting…</>
+              : <><Compass className="h-3.5 w-3.5 mr-2" />Run Startup Hunt</>
+            }
+          </Button>
+        </form>
 
-        <div className="col-span-2 space-y-4">
+        <div className="min-w-0 space-y-4">
           {error && (
             <div className="bg-red-50 border border-red-100 text-red-700 rounded-xl px-4 py-3 text-sm">
               {error}
@@ -600,7 +635,7 @@ export default function StartupHuntPage() {
           )}
 
           {parsedStrategy && (
-            <div className="bg-white rounded-2xl border border-slate-100 shadow-card p-4">
+            <div className="bg-white rounded-2xl border border-slate-100 shadow-sm p-4">
               <div className="flex items-center gap-2 mb-3">
                 <Sparkles className="h-4 w-4 text-amber-500" />
                 <p className="text-sm font-semibold text-slate-700">Parsed Hunt Strategy</p>
@@ -672,7 +707,7 @@ export default function StartupHuntPage() {
           {loading && results.length === 0 && (
             <div className="space-y-4">
               {Array.from({ length: 6 }).map((_, i) => (
-                <div key={i} className="bg-white rounded-2xl border border-slate-100 shadow-card p-5 animate-pulse">
+                <div key={i} className="bg-white rounded-2xl border border-slate-100 shadow-sm p-5 animate-pulse">
                   <div className="flex items-start justify-between gap-4">
                     <div className="min-w-0 flex-1 space-y-3">
                       <div className="flex items-center gap-2">
@@ -715,7 +750,7 @@ export default function StartupHuntPage() {
           )}
 
           {!loading && results.length === 0 && !error && (
-            <div className="bg-white rounded-2xl border border-slate-100 shadow-card min-h-[480px] flex items-center justify-center p-8">
+            <div className="bg-white rounded-2xl border border-slate-100 shadow-sm min-h-[480px] flex items-center justify-center p-8">
               <div className="text-center space-y-2">
                 <div className="w-14 h-14 rounded-2xl bg-orange-50 flex items-center justify-center mx-auto">
                   <Compass className="h-7 w-7 text-orange-200" />
@@ -753,7 +788,7 @@ export default function StartupHuntPage() {
                         </span>
                       </div>
                     )}
-                    <div className="bg-white rounded-2xl border border-slate-100 shadow-card p-5">
+                    <div className="bg-white rounded-2xl border border-slate-100 shadow-sm p-5">
                       <div className="flex items-start justify-between gap-4">
                         <div className="min-w-0">
                           <div className="flex items-center gap-2 flex-wrap mb-1">
@@ -952,7 +987,7 @@ export default function StartupHuntPage() {
           )}
 
           {overflowResults.length > 0 && (
-            <div className="bg-white rounded-2xl border border-slate-100 shadow-card p-4 space-y-4">
+            <div className="bg-white rounded-2xl border border-slate-100 shadow-sm p-4 space-y-4">
               <div className="flex items-center justify-between gap-3">
                 <div>
                   <h2 className="text-sm font-semibold text-slate-800">Unfiltered / More Results</h2>
@@ -1014,7 +1049,7 @@ export default function StartupHuntPage() {
           )}
 
           {filteredOut.length > 0 && (
-            <div className="bg-white rounded-2xl border border-slate-100 shadow-card p-4 space-y-4">
+            <div className="bg-white rounded-2xl border border-slate-100 shadow-sm p-4 space-y-4">
               <div className="flex items-center justify-between gap-3">
                 <div>
                   <h2 className="text-sm font-semibold text-slate-800">Filtered Out</h2>

@@ -1,11 +1,11 @@
 import {
   FileText, Linkedin, FileSearch, PenLine, MessageSquare,
-  Briefcase, Compass, DollarSign, Mail, Radar, type LucideIcon,
+  Briefcase, Compass, DollarSign, Mail, Radar, Search, type LucideIcon,
 } from 'lucide-react'
 
 export type ToolColor =
   | 'rose' | 'blue' | 'violet' | 'pink' | 'teal'
-  | 'indigo' | 'orange' | 'cyan' | 'emerald' | 'amber'
+  | 'indigo' | 'orange' | 'cyan' | 'emerald' | 'amber' | 'sky'
 
 // Light-mode badge treatment — shared by the marketing bento grid, footer,
 // and the (auth) branded panel, all of which now sit on a light background.
@@ -20,6 +20,7 @@ export const toolBadgeColors: Record<ToolColor, string> = {
   cyan: 'bg-cyan-50 text-cyan-600 border-cyan-100',
   emerald: 'bg-emerald-50 text-emerald-600 border-emerald-100',
   amber: 'bg-amber-50 text-amber-600 border-amber-100',
+  sky: 'bg-sky-50 text-sky-600 border-sky-100',
 }
 
 export interface Tool {
@@ -111,5 +112,13 @@ export const tools: Tool[] = [
     description: 'Sends personalized outreach emails to a recipient list, queued and rate-limited.',
     icon: Mail,
     color: 'amber',
+  },
+  {
+    slug: 'recent-job-search',
+    href: '/recent-job-search',
+    label: 'Recent Job Search',
+    description: 'Searches fresh ATS job postings by role, location, and recency, with tracker sync.',
+    icon: Search,
+    color: 'sky',
   },
 ]

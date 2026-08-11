@@ -9,7 +9,7 @@ import { cn } from '@jobnok/ui'
 import {
   FileText, Linkedin, FileSearch, PenLine, MessageSquare,
   Briefcase, Compass, DollarSign, Mail, Radar, LogOut,
-  Settings, ChevronLeft, ChevronRight, Check, X, LayoutDashboard,
+  Settings, ChevronLeft, ChevronRight, Check, X, LayoutDashboard, Search,
 } from 'lucide-react'
 import { useToast } from '@jobnok/ui'
 import { apiGet } from '@/lib/api'
@@ -19,6 +19,7 @@ import { useSidebar } from '@/components/providers/SidebarProvider'
 
 const navItems = [
   { href: '/dashboard', label: 'Dashboard', icon: LayoutDashboard },
+  { href: '/recent-job-search', label: 'Recent Job Search', icon: Search },
   { href: '/templates', label: 'Smart Templates', icon: FileText },
   { href: '/linkedin-fill', label: 'LinkedIn Auto-Fill', icon: Linkedin },
   { href: '/resume-tailor', label: 'Resume Tailor', icon: FileSearch },

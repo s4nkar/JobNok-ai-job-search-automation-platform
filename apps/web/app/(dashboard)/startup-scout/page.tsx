@@ -444,7 +444,7 @@ export default function StartupScoutPage() {
               </div>
               <p className="font-semibold text-slate-700 text-base">Find your next startup</p>
               <p className="text-sm text-slate-400 mt-1 max-w-xs leading-relaxed">
-                Set a location and funding stage, then hit Discover. Save interesting companies to your tracker to crawl for founder contacts.
+                Set a location and funding stage, then hit Discover. <span className="text-blue-500">Save interesting companies to your tracker to crawl for founder contacts.</span>
               </p>
             </div>
           )}

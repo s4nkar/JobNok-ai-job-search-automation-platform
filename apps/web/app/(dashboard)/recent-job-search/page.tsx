@@ -177,9 +177,8 @@ export default function RecentJobSearchPage() {
         </span>
       </div>
 
-      <div className="grid grid-cols-3 gap-6">
-        <div className="col-span-1">
-          <form onSubmit={handleSubmit(onSubmit)} className="space-y-4">
+      <div className="grid grid-cols-[320px_1fr] gap-5 items-start">
+        <form onSubmit={handleSubmit(onSubmit)} className="space-y-4 sticky top-6">
             <div className="bg-white rounded-2xl border border-slate-100 shadow-card p-5 space-y-4">
               <p className="text-sm font-semibold text-slate-700">Search Filters</p>
 
@@ -255,10 +254,9 @@ export default function RecentJobSearchPage() {
                 : <><Search className="h-4 w-4 mr-2" /> Find Recent Jobs</>
               }
             </Button>
-          </form>
-        </div>
+        </form>
 
-        <div className="col-span-2 space-y-4">
+        <div className="min-w-0 space-y-4">
           {error && (
             <div className="bg-red-50 border border-red-100 text-red-700 rounded-xl px-4 py-3 text-sm">
               {error}
