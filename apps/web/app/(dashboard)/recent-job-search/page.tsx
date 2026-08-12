@@ -23,13 +23,35 @@ import {
   Loader2,
   MapPin,
   Search,
+  SlidersHorizontal,
   Sparkles,
 } from 'lucide-react'
+
+// Adzuna's supported country path segments — https://developer.adzuna.com/
+const ADZUNA_COUNTRIES: { value: string; label: string }[] = [
+  { value: 'de', label: 'Germany' },
+  { value: 'gb', label: 'United Kingdom' },
+  { value: 'at', label: 'Austria' },
+  { value: 'au', label: 'Australia' },
+  { value: 'br', label: 'Brazil' },
+  { value: 'ca', label: 'Canada' },
+  { value: 'fr', label: 'France' },
+  { value: 'in', label: 'India' },
+  { value: 'it', label: 'Italy' },
+  { value: 'mx', label: 'Mexico' },
+  { value: 'nl', label: 'Netherlands' },
+  { value: 'nz', label: 'New Zealand' },
+  { value: 'pl', label: 'Poland' },
+  { value: 'ru', label: 'Russia' },
+  { value: 'sg', label: 'Singapore' },
+  { value: 'us', label: 'United States' },
+  { value: 'za', label: 'South Africa' },
+]
 
 const schema = z.object({
   query: z.string().min(2, 'Enter a role or keyword'),
   location: z.string().min(2, 'Enter a location'),
-  country: z.string().optional(),
+  country: z.string().min(2, 'Select a country'),
   posted_within_hours: z.coerce.number().int().min(1).max(720),
   result_limit: z.coerce.number().int().min(1).max(50),
   remote_only: z.enum(['false', 'true']).default('false'),
@@ -41,7 +63,7 @@ type FormData = z.infer<typeof schema>
 const DEFAULT_VALUES: FormData = {
   query: 'Software Engineer',
   location: 'Germany',
-  country: 'Germany',
+  country: 'de',
   posted_within_hours: 24,
   result_limit: 10,
   remote_only: 'false',
@@ -63,6 +85,7 @@ export default function RecentJobSearchPage() {
 
   const postedHours = watch('posted_within_hours')
   const remoteOnly = watch('remote_only')
+  const country = watch('country')
 
   async function onSubmit(data: FormData) {
     setLoading(true)
@@ -74,7 +97,6 @@ export default function RecentJobSearchPage() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           ...data,
-          country: data.country?.trim() || null,
           remote_only: data.remote_only === 'true',
           preferences_prompt: data.preferences_prompt?.trim() || null,
         }),
@@ -163,7 +185,7 @@ export default function RecentJobSearchPage() {
         <div>
           <h1 className="text-2xl font-bold text-slate-900 tracking-tight">Recent Job Search</h1>
           <p className="text-slate-500 text-sm mt-0.5">
-            Search fresh ATS job postings, keep citations, and sync applied roles into your tracker
+            Search live postings across Germany, the UK, and more — any company, any role, powered by Adzuna
           </p>
         </div>
       </div>
@@ -172,88 +194,110 @@ export default function RecentJobSearchPage() {
       <div className="flex items-start gap-2.5 bg-indigo-50 border border-indigo-100 text-indigo-700 rounded-xl px-4 py-3 mb-6 text-sm">
         <Info className="h-4 w-4 flex-shrink-0 text-indigo-500 mt-0.5" />
         <span>
-          <strong>{config.rateLimits.jobSearchPerDay} searches/day</strong> on the free tier. Sources come from configured
-          Greenhouse and Lever ATS boards and each result keeps a citation trail.
+          <strong>{config.rateLimits.jobSearchPerDay} searches/day</strong> on the free tier. General-market search across
+          Adzuna&apos;s job index — not limited to startups or curated ATS boards — and each result keeps a citation trail.
         </span>
       </div>
 
       <div className="grid grid-cols-[320px_1fr] gap-5 items-start">
-        <form onSubmit={handleSubmit(onSubmit)} className="space-y-4 sticky top-6">
-            <div className="bg-white rounded-2xl border border-slate-100 shadow-card p-5 space-y-4">
-              <p className="text-sm font-semibold text-slate-700">Search Filters</p>
+        <form
+          onSubmit={handleSubmit(onSubmit)}
+          className="bg-white rounded-2xl border border-slate-100 shadow-sm p-5 space-y-5 sticky top-6"
+        >
+          <div className="flex items-center gap-2 pb-1 border-b border-slate-100">
+            <SlidersHorizontal className="h-3.5 w-3.5 text-slate-400" />
+            <span className="text-xs font-semibold text-slate-500 uppercase tracking-wider">Filters</span>
+          </div>
 
-              <div className="space-y-1.5">
-                <Label className="text-sm font-medium">Role or keywords</Label>
-                <Input placeholder="Founding Engineer" className="rounded-xl border-slate-200" {...register('query')} />
-                {errors.query && <p className="text-xs text-destructive">{errors.query.message}</p>}
-              </div>
+          <div className="space-y-1.5">
+            <Label className="text-xs font-medium text-slate-600">Role or keywords</Label>
+            <Input
+              placeholder="Founding Engineer"
+              className="rounded-xl h-9 text-sm border-slate-200 focus:border-indigo-300 focus:ring-1 focus:ring-indigo-200"
+              {...register('query')}
+            />
+            {errors.query && <p className="text-xs text-destructive">{errors.query.message}</p>}
+          </div>
 
-              <div className="space-y-1.5">
-                <Label className="text-sm font-medium">Location</Label>
-                <Input placeholder="Berlin or Germany" className="rounded-xl border-slate-200" {...register('location')} />
-                {errors.location && <p className="text-xs text-destructive">{errors.location.message}</p>}
-              </div>
+          <div className="space-y-1.5">
+            <Label className="text-xs font-medium text-slate-600">Location</Label>
+            <Input
+              placeholder="Berlin or Germany"
+              className="rounded-xl h-9 text-sm border-slate-200 focus:border-indigo-300 focus:ring-1 focus:ring-indigo-200"
+              {...register('location')}
+            />
+            {errors.location && <p className="text-xs text-destructive">{errors.location.message}</p>}
+          </div>
 
-              <div className="space-y-1.5">
-                <Label className="text-sm font-medium">Country</Label>
-                <Input placeholder="Germany" className="rounded-xl border-slate-200" {...register('country')} />
-              </div>
+          <div className="space-y-1.5">
+            <Label className="text-xs font-medium text-slate-600">Country</Label>
+            <Select value={country} onValueChange={(v) => setValue('country', v)}>
+              <SelectTrigger className="rounded-xl h-9 text-sm border-slate-200"><SelectValue /></SelectTrigger>
+              <SelectContent>
+                {ADZUNA_COUNTRIES.map(({ value, label }) => (
+                  <SelectItem key={value} value={value} className="text-sm">{label}</SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+            {errors.country && <p className="text-xs text-destructive">{errors.country.message}</p>}
+          </div>
 
-              <div className="grid grid-cols-2 gap-4">
-                <div className="space-y-1.5">
-                  <Label className="text-sm font-medium">Posted within</Label>
-                  <Select value={String(postedHours)} onValueChange={(v) => setValue('posted_within_hours', parseInt(v, 10))}>
-                    <SelectTrigger className="rounded-xl border-slate-200">
-                      <SelectValue />
-                    </SelectTrigger>
-                    <SelectContent>
-                      <SelectItem value="24">24 hours</SelectItem>
-                      <SelectItem value="72">72 hours</SelectItem>
-                      <SelectItem value="168">7 days</SelectItem>
-                    </SelectContent>
-                  </Select>
-                </div>
-
-                <div className="space-y-1.5">
-                  <Label className="text-sm font-medium">Result limit</Label>
-                  <Input type="number" min={1} max={50} className="rounded-xl border-slate-200" {...register('result_limit')} />
-                </div>
-              </div>
-
-              <div className="space-y-1.5">
-                <Label className="text-sm font-medium">Remote only</Label>
-                <Select value={remoteOnly} onValueChange={(v) => setValue('remote_only', v as 'false' | 'true')}>
-                  <SelectTrigger className="rounded-xl border-slate-200">
-                    <SelectValue />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="false">Include onsite and hybrid</SelectItem>
-                    <SelectItem value="true">Remote only</SelectItem>
-                  </SelectContent>
-                </Select>
-              </div>
-
-              <div className="space-y-1.5">
-                <Label className="text-sm font-medium">Preference prompt</Label>
-                <Textarea
-                  rows={4}
-                  placeholder="small pre seed startups, english preferred, product-minded teams"
-                  className="rounded-xl border-slate-200 resize-none text-sm"
-                  {...register('preferences_prompt')}
-                />
-              </div>
+          <div className="grid grid-cols-2 gap-3">
+            <div className="space-y-1.5">
+              <Label className="text-xs font-medium text-slate-600">Posted within</Label>
+              <Select value={String(postedHours)} onValueChange={(v) => setValue('posted_within_hours', parseInt(v, 10))}>
+                <SelectTrigger className="rounded-xl h-9 text-sm border-slate-200"><SelectValue /></SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="24" className="text-sm">24 hours</SelectItem>
+                  <SelectItem value="72" className="text-sm">72 hours</SelectItem>
+                  <SelectItem value="168" className="text-sm">7 days</SelectItem>
+                </SelectContent>
+              </Select>
             </div>
 
-            <Button
-              type="submit"
-              className="w-full h-11 gradient-brand text-white border-0 shadow-brand-sm hover:opacity-90 transition-opacity rounded-xl font-semibold"
-              disabled={loading}
-            >
-              {loading
-                ? <><Loader2 className="h-4 w-4 mr-2 animate-spin" /> Searching…</>
-                : <><Search className="h-4 w-4 mr-2" /> Find Recent Jobs</>
-              }
-            </Button>
+            <div className="space-y-1.5">
+              <Label className="text-xs font-medium text-slate-600">Result limit</Label>
+              <Input
+                type="number"
+                min={1}
+                max={50}
+                className="rounded-xl h-9 text-sm border-slate-200 focus:border-indigo-300 focus:ring-1 focus:ring-indigo-200"
+                {...register('result_limit')}
+              />
+            </div>
+          </div>
+
+          <div className="space-y-1.5">
+            <Label className="text-xs font-medium text-slate-600">Remote only</Label>
+            <Select value={remoteOnly} onValueChange={(v) => setValue('remote_only', v as 'false' | 'true')}>
+              <SelectTrigger className="rounded-xl h-9 text-sm border-slate-200"><SelectValue /></SelectTrigger>
+              <SelectContent>
+                <SelectItem value="false" className="text-sm">Include onsite and hybrid</SelectItem>
+                <SelectItem value="true" className="text-sm">Remote only</SelectItem>
+              </SelectContent>
+            </Select>
+          </div>
+
+          <div className="space-y-1.5">
+            <Label className="text-xs font-medium text-slate-600">Preference prompt</Label>
+            <Textarea
+              rows={4}
+              placeholder="small pre seed startups, english preferred, product-minded teams"
+              className="rounded-xl text-sm border-slate-200 focus:border-indigo-300 focus:ring-1 focus:ring-indigo-200 resize-none"
+              {...register('preferences_prompt')}
+            />
+          </div>
+
+          <Button
+            type="submit"
+            disabled={loading}
+            className="w-full gradient-brand text-white border-0 shadow-sm hover:opacity-90 transition-opacity rounded-xl h-9 text-sm font-semibold"
+          >
+            {loading
+              ? <><Loader2 className="h-3.5 w-3.5 mr-2 animate-spin" />Searching…</>
+              : <><Search className="h-3.5 w-3.5 mr-2" />Find Recent Jobs</>
+            }
+          </Button>
         </form>
 
         <div className="min-w-0 space-y-4">
@@ -264,7 +308,7 @@ export default function RecentJobSearchPage() {
           )}
 
           {parsedPreferences && (
-            <div className="bg-white rounded-2xl border border-slate-100 shadow-card p-4">
+            <div className="bg-white rounded-2xl border border-slate-100 shadow-sm p-4">
               <div className="flex items-center gap-2 mb-3">
                 <Sparkles className="h-4 w-4 text-amber-500" />
                 <p className="text-sm font-semibold text-slate-700">Parsed Preferences</p>
@@ -287,12 +331,12 @@ export default function RecentJobSearchPage() {
           )}
 
           {!loading && results.length === 0 && !error && (
-            <div className="bg-white rounded-2xl border border-slate-100 shadow-card min-h-[420px] flex items-center justify-center p-8">
+            <div className="bg-white rounded-2xl border border-slate-100 shadow-sm min-h-[420px] flex items-center justify-center p-8">
               <div className="text-center space-y-2">
                 <div className="w-14 h-14 rounded-2xl bg-sky-50 flex items-center justify-center mx-auto">
                   <BriefcaseBusiness className="h-7 w-7 text-sky-200" />
                 </div>
-                <p className="font-semibold text-slate-500">Recent ATS matches will appear here</p>
+                <p className="font-semibold text-slate-500">Recent matches will appear here</p>
                 <p className="text-sm text-slate-400">Use the filters to search for fresh jobs and track what you apply to</p>
               </div>
             </div>
@@ -301,11 +345,11 @@ export default function RecentJobSearchPage() {
           {results.length > 0 && (
             <div className="space-y-4">
               {results.map((job) => (
-                <div key={job.job_url_canonical} className="bg-white rounded-2xl border border-slate-100 shadow-card p-5 space-y-4">
+                <div key={job.job_url_canonical} className="bg-white rounded-2xl border border-slate-100 shadow-sm p-5 space-y-4">
                   <div className="flex items-start justify-between gap-4">
                     <div>
                       <div className="flex items-center gap-2 flex-wrap mb-1">
-                        <h2 className="text-base font-bold text-slate-900">{job.role}</h2>
+                        <h2 className="text-sm font-semibold text-slate-900">{job.role}</h2>
                         {job.applied && (
                           <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-semibold bg-emerald-50 text-emerald-700 border border-emerald-100">
                             <CheckCircle2 className="h-3 w-3 mr-1" />

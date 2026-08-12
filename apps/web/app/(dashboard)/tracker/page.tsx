@@ -355,8 +355,8 @@ export default function TrackerPage() {
           </div>
         </div>
         {tab === 'applications' && (
-          <Button onClick={openCreate} className="gradient-brand text-white border-0 shadow-brand-sm hover:opacity-90 transition-opacity rounded-xl h-10 px-5">
-            <Plus className="h-4 w-4 mr-2" /> Add Application
+          <Button onClick={openCreate} className="gradient-brand text-white border-0 shadow-sm hover:opacity-90 transition-opacity rounded-xl h-9 text-sm px-5">
+            <Plus className="h-3.5 w-3.5 mr-2" /> Add Application
           </Button>
         )}
       </div>
@@ -396,7 +396,7 @@ export default function TrackerPage() {
               { label: 'Overdue', value: overdue.length, Icon: AlertCircle, iconBg: 'bg-red-100', iconColor: 'text-red-600' },
               { label: 'Offers', value: offers.length, Icon: CheckCircle, iconBg: 'bg-emerald-100', iconColor: 'text-emerald-600' },
             ].map(({ label, value, Icon, iconBg, iconColor }) => (
-              <div key={label} className="bg-white rounded-2xl border border-slate-100 shadow-card p-5 flex items-center gap-4">
+              <div key={label} className="bg-white rounded-2xl border border-slate-100 shadow-sm p-5 flex items-center gap-4">
                 <div className={cn('w-10 h-10 rounded-xl flex items-center justify-center flex-shrink-0', iconBg)}>
                   <Icon className={cn('h-5 w-5', iconColor)} />
                 </div>
@@ -408,7 +408,7 @@ export default function TrackerPage() {
             ))}
           </div>
 
-          <div className="bg-white rounded-2xl border border-slate-100 shadow-card overflow-hidden">
+          <div className="bg-white rounded-2xl border border-slate-100 shadow-sm overflow-hidden">
             {appsLoading ? (
               <div className="flex items-center justify-center h-48">
                 <div className="flex flex-col items-center gap-3">
@@ -498,7 +498,7 @@ export default function TrackerPage() {
               <button
                 key={label}
                 onClick={() => setLeadStatusFilter(leadStatusFilter === label.toLowerCase() as StartupHuntOpportunityStatus ? 'all' : label.toLowerCase() as StartupHuntOpportunityStatus)}
-                className={cn('bg-white rounded-2xl border shadow-card p-5 flex items-center gap-4 text-left transition-all hover:shadow-md',
+                className={cn('bg-white rounded-2xl border shadow-sm p-5 flex items-center gap-4 text-left transition-all hover:shadow-md',
                   leadStatusFilter === label.toLowerCase() ? 'border-indigo-300 ring-1 ring-indigo-200' : 'border-slate-100')}
               >
                 <div className={cn('w-10 h-10 rounded-xl flex items-center justify-center flex-shrink-0 text-sm font-bold', classes)}>{value}</div>
@@ -524,7 +524,7 @@ export default function TrackerPage() {
             ))}
           </div>
 
-          <div className="bg-white rounded-2xl border border-slate-100 shadow-card overflow-hidden">
+          <div className="bg-white rounded-2xl border border-slate-100 shadow-sm overflow-hidden">
             {leadsLoading ? (
               <div className="flex items-center justify-center h-48">
                 <div className="flex flex-col items-center gap-3">
@@ -1130,46 +1130,46 @@ export default function TrackerPage() {
           <form onSubmit={handleSubmit(onSubmit)} className="space-y-4">
             <div className="grid grid-cols-2 gap-4">
               <div className="space-y-1.5">
-                <Label className="text-sm font-medium">Company</Label>
-                <Input placeholder="Acme Corp" className="rounded-xl" {...register('company')} />
+                <Label>Company</Label>
+                <Input placeholder="Acme Corp" {...register('company')} />
                 {errors.company && <p className="text-xs text-destructive">{errors.company.message}</p>}
               </div>
               <div className="space-y-1.5">
-                <Label className="text-sm font-medium">Role</Label>
-                <Input placeholder="Software Engineer" className="rounded-xl" {...register('role')} />
+                <Label>Role</Label>
+                <Input placeholder="Software Engineer" {...register('role')} />
                 {errors.role && <p className="text-xs text-destructive">{errors.role.message}</p>}
               </div>
             </div>
             <div className="grid grid-cols-2 gap-4">
               <div className="space-y-1.5">
-                <Label className="text-sm font-medium">Applied date</Label>
-                <Input type="date" className="rounded-xl" {...register('applied_at')} />
+                <Label>Applied date</Label>
+                <Input type="date" {...register('applied_at')} />
               </div>
               <div className="space-y-1.5">
-                <Label className="text-sm font-medium">Status</Label>
+                <Label>Status</Label>
                 <Select value={watchStatus} onValueChange={(v) => setValue('status', v as ApplicationStatus)}>
-                  <SelectTrigger className="rounded-xl"><SelectValue /></SelectTrigger>
+                  <SelectTrigger><SelectValue /></SelectTrigger>
                   <SelectContent>{APPLICATION_STATUSES.map((s) => <SelectItem key={s} value={s}>{s}</SelectItem>)}</SelectContent>
                 </Select>
               </div>
             </div>
             <div className="space-y-1.5">
-              <Label className="text-sm font-medium">Follow-up date</Label>
-              <Input type="date" className="rounded-xl" {...register('follow_up_date')} />
+              <Label>Follow-up date</Label>
+              <Input type="date" {...register('follow_up_date')} />
             </div>
             <div className="grid grid-cols-2 gap-4">
               <div className="space-y-1.5">
-                <Label className="text-sm font-medium">Salary min ($)</Label>
-                <Input type="number" placeholder="80000" className="rounded-xl" {...register('salary_min')} />
+                <Label>Salary min ($)</Label>
+                <Input type="number" placeholder="80000" {...register('salary_min')} />
               </div>
               <div className="space-y-1.5">
-                <Label className="text-sm font-medium">Salary max ($)</Label>
-                <Input type="number" placeholder="120000" className="rounded-xl" {...register('salary_max')} />
+                <Label>Salary max ($)</Label>
+                <Input type="number" placeholder="120000" {...register('salary_max')} />
               </div>
             </div>
             <div className="space-y-1.5">
-              <Label className="text-sm font-medium">Notes</Label>
-              <Textarea rows={3} placeholder="Any notes about this application…" className="rounded-xl resize-none" {...register('notes')} />
+              <Label>Notes</Label>
+              <Textarea rows={3} placeholder="Any notes about this application…" className="resize-none" {...register('notes')} />
             </div>
             <DialogFooter>
               <Button type="button" variant="outline" onClick={() => setShowForm(false)} className="rounded-xl">Cancel</Button>

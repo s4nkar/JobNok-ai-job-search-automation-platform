@@ -1,10 +1,10 @@
-"""Job search provider layer for direct ATS sources."""
+"""Job search provider layer — Adzuna-backed general market search."""
 
 from __future__ import annotations
 
 import json
+import math
 import re
-from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Any
 from urllib.parse import parse_qsl, urlencode, urlparse, urlunparse
@@ -14,14 +14,28 @@ import httpx
 from app.ai.llm import provider as ai_provider
 from app.core.config import settings
 
+# Adzuna's supported country path segments — https://developer.adzuna.com/
+_ADZUNA_COUNTRY_ALIASES: dict[str, str] = {
+    "at": "at", "austria": "at",
+    "au": "au", "australia": "au",
+    "br": "br", "brazil": "br",
+    "ca": "ca", "canada": "ca",
+    "de": "de", "germany": "de", "deutschland": "de",
+    "fr": "fr", "france": "fr",
+    "gb": "gb", "uk": "gb", "united kingdom": "gb", "britain": "gb", "england": "gb",
+    "in": "in", "india": "in",
+    "it": "it", "italy": "it",
+    "mx": "mx", "mexico": "mx",
+    "nl": "nl", "netherlands": "nl", "holland": "nl",
+    "nz": "nz", "new zealand": "nz",
+    "pl": "pl", "poland": "pl",
+    "ru": "ru", "russia": "ru",
+    "sg": "sg", "singapore": "sg",
+    "us": "us", "usa": "us", "united states": "us", "america": "us",
+    "za": "za", "south africa": "za",
+}
 
-@dataclass
-class SourceConfig:
-    type: str
-    name: str
-    slug: str
-    company: str
-    metadata: dict[str, Any] = field(default_factory=dict)
+_FATAL_STATUSES = {401, 402, 403, 429}
 
 
 def _now_utc() -> datetime:
@@ -65,24 +79,26 @@ def _tokenize(value: str) -> list[str]:
     return [token for token in re.findall(r"[a-z0-9]+", value.lower()) if len(token) > 1]
 
 
-def load_job_search_sources() -> list[SourceConfig]:
-    try:
-        raw = json.loads(settings.job_search_sources_json or "[]")
-    except json.JSONDecodeError:
-        return []
+def adzuna_country_code(country: str | None) -> str | None:
+    """Map free text or a bare code to one of Adzuna's supported country segments."""
+    if not country:
+        return None
+    return _ADZUNA_COUNTRY_ALIASES.get(_normalize_text(country))
 
-    sources: list[SourceConfig] = []
-    for item in raw:
-        if not isinstance(item, dict):
-            continue
-        source_type = str(item.get("type", "")).strip().lower()
-        slug = str(item.get("slug", "")).strip()
-        name = str(item.get("name", "")).strip() or slug
-        company = str(item.get("company", "")).strip() or name
-        metadata = item.get("metadata") if isinstance(item.get("metadata"), dict) else {}
-        if source_type in {"greenhouse", "lever"} and slug and name:
-            sources.append(SourceConfig(type=source_type, slug=slug, name=name, company=company, metadata=metadata))
-    return sources
+
+def _classify_fatal(exc: Exception) -> str | None:
+    if isinstance(exc, httpx.HTTPStatusError):
+        status = exc.response.status_code
+        if status in _FATAL_STATUSES:
+            if status == 401:
+                return "Adzuna authentication failed (401). Check the configured app_id/app_key."
+            if status == 402:
+                return "Adzuna credit/quota exhausted (402 Payment Required)."
+            if status == 403:
+                return "Adzuna rejected the request (403 Forbidden)."
+            if status == 429:
+                return "Adzuna rate limit hit (429). Try again shortly."
+    return None
 
 
 async def parse_preferences_prompt(prompt: str | None) -> dict[str, Any]:
@@ -122,119 +138,114 @@ Keep values short and normalized."""
     }
 
 
-async def search_jobs(payload: dict[str, Any], user_applications: dict[str, dict[str, Any]]) -> tuple[list[dict[str, Any]], dict[str, Any]]:
-    sources = load_job_search_sources()
-    preferences = await parse_preferences_prompt(payload.get("preferences_prompt"))
+class AdzunaConfigError(Exception):
+    """Raised when Adzuna isn't configured or the country isn't supported."""
 
-    if not sources:
-        return [], preferences
 
-    async with httpx.AsyncClient(timeout=settings.job_search_timeout_seconds, follow_redirects=True) as client:
-        tasks = [_fetch_source(client, source) for source in sources]
-        settled = await _gather(tasks)
+async def fetch_adzuna_raw(payload: dict[str, Any]) -> list[dict[str, Any]]:
+    """Fetch + normalize raw (unscored) results from Adzuna.
+
+    Raises AdzunaConfigError for missing credentials / unsupported country
+    (caller turns this into a clean 4xx). Fatal upstream errors (401/402/403/429)
+    are caught and surfaced as an empty list with the caller expected to inspect
+    logs — this mirrors startup_hunt's per-bucket fatal-error handling but there's
+    only one provider here, so there's no "other buckets keep going" concern.
+    """
+    if not settings.adzuna_app_id or not settings.adzuna_app_key:
+        raise AdzunaConfigError("Adzuna is not configured (missing app_id/app_key).")
+
+    country_code = adzuna_country_code(payload.get("country")) or adzuna_country_code(payload.get("location"))
+    if not country_code:
+        raise AdzunaConfigError(
+            "Could not determine an Adzuna-supported country from the search. "
+            "Supported: " + ", ".join(sorted(set(_ADZUNA_COUNTRY_ALIASES.values())))
+        )
+
+    posted_within_hours = payload.get("posted_within_hours") or 720
+    max_days_old = max(1, math.ceil(posted_within_hours / 24))
+    result_limit = max(1, min(50, int(payload.get("result_limit", 10))))
+
+    params = {
+        "app_id": settings.adzuna_app_id,
+        "app_key": settings.adzuna_app_key,
+        "results_per_page": result_limit,
+        "what": payload["query"],
+        "max_days_old": max_days_old,
+        "content-type": "application/json",
+    }
+
+    # Adzuna's `where` expects a city/region, not a country — the country is
+    # already scoped via the /jobs/{country_code}/ URL segment. Passing the
+    # country's own name as `where` (e.g. "Germany") makes Adzuna's location
+    # resolver match nothing and silently return zero results, so only send
+    # `where` when the location is actually more specific than the country.
+    location = str(payload.get("location") or "").strip()
+    if location and adzuna_country_code(location) != country_code:
+        params["where"] = location
+
+    url = f"{settings.adzuna_base_url}/jobs/{country_code}/search/1"
+
+    async with httpx.AsyncClient(timeout=settings.job_search_timeout_seconds) as client:
+        try:
+            response = await client.get(url, params=params)
+            response.raise_for_status()
+        except httpx.HTTPStatusError as exc:
+            friendly = _classify_fatal(exc)
+            raise AdzunaConfigError(friendly or f"Adzuna returned HTTP {exc.response.status_code}") from exc
+
+    body = response.json()
 
     jobs: list[dict[str, Any]] = []
-    for entries in settled:
-        jobs.extend(entries)
+    for item in body.get("results", []):
+        redirect_url = item.get("redirect_url")
+        title = item.get("title")
+        if not redirect_url or not title:
+            continue
+        company_name = ((item.get("company") or {}).get("display_name") or "Unknown company").strip()
+        location_name = ((item.get("location") or {}).get("display_name") or "Unspecified").strip()
+        category_label = (item.get("category") or {}).get("label")
+        description = re.sub(r"\s+", " ", (item.get("description") or "")).strip()
 
+        jobs.append(
+            {
+                "source_name": "Adzuna",
+                "provider_type": "adzuna",
+                "external_job_id": str(item.get("id")) if item.get("id") is not None else None,
+                "company": company_name,
+                "role": title,
+                "location": location_name,
+                "job_url": redirect_url,
+                "job_url_canonical": canonicalize_job_url(redirect_url),
+                # Kept as an ISO string (not parsed to datetime) so this dict stays
+                # JSON-serializable — needed for the Redis response cache.
+                "posted_at": item.get("created"),
+                "description_text": description,
+                "metadata": {
+                    "country": country_code,
+                    "salary_min": item.get("salary_min"),
+                    "salary_max": item.get("salary_max"),
+                    "category": category_label,
+                },
+            }
+        )
+    return jobs
+
+
+def score_and_dedupe(
+    raw_jobs: list[dict[str, Any]],
+    payload: dict[str, Any],
+    preferences: dict[str, Any],
+    user_applications: dict[str, dict[str, Any]],
+) -> list[dict[str, Any]]:
     scored = []
-    for job in jobs:
+    for job in raw_jobs:
         enriched = _score_job(job, payload, preferences, user_applications)
         if enriched is not None:
             scored.append(enriched)
 
     deduped = _dedupe_jobs(scored)
     deduped.sort(key=lambda item: (-item["ranking"]["score"], item["ranking"]["age_hours"]))
-    limit = payload.get("result_limit", 10)
-    return deduped[:limit], preferences
-
-
-async def _gather(tasks: list[Any]) -> list[list[dict[str, Any]]]:
-    import asyncio
-
-    settled = await asyncio.gather(*tasks, return_exceptions=True)
-    results: list[list[dict[str, Any]]] = []
-    for item in settled:
-        if isinstance(item, Exception):
-            results.append([])
-        else:
-            results.append(item)
-    return results
-
-
-async def _fetch_source(client: httpx.AsyncClient, source: SourceConfig) -> list[dict[str, Any]]:
-    if source.type == "greenhouse":
-        return await _fetch_greenhouse(client, source)
-    if source.type == "lever":
-        return await _fetch_lever(client, source)
-    return []
-
-
-async def _fetch_greenhouse(client: httpx.AsyncClient, source: SourceConfig) -> list[dict[str, Any]]:
-    url = f"https://boards-api.greenhouse.io/v1/boards/{source.slug}/jobs"
-    response = await client.get(url)
-    response.raise_for_status()
-    payload = response.json()
-
-    jobs: list[dict[str, Any]] = []
-    for item in payload.get("jobs", []):
-        absolute_url = item.get("absolute_url")
-        title = item.get("title")
-        if not absolute_url or not title:
-            continue
-        jobs.append(
-            {
-                "source_name": source.name,
-                "provider_type": source.type,
-                "external_job_id": str(item.get("id")) if item.get("id") is not None else None,
-                "company": source.company,
-                "role": title,
-                "location": ((item.get("location") or {}).get("name") or "Unspecified").strip(),
-                "job_url": absolute_url,
-                "job_url_canonical": canonicalize_job_url(absolute_url),
-                "posted_at": _parse_dt(item.get("updated_at")),
-                "description_text": "",
-                "metadata": source.metadata,
-            }
-        )
-    return jobs
-
-
-async def _fetch_lever(client: httpx.AsyncClient, source: SourceConfig) -> list[dict[str, Any]]:
-    url = f"https://api.lever.co/v0/postings/{source.slug}?mode=json"
-    response = await client.get(url)
-    response.raise_for_status()
-    payload = response.json()
-
-    jobs: list[dict[str, Any]] = []
-    for item in payload:
-        hosted_url = item.get("hostedUrl")
-        title = item.get("text")
-        if not hosted_url or not title:
-            continue
-        categories = item.get("categories") or {}
-        description_parts = []
-        for block in item.get("lists", []) or []:
-            content = block.get("content")
-            if content:
-                description_parts.append(re.sub(r"<[^>]+>", " ", content))
-        description = re.sub(r"\s+", " ", " ".join(description_parts)).strip()
-        jobs.append(
-            {
-                "source_name": source.name,
-                "provider_type": source.type,
-                "external_job_id": str(item.get("id")) if item.get("id") is not None else None,
-                "company": source.company,
-                "role": title,
-                "location": (categories.get("location") or "Unspecified").strip(),
-                "job_url": hosted_url,
-                "job_url_canonical": canonicalize_job_url(hosted_url),
-                "posted_at": datetime.fromtimestamp(item.get("createdAt", 0) / 1000, tz=timezone.utc) if item.get("createdAt") else None,
-                "description_text": description,
-                "metadata": source.metadata,
-            }
-        )
-    return jobs
+    return deduped
 
 
 def _score_job(
@@ -270,7 +281,7 @@ def _score_job(
     if country and country not in location_text and country != metadata_country:
         return None
 
-    posted_at: datetime | None = job.get("posted_at")
+    posted_at = _parse_dt(job.get("posted_at"))
     age_hours = 999999.0
     if posted_at:
         age_hours = max(0.0, (_now_utc() - posted_at).total_seconds() / 3600)
@@ -303,7 +314,7 @@ def _score_job(
         evidence.append(f"Posting appears recent: about {int(age_hours)} hours old")
 
     description_text = _normalize_text(job.get("description_text", ""))
-    metadata_text = _normalize_text(json.dumps(metadata))
+    metadata_text = _normalize_text(json.dumps(metadata, default=str))
     matched_preference_keywords = [kw for kw in preference_keywords if kw in description_text or kw in metadata_text or kw in location_text]
     if matched_preference_keywords:
         score += len(matched_preference_keywords) * 2
@@ -322,8 +333,7 @@ def _score_job(
             score += 2
             evidence.append(f"Matched company stage: {metadata.get('stage')}")
 
-    source_quality = 2 if job["provider_type"] == "greenhouse" else 1.5
-    score += source_quality
+    score += 2  # flat source-quality baseline (single provider — no cross-source weighting needed)
 
     canonical_url = job["job_url_canonical"]
     application = user_applications.get(canonical_url)
@@ -333,8 +343,8 @@ def _score_job(
         "canonical_url": canonical_url,
         "job_url": job["job_url"],
         "posted_at": posted_at.isoformat() if posted_at else None,
-        "evidence": evidence[:4] or ["Matched configured ATS source"],
-        "extraction_note": f"Fetched from {job['provider_type']} ATS feed and ranked against your filters.",
+        "evidence": evidence[:4] or ["Matched Adzuna listing"],
+        "extraction_note": f"Fetched from {job['source_name']} and ranked against your filters.",
     }
 
     return {

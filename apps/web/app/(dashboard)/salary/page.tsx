@@ -8,8 +8,9 @@ import { config } from '@/lib/config'
 import { Button } from '@jobnok/ui'
 import { Input } from '@jobnok/ui'
 import { Label } from '@jobnok/ui'
+import { Markdown } from '@jobnok/ui'
 import { useToast } from '@jobnok/ui'
-import { DollarSign, Loader2, TrendingUp, Info, MessageSquare } from 'lucide-react'
+import { DollarSign, Loader2, TrendingUp, Info, MessageSquare, SlidersHorizontal } from 'lucide-react'
 import { apiFetch } from '@/lib/api'
 
 const schema = z.object({
@@ -82,37 +83,40 @@ export default function SalaryPage() {
         <span><strong>{config.rateLimits.salaryResearchPerDay} researches/day</strong> on the free tier. AI aggregates data from public sources in real-time.</span>
       </div>
 
-      <div className="grid grid-cols-3 gap-6">
+      <div className="grid grid-cols-[300px_1fr] gap-5 items-start">
         {/* Input */}
-        <div className="col-span-1 space-y-4">
-          <form onSubmit={handleSubmit(onSubmit)} className="space-y-4">
-            <div className="bg-white rounded-2xl border border-slate-100 shadow-card p-5 space-y-4">
-              <div className="space-y-1.5">
-                <Label className="text-sm font-medium">Job title</Label>
-                <Input placeholder="Senior Software Engineer" className="rounded-xl border-slate-200" {...register('job_title')} />
-                {errors.job_title && <p className="text-xs text-destructive">{errors.job_title.message}</p>}
-              </div>
-              <div className="space-y-1.5">
-                <Label className="text-sm font-medium">Location</Label>
-                <Input placeholder="San Francisco, CA" className="rounded-xl border-slate-200" {...register('location')} />
-                {errors.location && <p className="text-xs text-destructive">{errors.location.message}</p>}
-              </div>
+        <div className="space-y-4 sticky top-6">
+          <form onSubmit={handleSubmit(onSubmit)} className="bg-white rounded-2xl border border-slate-100 shadow-sm p-5 space-y-5">
+            <div className="flex items-center gap-2 pb-1 border-b border-slate-100">
+              <SlidersHorizontal className="h-3.5 w-3.5 text-slate-400" />
+              <span className="text-xs font-semibold text-slate-500 uppercase tracking-wider">Search</span>
+            </div>
+
+            <div className="space-y-1.5">
+              <Label>Job title</Label>
+              <Input placeholder="Senior Software Engineer" {...register('job_title')} />
+              {errors.job_title && <p className="text-xs text-destructive">{errors.job_title.message}</p>}
+            </div>
+            <div className="space-y-1.5">
+              <Label>Location</Label>
+              <Input placeholder="San Francisco, CA" {...register('location')} />
+              {errors.location && <p className="text-xs text-destructive">{errors.location.message}</p>}
             </div>
 
             <Button
               type="submit"
-              className="w-full h-11 gradient-brand text-white border-0 shadow-brand-sm hover:opacity-90 transition-opacity rounded-xl font-semibold"
               disabled={loading}
+              className="w-full gradient-brand text-white border-0 shadow-sm hover:opacity-90 transition-opacity rounded-xl h-9 text-sm font-semibold"
             >
               {loading
-                ? <><Loader2 className="h-4 w-4 mr-2 animate-spin" /> Researching…</>
-                : <><TrendingUp className="h-4 w-4 mr-2" /> Research Salary</>
+                ? <><Loader2 className="h-3.5 w-3.5 mr-2 animate-spin" />Researching…</>
+                : <><TrendingUp className="h-3.5 w-3.5 mr-2" />Research Salary</>
               }
             </Button>
           </form>
 
           {/* What you get */}
-          <div className="bg-white rounded-2xl border border-slate-100 shadow-card p-5">
+          <div className="bg-white rounded-2xl border border-slate-100 shadow-sm p-5">
             <p className="text-xs font-semibold text-slate-500 uppercase tracking-widest mb-4">What you get</p>
             <ul className="space-y-3">
               <li className="flex items-center gap-3 text-sm text-slate-600">
@@ -138,7 +142,7 @@ export default function SalaryPage() {
         </div>
 
         {/* Results */}
-        <div className="col-span-2">
+        <div className="min-w-0">
           {error && (
             <div className="bg-red-50 border border-red-100 text-red-700 rounded-xl px-4 py-3 text-sm mb-4">
               {error}
@@ -146,7 +150,7 @@ export default function SalaryPage() {
           )}
 
           {!streamOutput && !loading && (
-            <div className="bg-white rounded-2xl border border-slate-100 shadow-card min-h-[400px] flex items-center justify-center p-8">
+            <div className="bg-white rounded-2xl border border-slate-100 shadow-sm min-h-[400px] flex items-center justify-center p-8">
               <div className="text-center space-y-2">
                 <div className="w-14 h-14 rounded-2xl bg-emerald-50 flex items-center justify-center mx-auto">
                   <DollarSign className="h-7 w-7 text-emerald-200" />
@@ -158,15 +162,13 @@ export default function SalaryPage() {
           )}
 
           {(streamOutput || loading) && (
-            <div className="bg-white rounded-2xl border border-slate-100 shadow-card p-5">
+            <div className="bg-white rounded-2xl border border-slate-100 shadow-sm p-5">
               <div className="flex items-center gap-2 mb-4">
                 <p className="text-sm font-semibold text-slate-700">Research Results</p>
                 {loading && <Loader2 className="h-4 w-4 animate-spin text-indigo-400" />}
               </div>
-              <div className="text-sm text-slate-700 whitespace-pre-wrap leading-relaxed">
-                {streamOutput}
-                {loading && <span className="inline-block w-1.5 h-4 bg-indigo-400 animate-pulse ml-0.5 align-middle rounded-sm" />}
-              </div>
+              <Markdown content={streamOutput} />
+              {loading && <span className="inline-block w-1.5 h-4 bg-indigo-400 animate-pulse ml-0.5 align-middle rounded-sm" />}
             </div>
           )}
         </div>

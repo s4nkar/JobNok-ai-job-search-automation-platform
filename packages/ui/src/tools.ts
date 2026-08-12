@@ -117,7 +117,7 @@ export const tools: Tool[] = [
     slug: 'recent-job-search',
     href: '/recent-job-search',
     label: 'Recent Job Search',
-    description: 'Searches fresh ATS job postings by role, location, and recency, with tracker sync.',
+    description: 'General-market job search across Germany, the UK, and more — any company, any role, powered by Adzuna.',
     icon: Search,
     color: 'sky',
   },

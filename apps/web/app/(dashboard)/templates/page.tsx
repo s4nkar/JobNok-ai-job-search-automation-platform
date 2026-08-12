@@ -152,9 +152,9 @@ export default function TemplatesPage() {
         </div>
         <Button
           onClick={() => setShowCreate(true)}
-          className="gradient-brand text-white border-0 shadow-brand-sm hover:opacity-90 transition-opacity rounded-xl h-10 px-5"
+          className="gradient-brand text-white border-0 shadow-sm hover:opacity-90 transition-opacity rounded-xl h-9 text-sm px-5"
         >
-          <Plus className="h-4 w-4 mr-2" />
+          <Plus className="h-3.5 w-3.5 mr-2" />
           New Template
         </Button>
       </div>
@@ -189,7 +189,7 @@ export default function TemplatesPage() {
                   'w-full text-left p-3.5 rounded-xl border text-sm transition-all duration-150',
                   selected?.id === t.id
                     ? 'bg-indigo-600 text-white border-indigo-600 shadow-brand-sm'
-                    : 'bg-white border-slate-100 hover:border-slate-200 hover:shadow-card shadow-card'
+                    : 'bg-white border-slate-100 hover:border-slate-200 hover:shadow-sm shadow-sm'
                 )}
               >
                 <div className="font-semibold truncate text-[13px]">{t.name}</div>
@@ -210,7 +210,7 @@ export default function TemplatesPage() {
         {/* Template Editor / Fill */}
         <div className="col-span-2">
           {!selected ? (
-            <div className="bg-white rounded-2xl border border-slate-100 shadow-card min-h-[400px] flex items-center justify-center p-8">
+            <div className="bg-white rounded-2xl border border-slate-100 shadow-sm min-h-[400px] flex items-center justify-center p-8">
               <div className="text-center space-y-2">
                 <div className="w-14 h-14 rounded-2xl bg-blue-50 flex items-center justify-center mx-auto">
                   <FileText className="h-7 w-7 text-blue-200" />
@@ -222,7 +222,7 @@ export default function TemplatesPage() {
           ) : (
             <div className="space-y-4">
               {/* Template header */}
-              <div className="bg-white rounded-2xl border border-slate-100 shadow-card px-5 py-4 flex items-center justify-between">
+              <div className="bg-white rounded-2xl border border-slate-100 shadow-sm px-5 py-4 flex items-center justify-between">
                 <div className="flex items-center gap-3 min-w-0">
                   <div className="w-8 h-8 rounded-xl bg-indigo-50 flex items-center justify-center flex-shrink-0">
                     <FileText className="h-4 w-4 text-indigo-500" />
@@ -247,7 +247,7 @@ export default function TemplatesPage() {
 
               {/* Placeholder Inputs */}
               {selected.placeholders.length > 0 && (
-                <div className="bg-white rounded-2xl border border-slate-100 shadow-card p-5">
+                <div className="bg-white rounded-2xl border border-slate-100 shadow-sm p-5">
                   <p className="text-xs font-semibold text-slate-500 uppercase tracking-widest mb-4">Fill in placeholders</p>
                   <div className="grid grid-cols-2 gap-3">
                     {selected.placeholders.map((ph) => (
@@ -266,7 +266,7 @@ export default function TemplatesPage() {
               )}
 
               {/* Filled Output */}
-              <div className="bg-white rounded-2xl border border-slate-100 shadow-card p-5">
+              <div className="bg-white rounded-2xl border border-slate-100 shadow-sm p-5">
                 <div className="flex items-center justify-between mb-3">
                   <p className="text-xs font-semibold text-slate-500 uppercase tracking-widest">Output</p>
                   <div className="flex items-center gap-3">
@@ -313,14 +313,14 @@ export default function TemplatesPage() {
           <form onSubmit={handleSubmit(onSaveTemplate)} className="space-y-4">
             <div className="grid grid-cols-2 gap-4">
               <div className="space-y-1.5">
-                <Label className="text-sm font-medium">Template name</Label>
-                <Input placeholder="e.g. Cold DM — Software Engineer" className="rounded-xl" {...register('name')} />
+                <Label>Template name</Label>
+                <Input placeholder="e.g. Cold DM — Software Engineer" {...register('name')} />
                 {errors.name && <p className="text-xs text-destructive">{errors.name.message}</p>}
               </div>
               <div className="space-y-1.5">
-                <Label className="text-sm font-medium">Category</Label>
+                <Label>Category</Label>
                 <Select onValueChange={(v) => setValue('category', v as TemplateCategory)} defaultValue="Custom">
-                  <SelectTrigger className="rounded-xl">
+                  <SelectTrigger>
                     <SelectValue />
                   </SelectTrigger>
                   <SelectContent>
@@ -331,13 +331,13 @@ export default function TemplatesPage() {
             </div>
 
             <div className="space-y-1.5">
-              <Label className="text-sm font-medium">Template content</Label>
+              <Label>Template content</Label>
               <p className="text-xs text-slate-500">Use <code className="bg-slate-100 px-1.5 py-0.5 rounded-md font-mono">{'{{placeholder}}'}</code> for dynamic values</p>
               <Textarea
                 {...register('content')}
                 rows={10}
                 placeholder={`Hi {{name}},\n\nI came across your profile at {{company}}...`}
-                className="font-mono text-sm rounded-xl resize-none border-slate-200"
+                className="font-mono text-sm resize-none"
               />
               <div className="flex justify-between items-center">
                 {errors.content && <p className="text-xs text-destructive">{errors.content.message}</p>}

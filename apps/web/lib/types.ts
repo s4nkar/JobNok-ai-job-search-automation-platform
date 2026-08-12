@@ -251,7 +251,6 @@ export interface JobSearchResponse {
     company_stage: string | null
     notes: string[]
   }
-  configured_source_count: number
 }
 
 export interface JobSearchApplication {

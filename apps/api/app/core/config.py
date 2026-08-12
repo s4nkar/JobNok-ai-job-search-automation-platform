@@ -88,11 +88,15 @@ class Settings(BaseSettings):
     # Shared LinkedIn profile cache TTL (days)
     linkedin_cache_ttl_days: int = 7 
 
-    # ── Job Search ──────────────────────────────────────────────────────────
-    # JSON array of ATS sources to search, e.g.
-    # [{"type":"greenhouse","name":"Acme","slug":"acme","company":"Acme","metadata":{"stage":"seed","languages":["english"]}}]
-    job_search_sources_json: str = "[]"
+    # ── Job Search (Adzuna) ────────────────────────────────────────────────
+    adzuna_app_id: str = ""
+    adzuna_app_key: str = ""
+    adzuna_base_url: str = "https://api.adzuna.com/v1/api"
     job_search_timeout_seconds: int = 12
+    # Postgres `jobs` cache row TTL — how long a cached listing is considered fresh.
+    job_search_cache_ttl_days: int = 14
+    # Redis response cache TTL for identical (query, location, country, ...) searches.
+    job_search_response_cache_ttl_seconds: int = 900
 
     # Startup Hunt v2 seeded sources (global curated + per-user custom) now live in
     # the startup_hunt_sources table (see app/modules/startup_hunt/models.py) —
