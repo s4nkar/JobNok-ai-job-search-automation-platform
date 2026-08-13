@@ -26,6 +26,11 @@ class Job(Base, UUIDPKMixin, CreatedAtMixin):
 
     source: Mapped[str] = mapped_column(Text, nullable=False)
     source_job_id: Mapped[str] = mapped_column(Text, nullable=False)
+    # Which internal tool/feature fetched this row (e.g. "recent_job_search",
+    # later "startup_hunt") — distinct from `source`, which is the external
+    # provider (e.g. "adzuna"). Lets multiple tools share this cache without
+    # losing track of where a row came from.
+    origin_tool: Mapped[str] = mapped_column(Text, nullable=False, server_default="recent_job_search")
     title: Mapped[str] = mapped_column(Text, nullable=False)
     company: Mapped[str] = mapped_column(Text, nullable=False)
     location: Mapped[str] = mapped_column(Text, nullable=False)

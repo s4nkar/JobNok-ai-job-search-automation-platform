@@ -55,6 +55,18 @@ services:
       retries: 5
     restart: unless-stopped
 
+  # Dev-only DB browser for the local Postgres above — http://localhost:8085,
+  # log in with System: PostgreSQL, Server: postgres, User: postgres,
+  # Password: devpassword, Database: jobnok. Not in the base/prod compose file
+  # on purpose — no DB admin UI should ever be exposed in production.
+  adminer:
+    image: adminer:latest
+    ports:
+      - "8085:8080"
+    networks:
+      - backend-net
+    restart: unless-stopped
+
   # Local throwaway Redis for ARQ's queue (api enqueues, worker consumes) —
   # dev-only, keeps ARQ's constant polling off the real Upstash instance so it
   # doesn't burn the shared command quota. Upstash itself stays untouched and

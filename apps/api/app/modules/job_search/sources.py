@@ -231,7 +231,7 @@ async def fetch_adzuna_raw(payload: dict[str, Any]) -> list[dict[str, Any]]:
     return jobs
 
 
-def score_and_dedupe(
+def score_all(
     raw_jobs: list[dict[str, Any]],
     payload: dict[str, Any],
     preferences: dict[str, Any],
@@ -242,8 +242,11 @@ def score_and_dedupe(
         enriched = _score_job(job, payload, preferences, user_applications)
         if enriched is not None:
             scored.append(enriched)
+    return scored
 
-    deduped = _dedupe_jobs(scored)
+
+def dedupe_and_rank(scored_jobs: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    deduped = _dedupe_jobs(scored_jobs)
     deduped.sort(key=lambda item: (-item["ranking"]["score"], item["ranking"]["age_hours"]))
     return deduped
 
