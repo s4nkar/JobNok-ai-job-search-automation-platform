@@ -799,6 +799,14 @@ export default function StartupHuntPage() {
                             <span className="inline-flex items-center px-2 py-0.5 rounded-md text-[10px] font-semibold bg-orange-50 text-orange-700 border border-orange-100">
                               {bucketLabel(bucket)}
                             </span>
+                            {job.cache_hit && (
+                              <span
+                                className="inline-flex items-center px-2 py-0.5 rounded-md text-[10px] font-semibold bg-slate-100 text-slate-600 border border-slate-200"
+                                title={`Served from the shared job cache (originally sourced via ${job.source_name})`}
+                              >
+                                Cached · {job.source_name}
+                              </span>
+                            )}
                             {job.score_labels.map((label) => (
                               <span key={label} className={`inline-flex items-center px-2 py-0.5 rounded-md text-[10px] font-semibold border ${labelClasses[label] || 'bg-slate-100 text-slate-700 border-slate-200'}`}>
                                 {label}

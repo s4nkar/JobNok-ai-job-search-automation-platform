@@ -326,6 +326,7 @@ export interface StartupHuntResult {
   saved_status: StartupHuntOpportunityStatus | null
   saved_opportunity_id: string | null
   source_bucket?: string
+  cache_hit?: boolean
 }
 
 export type OpportunityArtifactType = 'resume_analysis' | 'cover_letter' | 'interview_prep'

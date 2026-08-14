@@ -5,16 +5,31 @@ query using JobApplication, not an ORM relationship()) when an opportunity is
 marked "applied" — mirrors the pre-migration supabase-py behavior exactly.
 """
 
+import uuid
 from datetime import datetime, timezone
 from decimal import Decimal
+from typing import Any
 
 from fastapi import HTTPException
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.config import settings
 from app.shared.repository import UserScopedRepository
 from app.shared.utils import row_to_dict
-from app.modules.startup_hunt.engine import build_seeded_sources, canonicalize_url, extract_domain, search_startup_hunt
+from app.modules.job_search.models import Job, query_job_cache_candidates, touch_job_cache_rows
+from app.modules.job_search.service import _upsert_jobs_cache
+from app.modules.job_search.sources import adzuna_country_code
+from app.modules.startup_hunt.engine import (
+    _dedupe_opportunities,
+    _score_opportunity,
+    build_seeded_sources,
+    canonicalize_url,
+    extract_domain,
+    parse_strategy_prompt,
+    search_startup_hunt,
+    tokenize,
+)
 from app.modules.startup_hunt.models import (
     OpportunityArtifact,
     StartupHuntCompany,
@@ -61,6 +76,111 @@ async def _load_opportunity_map(db: AsyncSession, user_id: str) -> dict[str, dic
     return output
 
 
+def _job_row_to_opportunity_dict(row: Job) -> dict[str, Any]:
+    """Map a shared `jobs` cache row into Startup Hunt's opportunity dict shape
+    so the existing `_score_opportunity` can run on it unchanged.
+
+    No company_payload/contacts enrichment survives a cache round-trip — the
+    generic `jobs` table has no columns for funding stage, company size,
+    English-friendly, etc. `_score_opportunity` already treats a missing
+    `company_payload` gracefully: it scores neutrally when no stage/size
+    filter is set, and hard-excludes the row the moment a user sets an
+    explicit `company_stage` filter (since `"x" not in ""` is always True) —
+    see the plan notes for why this needed no changes to that function.
+    """
+    raw_text = f"{row.title} {row.company} {row.description or ''}".strip()
+    return {
+        # Surfaced through _score_opportunity's return dict unchanged, so the
+        # frontend can badge this distinctly from a live theirstack fetch —
+        # it fills the theirstack bucket/cap for accounting purposes, but may
+        # have actually originated from any provider (see source_name below).
+        "cache_hit": True,
+        "opportunity_kind": "job",
+        "company_name": row.company,
+        "company_domain": None,
+        "company_website_url": None,
+        "company_careers_url": None,
+        "role_title": row.title,
+        "location": row.location,
+        "country": row.country,
+        "source_name": "TheirStack" if row.source == "theirstack" else row.source.title(),
+        "source_type": "theirstack_search",
+        "direct_apply_url": row.apply_url,
+        "canonical_job_url": row.canonical_url,
+        "portal_job_url": row.apply_url,
+        "posted_at": row.posted_at,
+        "company_payload": {},
+        "contacts": [],
+        "raw_text": raw_text,
+        "citation": {
+            "source_name": "TheirStack",
+            "canonical_url": row.canonical_url,
+            "job_url": row.apply_url,
+            "posted_at": row.posted_at.isoformat() if row.posted_at else None,
+            "evidence": ["Matched cached listing"],
+            "extraction_note": "Served from the shared job cache.",
+        },
+    }
+
+
+def _theirstack_opportunity_to_job_cache_row(item: dict[str, Any]) -> dict[str, Any] | None:
+    """Adapt a freshly-fetched theirstack opportunity dict into job_search's
+    flat upsert shape, so the existing `_upsert_jobs_cache` can write it into
+    the shared `jobs` table unchanged. TheirStack results carry no stable
+    per-item ID (confirmed in engine.py's `_normalize_theirstack_items`), so
+    the canonical URL doubles as the dedup key — same role canonical URLs
+    already play everywhere else in this codebase."""
+    canonical_url = item.get("canonical_job_url")
+    apply_url = item.get("direct_apply_url") or item.get("portal_job_url") or canonical_url
+    if not canonical_url or not apply_url:
+        return None
+    posted_at = item.get("posted_at")
+    country_code = adzuna_country_code(item.get("country")) or None
+    return {
+        "provider_type": "theirstack",
+        "external_job_id": canonical_url,
+        "role": item.get("role_title") or "",
+        "company": item.get("company_name") or "",
+        "location": item.get("location") or "",
+        "job_url": apply_url,
+        "job_url_canonical": canonical_url,
+        "posted_at": posted_at.isoformat() if isinstance(posted_at, datetime) else posted_at,
+        "description_text": (item.get("raw_text") or "")[:2000],
+        "metadata": {"country": country_code, "salary_min": None, "salary_max": None, "category": None},
+    }
+
+
+async def _fetch_theirstack_db_candidates(
+    db: AsyncSession, payload: dict[str, Any], strategy: dict[str, Any], existing: dict[str, dict[str, Any]]
+) -> tuple[list[dict[str, Any]], list[uuid.UUID]]:
+    """DB-first pre-check for the theirstack bucket only (see plan). Returns
+    already-scored opportunity dicts plus the underlying row ids (for TTL
+    refresh), or ([], []) if the country can't be resolved — in which case
+    the live theirstack fetch's own AdzunaConfigError-equivalent handling
+    (settings.theirstack_api_key check) takes over exactly as before."""
+    country_code = adzuna_country_code(payload.get("country")) or adzuna_country_code(payload.get("location"))
+    if not country_code:
+        return [], []
+
+    theirstack_limit = int(payload.get("theirstack_limit") or payload.get("result_limit") or 15)
+    rows = await query_job_cache_candidates(
+        db,
+        country_code=country_code,
+        query_tokens=tokenize(str(payload.get("query") or "")),
+        posted_within_hours=payload.get("posted_within_hours"),
+        limit=max(300, theirstack_limit * 20),
+    )
+
+    scored: list[dict[str, Any]] = []
+    for row in rows:
+        item = _job_row_to_opportunity_dict(row)
+        scored_item, _ = _score_opportunity(item, payload, strategy, existing)
+        if scored_item is not None:
+            scored.append(scored_item)
+
+    return scored, [row.id for row in rows]
+
+
 async def search_startup_hunt_opportunities(db: AsyncSession, user_id: str, body) -> dict:
     existing = await _load_opportunity_map(db, user_id)
     # Global curated sources stay gated behind include_seeded_sources + the
@@ -69,10 +189,50 @@ async def search_startup_hunt_opportunities(db: AsyncSession, user_id: str, body
     # explicitly added behind an unrelated flag.
     global_sources = build_seeded_sources(await list_global_startup_hunt_sources(db))
     user_sources = build_seeded_sources(await list_user_startup_hunt_sources(db, user_id))
+
+    payload = body.model_dump()
+    strategy = await parse_strategy_prompt(payload.get("strategy_prompt"))
+
+    # DB-first shortfall check — theirstack bucket only (see plan). The other
+    # 6 buckets run exactly as they always have, fully live, every search.
+    db_scored: list[dict[str, Any]] = []
+    db_job_ids: list[uuid.UUID] = []
+    adjusted_payload = payload
+    if payload.get("theirstack_enabled", True):
+        db_scored, db_job_ids = await _fetch_theirstack_db_candidates(db, payload, strategy, existing)
+        theirstack_limit = int(payload.get("theirstack_limit") or payload.get("result_limit") or 15)
+        shortfall = theirstack_limit - len(db_scored)
+        adjusted_payload = dict(payload)
+        if shortfall <= 0:
+            adjusted_payload["theirstack_enabled"] = False
+        else:
+            adjusted_payload["theirstack_limit"] = min(settings.theirstack_max_page_size, shortfall * 2)
+
     (
         results, overflow_results, filtered_out, parsed_strategy,
         configured_source_count, source_result_counts, source_diagnostics,
-    ) = await search_startup_hunt(body.model_dump(), existing, global_sources, user_sources)
+    ) = await search_startup_hunt(adjusted_payload, existing, global_sources, user_sources, strategy=strategy)
+
+    # Upsert freshly-fetched theirstack results into the shared cache, and
+    # refresh TTL for whatever DB candidates were actually scanned as
+    # relevant (bounded by _fetch_theirstack_db_candidates' filters, not the
+    # whole table) — same pattern job_search's search_recent_jobs uses.
+    fresh_theirstack_rows = [
+        row for item in results if item.get("source_type") == "theirstack_search"
+        if (row := _theirstack_opportunity_to_job_cache_row(item)) is not None
+    ]
+    if fresh_theirstack_rows:
+        await _upsert_jobs_cache(db, fresh_theirstack_rows, origin_tool="startup_hunt")
+    if db_job_ids:
+        await touch_job_cache_rows(db, db_job_ids, ttl_days=settings.job_search_cache_ttl_days)
+
+    if db_scored:
+        result_limit = int(payload.get("result_limit") or 25)
+        combined = _dedupe_opportunities(db_scored + results)
+        combined.sort(key=lambda item: -float(item.get("score_total") or 0))
+        results = combined[:result_limit]
+        overflow_results = combined[result_limit:] + overflow_results
+
     return {
         "results": results,
         "overflow_results": overflow_results,
@@ -257,6 +417,20 @@ async def _replace_contacts(
     await db.flush()
 
 
+async def _find_job_id(db: AsyncSession, *, source_type: str, canonical_job_url: str | None) -> str | None:
+    """Trace a saved opportunity back to its shared `jobs` cache row, when
+    available. Only theirstack-sourced saves can have one today — the other
+    6 buckets don't write into the shared cache yet (see plan)."""
+    if source_type != "theirstack_search" or not canonical_job_url:
+        return None
+    row = (
+        await db.execute(
+            select(Job.id).where(Job.source == "theirstack", Job.canonical_url == canonical_job_url)
+        )
+    ).scalar_one_or_none()
+    return str(row) if row is not None else None
+
+
 def _url_fields(payload: dict) -> dict:
     direct_apply_url = str(payload["direct_apply_url"]) if payload.get("direct_apply_url") else None
     canonical_job_url = (
@@ -305,6 +479,9 @@ async def create_startup_hunt_opportunity(
         )
 
     company_id = await _upsert_company(db, user_id, payload)
+    job_id = await _find_job_id(
+        db, source_type=payload["source_type"], canonical_job_url=payload.get("canonical_job_url")
+    )
 
     fields = dict(
         company_name=payload["company_name"],
@@ -332,6 +509,7 @@ async def create_startup_hunt_opportunity(
         user_id=user_id,
         tracker_application_id=tracker_id,
         company_id=company_id,
+        job_id=job_id,
     )
 
     if existing:

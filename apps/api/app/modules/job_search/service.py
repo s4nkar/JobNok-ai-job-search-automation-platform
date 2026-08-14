@@ -11,7 +11,7 @@ import json
 from datetime import date, datetime, timedelta, timezone
 
 from fastapi import HTTPException
-from sqlalchemy import or_, select
+from sqlalchemy import select
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -28,7 +28,7 @@ from app.modules.job_search.sources import (
     parse_preferences_prompt,
     score_all,
 )
-from app.modules.job_search.models import Job, JobSearchApplication
+from app.modules.job_search.models import Job, JobSearchApplication, query_job_cache_candidates
 from app.modules.job_search.schemas import (
     JobSearchApplicationCreateRequest,
     JobSearchApplicationUpdateRequest,
@@ -185,27 +185,13 @@ async def _fetch_db_candidates(db: AsyncSession, payload: dict) -> list[dict]:
         return []
 
     result_limit = int(payload.get("result_limit") or 10)
-    candidate_cap = max(300, result_limit * 20)
-
-    conditions = [Job.expires_at > datetime.now(timezone.utc), Job.country == country_code]
-
-    posted_within_hours = payload.get("posted_within_hours")
-    if posted_within_hours is not None:
-        cutoff = datetime.now(timezone.utc) - timedelta(hours=posted_within_hours)
-        conditions.append(Job.posted_at > cutoff)
-
-    query_tokens = _tokenize(str(payload.get("query") or ""))
-    if query_tokens:
-        conditions.append(
-            or_(*[or_(Job.title.ilike(f"%{token}%"), Job.description.ilike(f"%{token}%")) for token in query_tokens])
-        )
-
-    rows = (
-        await db.execute(
-            select(Job).where(*conditions).order_by(Job.posted_at.desc().nulls_last()).limit(candidate_cap)
-        )
-    ).scalars().all()
-
+    rows = await query_job_cache_candidates(
+        db,
+        country_code=country_code,
+        query_tokens=_tokenize(str(payload.get("query") or "")),
+        posted_within_hours=payload.get("posted_within_hours"),
+        limit=max(300, result_limit * 20),
+    )
     return [_job_row_to_raw_dict(row) for row in rows]
 
 

@@ -64,6 +64,13 @@ class StartupHuntOpportunity(Base, UUIDPKMixin, CreatedAtMixin):
     tracker_application_id: Mapped[uuid.UUID | None] = mapped_column(
         PG_UUID(as_uuid=True), ForeignKey("job_applications.id", ondelete="SET NULL"), nullable=True
     )
+    # Traces this save back to the shared jobs cache row it came from, when
+    # available (mirrors job_search_applications.job_id). Nullable: this table
+    # keeps its own denormalized snapshot regardless — audit trail even if the
+    # cached listing later expires or the row is only theirstack-sourced.
+    job_id: Mapped[uuid.UUID | None] = mapped_column(
+        PG_UUID(as_uuid=True), ForeignKey("jobs.id", ondelete="SET NULL"), nullable=True
+    )
     company_name: Mapped[str] = mapped_column(Text, nullable=False)
     company_domain: Mapped[str | None] = mapped_column(Text, nullable=True)
     company_website_url: Mapped[str | None] = mapped_column(Text, nullable=True)

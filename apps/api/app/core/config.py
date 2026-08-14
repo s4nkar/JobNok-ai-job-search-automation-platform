@@ -112,6 +112,11 @@ class Settings(BaseSettings):
     apify_indeed_actor_id: str = ""
     theirstack_api_key: str = ""
     theirstack_base_url: str = "https://api.theirstack.com"
+    # TheirStack's free plan hard-caps `limit` at 25 results/page (HTTP 403,
+    # error code E-020, "Premium functionality limitation") — any request
+    # above this is rejected outright, zeroing the whole bucket. Configurable
+    # so upgrading the TheirStack plan doesn't require a code change.
+    theirstack_max_page_size: int = 25
     startup_hunt_contact_enrichment_provider: str = ""
     apollo_api_key: str = ""
     people_data_labs_api_key: str = ""

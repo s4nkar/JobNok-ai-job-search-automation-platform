@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import re
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
@@ -13,6 +14,8 @@ import httpx
 
 from app.ai.llm import provider as ai_provider
 from app.core.config import settings
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -357,6 +360,7 @@ async def search_startup_hunt(
     existing_opportunities: dict[str, dict[str, Any]],
     global_sources: list[StartupHuntSourceConfig] | None = None,
     user_sources: list[StartupHuntSourceConfig] | None = None,
+    strategy: dict[str, Any] | None = None,
 ) -> tuple[list[dict[str, Any]], list[dict[str, Any]], list[dict[str, Any]], dict[str, Any], int, dict[str, int], dict[str, dict[str, Any]]]:
     sources: list[StartupHuntSourceConfig] = []
     if payload.get("include_seeded_sources") and _bucket_enabled(payload, "crawler"):
@@ -366,7 +370,11 @@ async def search_startup_hunt(
     sources.extend(user_sources or [])
     sources.extend(_auto_sources_from_integrations(payload))
     sources.extend(_auto_dynamic_sources(payload))
-    strategy = await parse_strategy_prompt(payload.get("strategy_prompt"))
+    # Callers that already parsed strategy_prompt (e.g. to score DB-cache
+    # candidates before deciding how much of a live fetch is still needed)
+    # can pass it in directly to avoid a second LLM parse of the same prompt.
+    if strategy is None:
+        strategy = await parse_strategy_prompt(payload.get("strategy_prompt"))
     if not sources:
         return [], [], [], strategy, 0, {bucket: 0 for bucket in SOURCE_BUCKETS}, _build_source_diagnostics(payload, [], [])
 
@@ -604,18 +612,28 @@ def _scrub_error_message(message: str) -> str:
 
 
 def _classify_bucket_fatal(exc: Exception) -> tuple[int | None, str | None]:
-    """Return (status, friendly_reason) when the error means we should stop calling this bucket."""
+    """Return (status, friendly_reason) when the error means we should stop calling this bucket.
+
+    `friendly_reason` is shown directly in the results UI, so it stays plain-
+    language with no HTTP status codes or provider-internal error codes — the
+    technical detail is logged server-side instead, for debugging.
+    """
     if isinstance(exc, httpx.HTTPStatusError):
         status = exc.response.status_code
         if status in _BUCKET_FATAL_STATUSES:
+            logger.warning(
+                "Startup Hunt bucket source returned HTTP %s: %s",
+                status,
+                _scrub_error_message(exc.response.text[:500]),
+            )
             if status == 402:
-                return status, "Provider credit/quota exhausted (402 Payment Required). Stopping further calls."
+                return status, "This source's usage limit was reached. It's temporarily unavailable."
             if status == 401:
-                return status, "Provider authentication failed (401). Check API token."
+                return status, "This source's connection needs to be reconfigured. It's temporarily unavailable."
             if status == 403:
-                return status, "Provider rejected the request (403 Forbidden)."
+                return status, "This source declined the request. It's temporarily unavailable."
             if status == 429:
-                return status, "Provider rate limit hit (429). Stopping further calls."
+                return status, "This source is rate-limited right now. It'll be retried on your next search."
     return None, None
 
 
@@ -635,10 +653,14 @@ async def _fetch_source_safe(
     except Exception as exc:
         status, friendly = _classify_bucket_fatal(exc)
         if status and bucket_fatal is not None:
-            bucket_fatal[bucket] = friendly or f"Provider returned HTTP {status}"
-            return {"items": [], "error": friendly or f"Provider returned HTTP {status}"}
-        message = _scrub_error_message(f"{exc.__class__.__name__}: {exc}")
-        return {"items": [], "error": message}
+            reason = friendly or "This source is temporarily unavailable."
+            bucket_fatal[bucket] = reason
+            return {"items": [], "error": reason}
+        logger.warning(
+            "Startup Hunt source '%s' (%s) failed: %s",
+            source.name, source.type, _scrub_error_message(f"{exc.__class__.__name__}: {exc}"),
+        )
+        return {"items": [], "error": "This source couldn't be reached right now."}
 
 
 async def _fetch_source(
@@ -2022,6 +2044,9 @@ async def _fetch_theirstack_search(
         return []
 
     result_limit = max(1, int(payload.get("theirstack_limit", 0) or payload.get("result_limit", 15) or 15))
+    # TheirStack's free plan rejects the whole request (403, E-020) if `limit`
+    # exceeds its page-size cap — clamp rather than let the entire bucket fail.
+    result_limit = min(result_limit, settings.theirstack_max_page_size)
     request_payload: dict[str, Any] = {
         "limit": result_limit,
         "page": 0,
@@ -3764,6 +3789,7 @@ def _score_opportunity(
         "saved_opportunity_id": existing.get("id") if existing else None,
         "rank_age_hours": age_hours,
         "source_bucket": source_bucket,
+        "cache_hit": bool(item.get("cache_hit")),
     }, None)
 
 

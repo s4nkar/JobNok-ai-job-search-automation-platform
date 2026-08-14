@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import math
 import re
 from datetime import datetime, timezone
@@ -13,6 +14,8 @@ import httpx
 
 from app.ai.llm import provider as ai_provider
 from app.core.config import settings
+
+logger = logging.getLogger(__name__)
 
 # Adzuna's supported country path segments — https://developer.adzuna.com/
 _ADZUNA_COUNTRY_ALIASES: dict[str, str] = {
@@ -87,17 +90,20 @@ def adzuna_country_code(country: str | None) -> str | None:
 
 
 def _classify_fatal(exc: Exception) -> str | None:
+    """Return a plain-language, user-facing reason with no HTTP status codes
+    or provider-internal details — those are logged separately for debugging."""
     if isinstance(exc, httpx.HTTPStatusError):
         status = exc.response.status_code
         if status in _FATAL_STATUSES:
+            logger.warning("Adzuna returned HTTP %s: %s", status, exc.response.text[:500])
             if status == 401:
-                return "Adzuna authentication failed (401). Check the configured app_id/app_key."
+                return "Job search isn't configured correctly right now."
             if status == 402:
-                return "Adzuna credit/quota exhausted (402 Payment Required)."
+                return "Job search's usage limit was reached. Try again later."
             if status == 403:
-                return "Adzuna rejected the request (403 Forbidden)."
+                return "Job search declined the request. Try again shortly."
             if status == 429:
-                return "Adzuna rate limit hit (429). Try again shortly."
+                return "Job search is rate-limited right now. Try again shortly."
     return None
 
 
@@ -191,7 +197,9 @@ async def fetch_adzuna_raw(payload: dict[str, Any]) -> list[dict[str, Any]]:
             response.raise_for_status()
         except httpx.HTTPStatusError as exc:
             friendly = _classify_fatal(exc)
-            raise AdzunaConfigError(friendly or f"Adzuna returned HTTP {exc.response.status_code}") from exc
+            if not friendly:
+                logger.warning("Adzuna returned HTTP %s: %s", exc.response.status_code, exc.response.text[:500])
+            raise AdzunaConfigError(friendly or "Job search is temporarily unavailable.") from exc
 
     body = response.json()
 

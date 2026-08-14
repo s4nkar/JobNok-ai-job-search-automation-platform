@@ -1,9 +1,10 @@
 import uuid
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 
-from sqlalchemy import CheckConstraint, ForeignKey, Index, Numeric, Text, UniqueConstraint, desc, func
+from sqlalchemy import CheckConstraint, ForeignKey, Index, Numeric, Text, UniqueConstraint, desc, func, or_, select
 from sqlalchemy.dialects.postgresql import JSONB, TIMESTAMP, UUID as PG_UUID
+from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.shared.models import Base, UUIDPKMixin, CreatedAtMixin
@@ -103,3 +104,56 @@ class JobSearchApplication(Base, UUIDPKMixin, CreatedAtMixin):
     updated_at: Mapped[datetime] = mapped_column(
         TIMESTAMP(timezone=True), server_default=func.now(), nullable=False
     )
+
+
+async def query_job_cache_candidates(
+    db: AsyncSession,
+    *,
+    country_code: str,
+    query_tokens: list[str],
+    posted_within_hours: int | None,
+    limit: int,
+) -> list[Job]:
+    """Coarse, bounded pre-filter over the shared `jobs` cache — not exact
+    matching, just narrows the candidate pool. Callers run their own
+    fine-grained scorer over the result (e.g. job_search's `_score_job` or
+    startup_hunt's `_score_opportunity`), identically to how they score
+    freshly-fetched external results, so matching semantics never diverge
+    between DB-sourced and live-fetched candidates. Shared across modules
+    (job_search and startup_hunt both call this) since it's a query against
+    one shared table — each caller maps the returned rows into its own
+    dict shape afterward, since those shapes genuinely differ per tool.
+    """
+    conditions = [Job.expires_at > datetime.now(timezone.utc), Job.country == country_code]
+
+    if posted_within_hours is not None:
+        cutoff = datetime.now(timezone.utc) - timedelta(hours=posted_within_hours)
+        conditions.append(Job.posted_at > cutoff)
+
+    if query_tokens:
+        conditions.append(
+            or_(*[or_(Job.title.ilike(f"%{token}%"), Job.description.ilike(f"%{token}%")) for token in query_tokens])
+        )
+
+    rows = (
+        await db.execute(
+            select(Job).where(*conditions).order_by(Job.posted_at.desc().nulls_last()).limit(limit)
+        )
+    ).scalars().all()
+
+    return list(rows)
+
+
+async def touch_job_cache_rows(db: AsyncSession, job_ids: list[uuid.UUID], *, ttl_days: int) -> None:
+    """Refresh last_seen_at/expires_at for already-cached rows a search actually
+    used as candidates — cheaper than re-running the full upsert for rows that
+    already exist and haven't changed."""
+    if not job_ids:
+        return
+    now = datetime.now(timezone.utc)
+    await db.execute(
+        Job.__table__.update()
+        .where(Job.id.in_(job_ids))
+        .values(last_seen_at=now, expires_at=now + timedelta(days=ttl_days))
+    )
+    await db.flush()
