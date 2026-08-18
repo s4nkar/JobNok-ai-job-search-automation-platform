@@ -3,17 +3,17 @@
 import { useState, useRef, useEffect, Suspense } from 'react'
 import { useSearchParams, useRouter } from 'next/navigation'
 import { config } from '@/lib/config'
-import { Button } from '@/components/ui/button'
-import { Textarea } from '@/components/ui/textarea'
-import { Label } from '@/components/ui/label'
-import { useToast } from '@/components/ui/use-toast'
+import { Button } from '@jobnok/ui'
+import { Textarea } from '@jobnok/ui'
+import { Label } from '@jobnok/ui'
+import { useToast } from '@jobnok/ui'
 import {
   Upload, FileText, Loader2, CheckCircle, XCircle, ArrowRight,
   Info, FileSearch, X, Compass, Download, LayoutTemplate,
   Sparkles, AlertTriangle, BarChart3, Pencil,
 } from 'lucide-react'
 import { apiFetch } from '@/lib/api'
-import { cn } from '@/lib/utils'
+import { cn } from '@jobnok/ui'
 import { StartupHuntSavedOpportunity } from '@/lib/types'
 
 interface TailorResult {
@@ -219,8 +219,8 @@ function ResumeTailorInner() {
   return (
     <div className="animate-fade-in">
       <div className="flex items-center gap-4 mb-6">
-        <div className="page-header-icon bg-violet-100">
-          <FileSearch className="h-5 w-5 text-violet-600" />
+        <div className="page-header-icon bg-indigo-100">
+          <FileSearch className="h-5 w-5 text-indigo-600" />
         </div>
         <div>
           <h1 className="text-2xl font-bold text-slate-900 tracking-tight">Resume Tailor</h1>
@@ -229,10 +229,10 @@ function ResumeTailorInner() {
       </div>
 
       {lead && (
-        <div className="flex items-center gap-2.5 bg-orange-50 border border-orange-100 text-orange-800 rounded-xl px-4 py-3 mb-4 text-sm">
-          <Compass className="h-4 w-4 flex-shrink-0 text-orange-500" />
+        <div className="flex items-center gap-2.5 bg-indigo-50 border border-indigo-100 text-indigo-800 rounded-xl px-4 py-3 mb-4 text-sm">
+          <Compass className="h-4 w-4 flex-shrink-0 text-indigo-500" />
           <span>Pre-filled from <strong>{lead.company_name} — {lead.role_title}</strong>. No full JD stored — add it below the signals for best results.</span>
-          <button onClick={() => { setLead(null); setJd('') }} className="ml-auto text-orange-400 hover:text-orange-700">
+          <button onClick={() => { setLead(null); setJd('') }} className="ml-auto text-indigo-400 hover:text-indigo-700">
             <X className="h-4 w-4" />
           </button>
         </div>
@@ -249,9 +249,9 @@ function ResumeTailorInner() {
         <span><strong>{config.rateLimits.resumeTailorPerDay} analyses/day</strong> on the free tier.</span>
       </div>
 
-      <div className="grid grid-cols-2 gap-6">
+      <div className="grid grid-cols-2 gap-6 items-start">
         {/* Left — inputs */}
-        <div className="space-y-4">
+        <div className="space-y-4 sticky top-6">
           <div className="bg-white rounded-2xl border border-slate-100 shadow-card p-5">
             <Label className="text-sm font-semibold text-slate-700 mb-3 block">Resume (PDF)</Label>
             <div
@@ -328,8 +328,8 @@ function ResumeTailorInner() {
           {!result && !loading && (
             <div className="bg-white rounded-2xl border border-slate-100 shadow-card min-h-[300px] flex items-center justify-center p-8">
               <div className="text-center space-y-2">
-                <div className="w-14 h-14 rounded-2xl bg-violet-50 flex items-center justify-center mx-auto">
-                  <FileSearch className="h-7 w-7 text-violet-300" />
+                <div className="w-14 h-14 rounded-2xl bg-indigo-50 flex items-center justify-center mx-auto">
+                  <FileSearch className="h-7 w-7 text-indigo-300" />
                 </div>
                 <p className="font-medium text-slate-500">Results will appear here</p>
                 <p className="text-sm text-slate-400">Upload your resume and paste a job description to start</p>
@@ -341,23 +341,23 @@ function ResumeTailorInner() {
             <>
               {/* Target role banner */}
               {(result.target_role || result.target_company) && (
-                <div className="flex items-center gap-2.5 bg-violet-50 border border-violet-100 text-violet-800 rounded-xl px-4 py-3 text-sm">
-                  <FileText className="h-4 w-4 flex-shrink-0 text-violet-500" />
+                <div className="flex items-center gap-2.5 bg-indigo-50 border border-indigo-100 text-indigo-800 rounded-xl px-4 py-3 text-sm">
+                  <FileText className="h-4 w-4 flex-shrink-0 text-indigo-500" />
                   <span>Tailored for <strong>{result.target_role}{result.target_company ? ` at ${result.target_company}` : ''}</strong></span>
                 </div>
               )}
 
               {/* Proposed headline */}
               {result.profile_headline && (
-                <div className="bg-white rounded-2xl border border-violet-100 shadow-card p-4">
+                <div className="bg-white rounded-2xl border border-indigo-100 shadow-card p-4">
                   <p className="text-xs font-semibold text-slate-500 uppercase tracking-wide mb-1">Suggested CV Headline</p>
-                  <p className="text-sm font-medium text-violet-700">{result.profile_headline}</p>
+                  <p className="text-sm font-medium text-indigo-700">{result.profile_headline}</p>
                 </div>
               )}
 
               {/* Tailored summary */}
               {result.tailored_summary && (
-                <div className="bg-white rounded-2xl border border-violet-100 shadow-card p-4">
+                <div className="bg-white rounded-2xl border border-indigo-100 shadow-card p-4">
                   <p className="text-xs font-semibold text-slate-500 uppercase tracking-wide mb-1">Tailored Summary</p>
                   <p className="text-sm text-slate-600 leading-relaxed">{result.tailored_summary}</p>
                 </div>

@@ -1,8 +1,10 @@
 import { clerkMiddleware, createRouteMatcher } from '@clerk/nextjs/server'
 import { NextResponse } from 'next/server'
 
+// Marketing pages ('/', '/contact', '/terms', '/privacy') now live in the
+// separate apps/marketing app on jobnok.com — this app only serves the
+// authenticated dashboard on app.jobnok.com, so none of those routes exist here.
 const isAuthRoute = createRouteMatcher(['/login(.*)', '/signup(.*)', '/sso-callback(.*)'])
-const isPublicMarketingRoute = createRouteMatcher(['/', '/contact(.*)', '/terms(.*)', '/privacy(.*)'])
 const isApiRoute = createRouteMatcher(['/api(.*)'])
 
 export default clerkMiddleware(async (auth, req) => {
@@ -10,7 +12,7 @@ export default clerkMiddleware(async (auth, req) => {
 
   const { userId } = await auth()
 
-  if (!userId && !isAuthRoute(req) && !isPublicMarketingRoute(req)) {
+  if (!userId && !isAuthRoute(req)) {
     const url = req.nextUrl.clone()
     url.pathname = '/login'
     url.searchParams.set('redirect', req.nextUrl.pathname)
@@ -18,6 +20,10 @@ export default clerkMiddleware(async (auth, req) => {
   }
 
   if (userId && isAuthRoute(req)) {
+    return NextResponse.redirect(new URL('/dashboard', req.url))
+  }
+
+  if (userId && req.nextUrl.pathname === '/') {
     return NextResponse.redirect(new URL('/dashboard', req.url))
   }
 

@@ -1,22 +1,23 @@
 'use client'
 
-import { useEffect, useState, useCallback } from 'react'
+import { useState, useCallback } from 'react'
+import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { useForm } from 'react-hook-form'
 import { zodResolver } from '@hookform/resolvers/zod'
 import { z } from 'zod'
-import { apiFetch } from '@/lib/api'
-import { useTemplateStore } from '@/lib/stores/templates'
+import { apiFetch, apiGet } from '@/lib/api'
+import { queryKeys } from '@/lib/queryKeys'
 import { PREBUILT_TEMPLATES } from '@/lib/templates/prebuilt'
-import { extractPlaceholders, fillTemplate, cn } from '@/lib/utils'
+import { extractPlaceholders, fillTemplate, cn } from '@jobnok/ui'
 import { TEMPLATE_CATEGORIES, type Template, type TemplateCategory } from '@/lib/types'
-import { Button } from '@/components/ui/button'
-import { Input } from '@/components/ui/input'
-import { Textarea } from '@/components/ui/textarea'
-import { Label } from '@/components/ui/label'
-import { Badge } from '@/components/ui/badge'
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
-import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from '@/components/ui/dialog'
-import { useToast } from '@/components/ui/use-toast'
+import { Button } from '@jobnok/ui'
+import { Input } from '@jobnok/ui'
+import { Textarea } from '@jobnok/ui'
+import { Label } from '@jobnok/ui'
+import { Badge } from '@jobnok/ui'
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@jobnok/ui'
+import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from '@jobnok/ui'
+import { useToast } from '@jobnok/ui'
 import { Plus, Copy, Check, Trash2, FileText, Loader2, AlertCircle } from 'lucide-react'
 
 const LINKEDIN_CHAR_LIMIT = 300
@@ -29,10 +30,13 @@ const templateSchema = z.object({
 type TemplateFormData = z.infer<typeof templateSchema>
 
 const categoryColors: Record<string, string> = {
+  // LinkedIn keeps its real brand blue — a recognizable third-party mark,
+  // not an arbitrary category color. Everything else is a neutral category
+  // label with no status meaning, so it stays on one shared treatment.
   'LinkedIn': 'bg-blue-50 text-blue-700 border-blue-100',
-  'Email': 'bg-violet-50 text-violet-700 border-violet-100',
-  'Follow-up': 'bg-amber-50 text-amber-700 border-amber-100',
-  'Thank You': 'bg-emerald-50 text-emerald-700 border-emerald-100',
+  'Email': 'bg-slate-50 text-slate-600 border-slate-200',
+  'Follow-up': 'bg-slate-50 text-slate-600 border-slate-200',
+  'Thank You': 'bg-slate-50 text-slate-600 border-slate-200',
   'Custom': 'bg-slate-50 text-slate-600 border-slate-200',
 }
 
@@ -46,7 +50,11 @@ function CategoryBadge({ category }: { category: string }) {
 }
 
 export default function TemplatesPage() {
-  const { savedTemplates, setSavedTemplates, addTemplate, removeTemplate } = useTemplateStore()
+  const queryClient = useQueryClient()
+  const { data: savedTemplates = [] } = useQuery({
+    queryKey: queryKeys.templates,
+    queryFn: () => apiGet<Template[]>('/api/templates'),
+  })
   const [selected, setSelected] = useState<Template | null>(null)
   const [fillValues, setFillValues] = useState<Record<string, string>>({})
   const [filledContent, setFilledContent] = useState('')
@@ -62,14 +70,6 @@ export default function TemplatesPage() {
   })
 
   const watchContent = watch('content', '')
-
-  useEffect(() => {
-    async function load() {
-      const res = await apiFetch('/api/templates')
-      if (res.ok) setSavedTemplates(await res.json())
-    }
-    load()
-  }, [])
 
   function selectTemplate(t: Template) {
     setSelected(t)
@@ -109,7 +109,8 @@ export default function TemplatesPage() {
     })
 
     if (res.ok) {
-      addTemplate(await res.json())
+      const created: Template = await res.json()
+      queryClient.setQueryData<Template[]>(queryKeys.templates, (prev) => [created, ...(prev || [])])
       toast({ title: 'Template saved!' })
       reset()
       setShowCreate(false)
@@ -123,7 +124,7 @@ export default function TemplatesPage() {
   async function deleteTemplate(id: string) {
     const res = await apiFetch(`/api/templates/${id}`, { method: 'DELETE' })
     if (res.ok) {
-      removeTemplate(id)
+      queryClient.setQueryData<Template[]>(queryKeys.templates, (prev) => (prev || []).filter((t) => t.id !== id))
       if (selected?.id === id) setSelected(null)
       toast({ title: 'Template deleted' })
     }
@@ -142,8 +143,8 @@ export default function TemplatesPage() {
       {/* Page Header */}
       <div className="flex items-start justify-between mb-8">
         <div className="flex items-center gap-4">
-          <div className="page-header-icon bg-blue-100">
-            <FileText className="h-5 w-5 text-blue-600" />
+          <div className="page-header-icon bg-indigo-100">
+            <FileText className="h-5 w-5 text-indigo-600" />
           </div>
           <div>
             <h1 className="text-2xl font-bold text-slate-900 tracking-tight">Smart Templates</h1>
@@ -154,9 +155,9 @@ export default function TemplatesPage() {
         </div>
         <Button
           onClick={() => setShowCreate(true)}
-          className="gradient-brand text-white border-0 shadow-brand-sm hover:opacity-90 transition-opacity rounded-xl h-10 px-5"
+          className="gradient-brand text-white border-0 shadow-sm hover:opacity-90 transition-opacity rounded-xl h-9 text-sm px-5"
         >
-          <Plus className="h-4 w-4 mr-2" />
+          <Plus className="h-3.5 w-3.5 mr-2" />
           New Template
         </Button>
       </div>
@@ -191,7 +192,7 @@ export default function TemplatesPage() {
                   'w-full text-left p-3.5 rounded-xl border text-sm transition-all duration-150',
                   selected?.id === t.id
                     ? 'bg-indigo-600 text-white border-indigo-600 shadow-brand-sm'
-                    : 'bg-white border-slate-100 hover:border-slate-200 hover:shadow-card shadow-card'
+                    : 'bg-white border-slate-100 hover:border-slate-200 hover:shadow-sm shadow-sm'
                 )}
               >
                 <div className="font-semibold truncate text-[13px]">{t.name}</div>
@@ -212,10 +213,10 @@ export default function TemplatesPage() {
         {/* Template Editor / Fill */}
         <div className="col-span-2">
           {!selected ? (
-            <div className="bg-white rounded-2xl border border-slate-100 shadow-card min-h-[400px] flex items-center justify-center p-8">
+            <div className="bg-white rounded-2xl border border-slate-100 shadow-sm min-h-[400px] flex items-center justify-center p-8">
               <div className="text-center space-y-2">
-                <div className="w-14 h-14 rounded-2xl bg-blue-50 flex items-center justify-center mx-auto">
-                  <FileText className="h-7 w-7 text-blue-200" />
+                <div className="w-14 h-14 rounded-2xl bg-indigo-50 flex items-center justify-center mx-auto">
+                  <FileText className="h-7 w-7 text-indigo-200" />
                 </div>
                 <p className="font-semibold text-slate-500">Select a template to get started</p>
                 <p className="text-sm text-slate-400">Or create a new one with the button above</p>
@@ -224,7 +225,7 @@ export default function TemplatesPage() {
           ) : (
             <div className="space-y-4">
               {/* Template header */}
-              <div className="bg-white rounded-2xl border border-slate-100 shadow-card px-5 py-4 flex items-center justify-between">
+              <div className="bg-white rounded-2xl border border-slate-100 shadow-sm px-5 py-4 flex items-center justify-between">
                 <div className="flex items-center gap-3 min-w-0">
                   <div className="w-8 h-8 rounded-xl bg-indigo-50 flex items-center justify-center flex-shrink-0">
                     <FileText className="h-4 w-4 text-indigo-500" />
@@ -249,7 +250,7 @@ export default function TemplatesPage() {
 
               {/* Placeholder Inputs */}
               {selected.placeholders.length > 0 && (
-                <div className="bg-white rounded-2xl border border-slate-100 shadow-card p-5">
+                <div className="bg-white rounded-2xl border border-slate-100 shadow-sm p-5">
                   <p className="text-xs font-semibold text-slate-500 uppercase tracking-widest mb-4">Fill in placeholders</p>
                   <div className="grid grid-cols-2 gap-3">
                     {selected.placeholders.map((ph) => (
@@ -268,7 +269,7 @@ export default function TemplatesPage() {
               )}
 
               {/* Filled Output */}
-              <div className="bg-white rounded-2xl border border-slate-100 shadow-card p-5">
+              <div className="bg-white rounded-2xl border border-slate-100 shadow-sm p-5">
                 <div className="flex items-center justify-between mb-3">
                   <p className="text-xs font-semibold text-slate-500 uppercase tracking-widest">Output</p>
                   <div className="flex items-center gap-3">
@@ -315,14 +316,14 @@ export default function TemplatesPage() {
           <form onSubmit={handleSubmit(onSaveTemplate)} className="space-y-4">
             <div className="grid grid-cols-2 gap-4">
               <div className="space-y-1.5">
-                <Label className="text-sm font-medium">Template name</Label>
-                <Input placeholder="e.g. Cold DM — Software Engineer" className="rounded-xl" {...register('name')} />
+                <Label>Template name</Label>
+                <Input placeholder="e.g. Cold DM — Software Engineer" {...register('name')} />
                 {errors.name && <p className="text-xs text-destructive">{errors.name.message}</p>}
               </div>
               <div className="space-y-1.5">
-                <Label className="text-sm font-medium">Category</Label>
+                <Label>Category</Label>
                 <Select onValueChange={(v) => setValue('category', v as TemplateCategory)} defaultValue="Custom">
-                  <SelectTrigger className="rounded-xl">
+                  <SelectTrigger>
                     <SelectValue />
                   </SelectTrigger>
                   <SelectContent>
@@ -333,13 +334,13 @@ export default function TemplatesPage() {
             </div>
 
             <div className="space-y-1.5">
-              <Label className="text-sm font-medium">Template content</Label>
+              <Label>Template content</Label>
               <p className="text-xs text-slate-500">Use <code className="bg-slate-100 px-1.5 py-0.5 rounded-md font-mono">{'{{placeholder}}'}</code> for dynamic values</p>
               <Textarea
                 {...register('content')}
                 rows={10}
                 placeholder={`Hi {{name}},\n\nI came across your profile at {{company}}...`}
-                className="font-mono text-sm rounded-xl resize-none border-slate-200"
+                className="font-mono text-sm resize-none"
               />
               <div className="flex justify-between items-center">
                 {errors.content && <p className="text-xs text-destructive">{errors.content.message}</p>}

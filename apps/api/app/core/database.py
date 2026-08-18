@@ -1,15 +1,13 @@
 """SQLAlchemy engine/session setup.
 
-- async (asyncpg), from DATABASE_URL — used by FastAPI request handlers via get_db()
-- sync (psycopg), from DATABASE_URL — used by Celery tasks (no event loop)
+Async (asyncpg), from DATABASE_URL — used by FastAPI request handlers via
+get_db() and by ARQ worker tasks (both run on an event loop).
 
 Alembic (alembic/env.py) uses its own sync engine built from
 MIGRATIONS_DATABASE_URL (the direct/unpooled connection), not this module.
 """
 
-from sqlalchemy import create_engine
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
-from sqlalchemy.orm import sessionmaker
 
 from app.core.config import settings
 
@@ -39,8 +37,3 @@ async def get_db():
         except Exception:
             await session.rollback()
             raise
-
-
-# Sync path — Celery tasks (no event loop) and Alembic's env.py
-sync_engine = create_engine(settings.database_url_sync, pool_pre_ping=True)
-SyncSessionLocal = sessionmaker(sync_engine, expire_on_commit=False)

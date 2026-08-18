@@ -1,6 +1,6 @@
 """Resend email sender.
 
-Handles single sends for the bulk email Celery worker.
+Handles single sends for the bulk email ARQ worker.
 Auto-injects an unsubscribe footer on all campaign emails.
 """
 

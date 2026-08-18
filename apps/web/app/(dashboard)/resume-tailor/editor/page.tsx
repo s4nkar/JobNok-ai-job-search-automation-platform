@@ -7,12 +7,12 @@ import {
   CvData, CvExperience, CvEducation, CvSkill, CvProject, CvFeaturedProject,
   TemplateId, TemplateMeta, ResumeTailorResult,
 } from '@/lib/types'
-import { Button } from '@/components/ui/button'
-import { Input } from '@/components/ui/input'
-import { Textarea } from '@/components/ui/textarea'
-import { Label } from '@/components/ui/label'
-import { useToast } from '@/components/ui/use-toast'
-import { cn } from '@/lib/utils'
+import { Button } from '@jobnok/ui'
+import { Input } from '@jobnok/ui'
+import { Textarea } from '@jobnok/ui'
+import { Label } from '@jobnok/ui'
+import { useToast } from '@jobnok/ui'
+import { cn } from '@jobnok/ui'
 import {
   ArrowLeft, Download, Loader2, Plus, Trash2, ChevronDown, ChevronUp,
   FileText, User, Briefcase, GraduationCap, Wrench, FolderOpen, BookOpen,
@@ -462,8 +462,8 @@ function EditorInner() {
           <ArrowLeft className="h-4 w-4" /> Back
         </button>
         <div className="flex items-center gap-2 mx-auto">
-          <div className="page-header-icon bg-violet-100">
-            <FileText className="h-5 w-5 text-violet-600" />
+          <div className="page-header-icon bg-indigo-100">
+            <FileText className="h-5 w-5 text-indigo-600" />
           </div>
           <div>
             <h1 className="text-xl font-bold text-slate-900 tracking-tight">Resume Editor</h1>

@@ -3,7 +3,7 @@
 #
 # Changes from production:
 #   - FastAPI:  source mounted, uvicorn --reload, port 8000 exposed directly
-#   - Celery:   source mounted
+#   - Worker:   source mounted (ARQ)
 #   - Next.js:  source mounted, npm run dev, port 3000 exposed directly
 #   - nginx:    disabled (dev hits services directly on their native ports)
 #   - Postgres: local throwaway Postgres for SQLAlchemy/Alembic dev work.
@@ -16,6 +16,11 @@
 #     mount, which would otherwise shadow/erase it at container start.
 #   - /app/node_modules: anonymous volume prevents the host ./apps/web mount
 #     from clobbering the container-installed node_modules.
+#   - .next: anonymous volume keeps Next's dev build output inside the
+#     container instead of round-tripping through the Windows/Docker Desktop
+#     bind-mount boundary — writing .next/static across that boundary is a
+#     known source of "ENOENT: no such file or directory, mkdir '.../.next/static'"
+#     errors on Windows. Same fix pattern as node_modules above.
 #   - postgres_data: persists the local dev DB across restarts. A fresh
 #     Postgres now boots with an EMPTY database (no docker-entrypoint-initdb.d
 #     bootstrap SQL) — Alembic is the single schema source of truth for both
@@ -50,6 +55,38 @@ services:
       retries: 5
     restart: unless-stopped
 
+  # Dev-only DB browser for the local Postgres above — http://localhost:8085,
+  # log in with System: PostgreSQL, Server: postgres, User: postgres,
+  # Password: devpassword, Database: jobnok. Not in the base/prod compose file
+  # on purpose — no DB admin UI should ever be exposed in production.
+  adminer:
+    image: adminer:latest
+    ports:
+      - "8085:8080"
+    networks:
+      - backend-net
+    restart: unless-stopped
+
+  # Local throwaway Redis for ARQ's queue (api enqueues, worker consumes) —
+  # dev-only, keeps ARQ's constant polling off the real Upstash instance so it
+  # doesn't burn the shared command quota. Upstash itself stays untouched and
+  # keeps serving app/services/cache.py's rate-limiting/caching in every
+  # environment — this container only replaces REDIS_URL's target, nothing else.
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6380:6379"
+    volumes:
+      - redis_data:/data
+    networks:
+      - backend-net
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+    restart: unless-stopped
+
   api:
     build:
       context: ./apps/api
@@ -63,13 +100,20 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
+      redis:
+        condition: service_healthy
     environment:
       - APP_URL=http://localhost:3000
       - DATABASE_URL=postgresql://postgres:devpassword@postgres:5432/jobnok
       # Local throwaway Postgres has no pooler — same URL serves both roles.
       - MIGRATIONS_DATABASE_URL=postgresql://postgres:devpassword@postgres:5432/jobnok
+      # Overrides the Upstash REDIS_URL from apps/api/.env — ARQ (enqueue side,
+      # via app.state.arq_pool) talks to local Redis in dev. Upstash-specific
+      # UPSTASH_REDIS_REST_URL/TOKEN are untouched and still come from .env,
+      # since app/services/cache.py's rate-limiting/caching keeps using Upstash.
+      - REDIS_URL=redis://redis:6379/0
 
-  celery:
+  worker:
     build:
       context: ./apps/api
       dockerfile: Dockerfile.dev
@@ -79,8 +123,12 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
+      redis:
+        condition: service_healthy
     environment:
       - DATABASE_URL=postgresql://postgres:devpassword@postgres:5432/jobnok
+      # See the api service's identical override above — same reason.
+      - REDIS_URL=redis://redis:6379/0
 
   nextjs:
     build:
@@ -89,6 +137,13 @@ services:
     volumes:
       - ./apps/web:/repo/apps/web
       - /repo/apps/web/node_modules
+      - /repo/apps/web/.next
+      # @jobnok/ui is a workspace package consumed as raw TS source (no build
+      # step) — Dockerfile.dev doesn't COPY it in, so it must be bind-mounted
+      # like the app itself, or only package.json (copied at image build time)
+      # would be visible and every @jobnok/ui import would 404 at runtime.
+      - ./packages/ui:/repo/packages/ui
+      - /repo/packages/ui/node_modules
     ports:
       - "3000:3000"
     environment:
@@ -96,7 +151,49 @@ services:
       # Server-side only — used by Next.js rewrites to reach the API inside Docker.
       # Never exposed to the browser (no NEXT_PUBLIC_ prefix).
       - BACKEND_URL=http://api:8000
+    # The base docker-compose.yml's 512M/1.0cpu limit is sized for a built
+    # production server — dev-mode webpack/HMR needs much more headroom, or
+    # compiles thrash at the memory ceiling and crawl (observed at 97%+ usage).
+    deploy:
+      resources:
+        limits:
+          memory: 3G
+          cpus: "2.0"
+
+  marketing:
+    build:
+      context: .
+      dockerfile: apps/marketing/Dockerfile.dev
+    volumes:
+      - ./apps/marketing:/repo/apps/marketing
+      - /repo/apps/marketing/node_modules
+      - /repo/apps/marketing/.next
+      # See the nextjs service's identical mounts above — same reasons.
+      - ./packages/ui:/repo/packages/ui
+      - /repo/packages/ui/node_modules
+    ports:
+      - "3001:3001"
+    environment:
+      # Points at the dashboard app — marketing's Log in/Sign up/tool links
+      # are absolute URLs since the two apps live on separate subdomains in prod.
+      - NEXT_PUBLIC_APP_URL=http://localhost:3000
+    # Overrides the base docker-compose.yml healthcheck, which checks port 3000
+    # (the prod `next start` port). Dev mode runs `next dev -p 3001` instead —
+    # without this override the healthcheck always fails against a port nothing
+    # is listening on, even though the dev server is fine.
+    healthcheck:
+      test: [ "CMD-SHELL", "node -e \"fetch('http://localhost:3001/').then(r => process.exit(r.ok ? 0 : 1)).catch(() => process.exit(1))\"" ]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+    deploy:
+      resources:
+        limits:
+          memory: 1G
+          cpus: "1.0"
 
 volumes:
   api_venv:
   postgres_data:
+  redis_data:

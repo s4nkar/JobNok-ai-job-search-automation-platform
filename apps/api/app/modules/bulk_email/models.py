@@ -1,7 +1,7 @@
 import uuid
 from datetime import datetime
 
-from sqlalchemy import ForeignKey, Index, Integer, Text
+from sqlalchemy import ForeignKey, Index, Integer, Text, UniqueConstraint
 from sqlalchemy.dialects.postgresql import JSONB, TIMESTAMP, UUID as PG_UUID
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -32,6 +32,7 @@ class EmailRecipient(Base, UUIDPKMixin):
     __table_args__ = (
         Index("recipients_campaign_id_idx", "campaign_id"),
         Index("recipients_status_idx", "status"),
+        UniqueConstraint("campaign_id", "email", name="email_recipients_campaign_id_email_key"),
     )
 
     # No created_at / user_id column — ownership is derived transitively through campaign_id.

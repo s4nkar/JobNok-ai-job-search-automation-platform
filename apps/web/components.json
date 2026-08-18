@@ -12,8 +12,8 @@
   },
   "aliases": {
     "components": "@/components",
-    "utils": "@/lib/utils",
-    "ui": "@/components/ui",
+    "utils": "@jobnok/ui",
+    "ui": "@jobnok/ui",
     "lib": "@/lib",
     "hooks": "@/lib/hooks"
   }

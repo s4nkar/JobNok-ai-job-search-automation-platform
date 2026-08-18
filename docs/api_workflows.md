@@ -66,9 +66,9 @@ JobNok provides 11 distinct AI-powered tools and features. All tools communicate
 - **Workflow:**
   1. User uploads a CSV and defines an email template.
   2. The frontend creates an `email_campaigns` record and populates `email_recipients` via FastAPI.
-  3. FastAPI offloads the sending task to a **Celery Worker**.
-  4. The Celery worker picks up recipients, processes template variables, and sends emails via the **Resend API**.
-  5. A configurable delay (`NEXT_PUBLIC_BULK_EMAIL_MIN_DELAY`) is applied between emails to avoid spam filters. Statuses are updated in the database for a live frontend dashboard.
+  3. FastAPI enqueues one job per recipient to the **ARQ Worker**.
+  4. The ARQ worker picks up recipients, processes template variables, and sends emails via the **Resend API**, throttled by a Redis token bucket (`bulk_email_sends_per_second`) shared across all campaigns.
+  5. Statuses are updated in the database for a live frontend dashboard.
 
 ## 9. Recent Job Search (`/job-search`)
 - **Action:** Track jobs discovered or applied to, integrating seamlessly with the Follow-Up Tracker.

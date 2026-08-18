@@ -4,17 +4,22 @@ import { useState, useEffect, useCallback } from 'react'
 import Link from 'next/link'
 import { usePathname, useRouter } from 'next/navigation'
 import { useClerk, useUser } from '@clerk/nextjs'
-import { cn } from '@/lib/utils'
+import { useQuery } from '@tanstack/react-query'
+import { cn } from '@jobnok/ui'
 import {
   FileText, Linkedin, FileSearch, PenLine, MessageSquare,
   Briefcase, Compass, DollarSign, Mail, Radar, LogOut,
-  Settings, ChevronLeft, ChevronRight, Check, X, LayoutDashboard,
+  Settings, ChevronLeft, ChevronRight, Check, X, LayoutDashboard, Search,
 } from 'lucide-react'
-import { useToast } from '@/components/ui/use-toast'
-import { apiFetch } from '@/lib/api'
+import { useToast } from '@jobnok/ui'
+import { apiGet } from '@/lib/api'
+import { queryKeys } from '@/lib/queryKeys'
+import { UserProfile } from '@/lib/types'
+import { useSidebar } from '@/components/providers/SidebarProvider'
 
 const navItems = [
   { href: '/dashboard', label: 'Dashboard', icon: LayoutDashboard },
+  { href: '/recent-job-search', label: 'Recent Job Search', icon: Search },
   { href: '/templates', label: 'Smart Templates', icon: FileText },
   { href: '/linkedin-fill', label: 'LinkedIn Auto-Fill', icon: Linkedin },
   { href: '/resume-tailor', label: 'Resume Tailor', icon: FileSearch },
@@ -34,11 +39,9 @@ export function Sidebar() {
   const { signOut } = useClerk()
   const { user } = useUser()
 
-  const [userName, setUserName] = useState<string | null>(null)
   const [userEmail, setUserEmail] = useState<string | null>(null)
-  const [photoUrl, setPhotoUrl] = useState<string | null>(null)
   const [confirmSignOut, setConfirmSignOut] = useState(false)
-  const [collapsed, setCollapsed] = useState(false)
+  const { collapsed, toggleCollapsed: toggleCollapsedShared } = useSidebar()
 
   // Single fixed-position tooltip — bypasses all overflow clipping
   const [tooltip, setTooltip] = useState<{ label: string; y: number } | null>(null)
@@ -49,32 +52,21 @@ export function Sidebar() {
   }, [])
   const hideTip = useCallback(() => setTooltip(null), [])
 
-  useEffect(() => {
-    if (localStorage.getItem('sidebar_collapsed') === 'true') setCollapsed(true)
-  }, [])
-
   function toggleCollapsed() {
-    setCollapsed(prev => {
-      const next = !prev
-      localStorage.setItem('sidebar_collapsed', String(next))
-      if (next) setTooltip(null)   // clear any visible tip on collapse
-      return next
-    })
+    if (!collapsed) setTooltip(null)   // clear any visible tip when collapsing
+    toggleCollapsedShared()
   }
 
   useEffect(() => {
     if (user) setUserEmail(user.primaryEmailAddress?.emailAddress ?? null)
   }, [user])
 
-  useEffect(() => {
-    apiFetch('/api/profile')
-      .then(r => r.json())
-      .then(p => {
-        setUserName(p.full_name || null)
-        setPhotoUrl(p.cv_photo_url || null)
-      })
-      .catch(() => { })
-  }, [])
+  const { data: profile } = useQuery({
+    queryKey: queryKeys.profile,
+    queryFn: () => apiGet<UserProfile>('/api/profile'),
+  })
+  const userName = profile?.full_name || null
+  const photoUrl = profile?.cv_photo_url || null
 
   async function doSignOut() {
     await signOut()

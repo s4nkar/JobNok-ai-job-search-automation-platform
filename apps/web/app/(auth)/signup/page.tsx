@@ -7,11 +7,11 @@ import { useSignUp } from '@clerk/nextjs'
 import { useForm } from 'react-hook-form'
 import { zodResolver } from '@hookform/resolvers/zod'
 import { z } from 'zod'
-import { Button } from '@/components/ui/button'
-import { Input } from '@/components/ui/input'
-import { Label } from '@/components/ui/label'
+import { Button } from '@jobnok/ui'
+import { Input } from '@jobnok/ui'
+import { Label } from '@jobnok/ui'
 import { Loader2 } from 'lucide-react'
-import { useToast } from '@/components/ui/use-toast'
+import { useToast } from '@jobnok/ui'
 
 const schema = z.object({
   full_name: z.string().min(2, 'Enter your name'),

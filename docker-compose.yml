@@ -10,6 +10,8 @@ services:
         condition: service_healthy
       nextjs:
         condition: service_healthy
+      marketing:
+        condition: service_healthy
     networks:
       - frontend-net
       - backend-net
@@ -37,10 +39,10 @@ services:
           cpus: "1.0"
     restart: unless-stopped
 
-  celery:
+  worker:
     build:
       context: ./apps/api
-    command: celery -A app.workers.celery_app worker --loglevel=info
+    command: arq app.workers.arq_worker.WorkerSettings
     env_file:
       - ./apps/api/.env
     networks:
@@ -91,6 +93,29 @@ services:
         limits:
           memory: 512M
           cpus: "1.0"
+    restart: unless-stopped
+
+  marketing:
+    build:
+      context: .
+      dockerfile: apps/marketing/Dockerfile
+      args:
+        NEXT_PUBLIC_APP_URL: ${NEXT_PUBLIC_APP_URL}
+    expose:
+      - "3000"
+    networks:
+      - frontend-net
+    healthcheck:
+      test: [ "CMD-SHELL", "node -e \"fetch('http://localhost:3000/').then(r => process.exit(r.ok ? 0 : 1)).catch(() => process.exit(1))\"" ]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 40s
+    deploy:
+      resources:
+        limits:
+          memory: 256M
+          cpus: "0.5"
     restart: unless-stopped
 
 networks:

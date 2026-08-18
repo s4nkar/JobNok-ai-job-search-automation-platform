@@ -3,7 +3,8 @@
 import React from 'react'
 import Link from 'next/link'
 import { useRouter } from 'next/navigation'
-import { useEffect, useRef, useState } from 'react'
+import { useRef, useState } from 'react'
+import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { useForm } from 'react-hook-form'
 import { zodResolver } from '@hookform/resolvers/zod'
 import { z } from 'zod'
@@ -16,14 +17,14 @@ import {
   StartupHuntOpportunityStatus,
   OpportunityArtifact,
 } from '@/lib/types'
-import { isOverdue, formatDate, formatCurrency, cn } from '@/lib/utils'
-import { Button } from '@/components/ui/button'
-import { Input } from '@/components/ui/input'
-import { Textarea } from '@/components/ui/textarea'
-import { Label } from '@/components/ui/label'
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
-import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from '@/components/ui/dialog'
-import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
+import { isOverdue, formatDate, formatCurrency, cn } from '@jobnok/ui'
+import { Button } from '@jobnok/ui'
+import { Input } from '@jobnok/ui'
+import { Textarea } from '@jobnok/ui'
+import { Label } from '@jobnok/ui'
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@jobnok/ui'
+import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from '@jobnok/ui'
+import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@jobnok/ui'
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -31,8 +32,8 @@ import {
   DropdownMenuLabel,
   DropdownMenuSeparator,
   DropdownMenuTrigger,
-} from '@/components/ui/dropdown-menu'
-import { useToast } from '@/components/ui/use-toast'
+} from '@jobnok/ui'
+import { useToast } from '@jobnok/ui'
 import {
   Plus, Pencil, Trash2, Briefcase, Loader2, AlertCircle, TrendingUp, CheckCircle,
   Clock, ExternalLink, Compass, Mail, MapPin, MoreHorizontal, FileSearch, PenLine,
@@ -40,7 +41,8 @@ import {
   StopCircle, Building2, BookmarkCheck, ScanSearch,
 } from 'lucide-react'
 import { ScoutCompany, ScoutContact, ScoutCrawlStatus } from '@/lib/types'
-import { apiFetch } from '@/lib/api'
+import { apiFetch, apiGet } from '@/lib/api'
+import { queryKeys } from '@/lib/queryKeys'
 
 const schema = z.object({
   company: z.string().min(1, 'Required'),
@@ -58,7 +60,7 @@ const today = new Date().toISOString().split('T')[0]
 
 const STARTUP_STATUS_META: Record<StartupHuntOpportunityStatus, { label: string; classes: string }> = {
   saved: { label: 'Saved', classes: 'bg-slate-100 text-slate-700' },
-  contacted: { label: 'Contacted', classes: 'bg-pink-100 text-pink-700' },
+  contacted: { label: 'Contacted', classes: 'bg-indigo-100 text-indigo-700' },
   applied: { label: 'Applied', classes: 'bg-emerald-100 text-emerald-700' },
   skipped: { label: 'Skipped', classes: 'bg-gray-100 text-gray-500' },
 }
@@ -66,51 +68,66 @@ const STARTUP_STATUS_META: Record<StartupHuntOpportunityStatus, { label: string;
 const LEAD_STATUS_ORDER: StartupHuntOpportunityStatus[] = ['saved', 'contacted', 'applied', 'skipped']
 
 const ARTIFACT_META: Record<string, { label: string; icon: React.ElementType; color: string; tool: string }> = {
-  resume_analysis: { label: 'Resume Analysis', icon: FileSearch, color: 'text-violet-600', tool: 'resume-tailor' },
-  cover_letter: { label: 'Cover Letter', icon: PenLine, color: 'text-pink-600', tool: 'cover-letter' },
-  interview_prep: { label: 'Interview Prep', icon: MessageSquare, color: 'text-teal-600', tool: 'interview-prep' },
+  resume_analysis: { label: 'Resume Analysis', icon: FileSearch, color: 'text-slate-600', tool: 'resume-tailor' },
+  cover_letter: { label: 'Cover Letter', icon: PenLine, color: 'text-slate-600', tool: 'cover-letter' },
+  interview_prep: { label: 'Interview Prep', icon: MessageSquare, color: 'text-slate-600', tool: 'interview-prep' },
 }
 
 const SCOUT_STATUS_META: Record<ScoutCrawlStatus, { label: string; classes: string }> = {
   pending:  { label: 'Pending',   classes: 'bg-slate-100 text-slate-600' },
-  crawling: { label: 'Crawling…', classes: 'bg-yellow-100 text-yellow-700' },
+  crawling: { label: 'Crawling…', classes: 'bg-indigo-100 text-indigo-700' },
   enriched: { label: 'Enriched',  classes: 'bg-emerald-100 text-emerald-700' },
-  partial:  { label: 'Partial',   classes: 'bg-orange-100 text-orange-700' },
+  partial:  { label: 'Partial',   classes: 'bg-amber-100 text-amber-700' },
   failed:   { label: 'Failed',    classes: 'bg-red-100 text-red-600' },
 }
 
+// Funding stage is categorical, not a status signal — one neutral treatment
+// avoids borrowing red/emerald/amber's status meaning (e.g. "Series C" isn't
+// bad, "Series A" isn't good) for data that has no such semantic ordering.
 const SCOUT_STAGE_PILL: Record<string, string> = {
-  'Pre-Seed': 'bg-purple-50 text-purple-700 ring-purple-200',
-  'Seed':     'bg-blue-50   text-blue-700   ring-blue-200',
-  'Series A': 'bg-emerald-50 text-emerald-700 ring-emerald-200',
-  'Series B': 'bg-amber-50  text-amber-700  ring-amber-200',
-  'Series C': 'bg-red-50    text-red-700    ring-red-200',
-  'Series C+':'bg-red-50    text-red-700    ring-red-200',
-  'Angel':    'bg-pink-50   text-pink-700   ring-pink-200',
+  'Pre-Seed': 'bg-slate-50 text-slate-700 ring-slate-200',
+  'Seed':     'bg-slate-50 text-slate-700 ring-slate-200',
+  'Series A': 'bg-slate-50 text-slate-700 ring-slate-200',
+  'Series B': 'bg-slate-50 text-slate-700 ring-slate-200',
+  'Series C': 'bg-slate-50 text-slate-700 ring-slate-200',
+  'Series C+':'bg-slate-50 text-slate-700 ring-slate-200',
+  'Angel':    'bg-slate-50 text-slate-700 ring-slate-200',
 }
 
 export default function TrackerPage() {
   const router = useRouter()
+  const queryClient = useQueryClient()
   const [tab, setTab] = useState<'applications' | 'leads' | 'scout'>('applications')
-  const [applications, setApplications] = useState<JobApplication[]>([])
-  const [leads, setLeads] = useState<StartupHuntSavedOpportunity[]>([])
-  const [scoutCompanies, setScoutCompanies] = useState<ScoutCompany[]>([])
-  const [scoutLoading, setScoutLoading] = useState(false)
+
+  const { data: applications = [], isLoading: appsLoading } = useQuery({
+    queryKey: queryKeys.tracker,
+    queryFn: () => apiGet<JobApplication[]>('/api/tracker'),
+  })
+  const { data: leads = [], isLoading: leadsLoading } = useQuery({
+    queryKey: queryKeys.startupHuntOpportunities,
+    queryFn: () => apiGet<StartupHuntSavedOpportunity[]>('/api/startup-hunt/opportunities'),
+  })
+  const { data: artifactCounts = {} } = useQuery({
+    queryKey: queryKeys.startupHuntArtifactCounts,
+    queryFn: () => apiGet<Record<string, number>>('/api/startup-hunt/artifact-counts'),
+  })
+  const { data: scoutCompanies = [], isLoading: scoutLoading } = useQuery({
+    queryKey: queryKeys.startupScoutCompanies,
+    queryFn: () => apiGet<ScoutCompany[]>('/api/startup-scout/companies'),
+    enabled: tab === 'scout',
+  })
+
   const [crawlingIds, setCrawlingIds] = useState<Set<string>>(new Set())
   const [stoppingIds, setStoppingIds] = useState<Set<string>>(new Set())
   const [expandedContacts, setExpandedContacts] = useState<Record<string, boolean>>({})
   const [contactsCache, setContactsCache] = useState<Record<string, ScoutContact[]>>({})
   const [contactsLoading, setContactsLoading] = useState<Record<string, boolean>>({})
-  const scoutLoadedRef = useRef(false)
   const crawlIntervalsRef = useRef<Record<string, ReturnType<typeof setInterval>>>({})
-  const [appsLoading, setAppsLoading] = useState(true)
-  const [leadsLoading, setLeadsLoading] = useState(true)
   const [showForm, setShowForm] = useState(false)
   const [editing, setEditing] = useState<JobApplication | null>(null)
   const [saving, setSaving] = useState(false)
   const [updatingLeadId, setUpdatingLeadId] = useState<string | null>(null)
   const [leadStatusFilter, setLeadStatusFilter] = useState<StartupHuntOpportunityStatus | 'all'>('all')
-  const [artifactCounts, setArtifactCounts] = useState<Record<string, number>>({})
   const [expandedDocs, setExpandedDocs] = useState<Record<string, boolean>>({})
   const [docsCache, setDocsCache] = useState<Record<string, OpportunityArtifact[]>>({})
   const [docsLoading, setDocsLoading] = useState<Record<string, boolean>>({})
@@ -122,47 +139,17 @@ export default function TrackerPage() {
   })
   const watchStatus = watch('status')
 
-  useEffect(() => {
-    fetchApplications()
-    fetchLeads()
-    // Scout tab is lazy-loaded on first open (see tab effect below)
-    return () => {
-      // Clean up any running poll intervals on unmount
-      Object.values(crawlIntervalsRef.current).forEach(clearInterval)
-    }
-  }, [])
-
-  // Lazy-load scout companies on first switch to the scout tab
-  useEffect(() => {
-    if (tab === 'scout' && !scoutLoadedRef.current) {
-      scoutLoadedRef.current = true
-      fetchScoutCompanies()
-    }
-  }, [tab])
-
-  async function fetchApplications() {
-    setAppsLoading(true)
-    const res = await apiFetch('/api/tracker')
-    if (res.ok) setApplications(await res.json())
-    setAppsLoading(false)
+  function setScoutCompanies(updater: (prev: ScoutCompany[]) => ScoutCompany[]) {
+    queryClient.setQueryData<ScoutCompany[]>(queryKeys.startupScoutCompanies, (prev) => updater(prev || []))
   }
-
-  async function fetchLeads() {
-    setLeadsLoading(true)
-    const [leadsRes, countsRes] = await Promise.all([
-      apiFetch('/api/startup-hunt/opportunities'),
-      apiFetch('/api/startup-hunt/artifact-counts'),
-    ])
-    if (leadsRes.ok) setLeads(await leadsRes.json())
-    if (countsRes.ok) setArtifactCounts(await countsRes.json())
-    setLeadsLoading(false)
+  function setApplications(updater: (prev: JobApplication[]) => JobApplication[]) {
+    queryClient.setQueryData<JobApplication[]>(queryKeys.tracker, (prev) => updater(prev || []))
   }
-
-  async function fetchScoutCompanies() {
-    setScoutLoading(true)
-    const res = await apiFetch('/api/startup-scout/companies')
-    if (res.ok) setScoutCompanies(await res.json())
-    setScoutLoading(false)
+  function setLeads(updater: (prev: StartupHuntSavedOpportunity[]) => StartupHuntSavedOpportunity[]) {
+    queryClient.setQueryData<StartupHuntSavedOpportunity[]>(queryKeys.startupHuntOpportunities, (prev) => updater(prev || []))
+  }
+  function setArtifactCounts(updater: (prev: Record<string, number>) => Record<string, number>) {
+    queryClient.setQueryData<Record<string, number>>(queryKeys.startupHuntArtifactCounts, (prev) => updater(prev || {}))
   }
 
   function _clearCrawlInterval(id: string) {
@@ -276,7 +263,7 @@ export default function TrackerPage() {
     const url = editing ? `/api/tracker/${editing.id}` : '/api/tracker'
     const res = await apiFetch(url, { method, headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(data) })
     if (res.ok) {
-      await fetchApplications()
+      await queryClient.invalidateQueries({ queryKey: queryKeys.tracker })
       setShowForm(false)
       toast({ title: editing ? 'Application updated' : 'Application added' })
     } else {
@@ -371,8 +358,8 @@ export default function TrackerPage() {
           </div>
         </div>
         {tab === 'applications' && (
-          <Button onClick={openCreate} className="gradient-brand text-white border-0 shadow-brand-sm hover:opacity-90 transition-opacity rounded-xl h-10 px-5">
-            <Plus className="h-4 w-4 mr-2" /> Add Application
+          <Button onClick={openCreate} className="gradient-brand text-white border-0 shadow-sm hover:opacity-90 transition-opacity rounded-xl h-9 text-sm px-5">
+            <Plus className="h-3.5 w-3.5 mr-2" /> Add Application
           </Button>
         )}
       </div>
@@ -381,8 +368,8 @@ export default function TrackerPage() {
       <div className="flex gap-1 bg-slate-100 rounded-xl p-1 w-fit mb-6">
         {([
           ['applications', Briefcase, 'Applications', applications.length, 'bg-indigo-100 text-indigo-700'],
-          ['leads', Compass, 'Startup Leads', leads.length, 'bg-orange-100 text-orange-700'],
-          ['scout', Radar, 'Startup Scout', scoutCompanies.length, 'bg-cyan-100 text-cyan-700'],
+          ['leads', Compass, 'Startup Leads', leads.length, 'bg-indigo-100 text-indigo-700'],
+          ['scout', Radar, 'Startup Scout', scoutCompanies.length, 'bg-indigo-100 text-indigo-700'],
         ] as const).map(([id, Icon, label, count, badgeClass]) => (
           <button
             key={id}
@@ -408,11 +395,11 @@ export default function TrackerPage() {
           <div className="grid grid-cols-4 gap-4 mb-6">
             {[
               { label: 'Total', value: applications.length, Icon: Briefcase, iconBg: 'bg-slate-100', iconColor: 'text-slate-600' },
-              { label: 'Active', value: active.length, Icon: TrendingUp, iconBg: 'bg-blue-100', iconColor: 'text-blue-600' },
+              { label: 'Active', value: active.length, Icon: TrendingUp, iconBg: 'bg-indigo-100', iconColor: 'text-indigo-600' },
               { label: 'Overdue', value: overdue.length, Icon: AlertCircle, iconBg: 'bg-red-100', iconColor: 'text-red-600' },
               { label: 'Offers', value: offers.length, Icon: CheckCircle, iconBg: 'bg-emerald-100', iconColor: 'text-emerald-600' },
             ].map(({ label, value, Icon, iconBg, iconColor }) => (
-              <div key={label} className="bg-white rounded-2xl border border-slate-100 shadow-card p-5 flex items-center gap-4">
+              <div key={label} className="bg-white rounded-2xl border border-slate-100 shadow-sm p-5 flex items-center gap-4">
                 <div className={cn('w-10 h-10 rounded-xl flex items-center justify-center flex-shrink-0', iconBg)}>
                   <Icon className={cn('h-5 w-5', iconColor)} />
                 </div>
@@ -424,7 +411,7 @@ export default function TrackerPage() {
             ))}
           </div>
 
-          <div className="bg-white rounded-2xl border border-slate-100 shadow-card overflow-hidden">
+          <div className="bg-white rounded-2xl border border-slate-100 shadow-sm overflow-hidden">
             {appsLoading ? (
               <div className="flex items-center justify-center h-48">
                 <div className="flex flex-col items-center gap-3">
@@ -479,7 +466,7 @@ export default function TrackerPage() {
                             <button
                               onClick={() => router.push(`/cover-letter?company=${encodeURIComponent(app.company)}&role=${encodeURIComponent(app.role)}`)}
                               title="Generate Cover Letter"
-                              className="h-7 w-7 rounded-lg flex items-center justify-center text-slate-400 hover:text-pink-600 hover:bg-pink-50 transition-colors"
+                              className="h-7 w-7 rounded-lg flex items-center justify-center text-slate-400 hover:text-indigo-600 hover:bg-indigo-50 transition-colors"
                             >
                               <PenLine className="h-3.5 w-3.5" />
                             </button>
@@ -507,14 +494,14 @@ export default function TrackerPage() {
           <div className="grid grid-cols-4 gap-4 mb-6">
             {[
               { label: 'Saved', value: leadCounts.saved, classes: 'bg-slate-100 text-slate-600' },
-              { label: 'Contacted', value: leadCounts.contacted, classes: 'bg-pink-100 text-pink-600' },
+              { label: 'Contacted', value: leadCounts.contacted, classes: 'bg-indigo-100 text-indigo-600' },
               { label: 'Applied', value: leadCounts.applied, classes: 'bg-emerald-100 text-emerald-600' },
               { label: 'Skipped', value: leadCounts.skipped, classes: 'bg-gray-100 text-gray-500' },
             ].map(({ label, value, classes }) => (
               <button
                 key={label}
                 onClick={() => setLeadStatusFilter(leadStatusFilter === label.toLowerCase() as StartupHuntOpportunityStatus ? 'all' : label.toLowerCase() as StartupHuntOpportunityStatus)}
-                className={cn('bg-white rounded-2xl border shadow-card p-5 flex items-center gap-4 text-left transition-all hover:shadow-md',
+                className={cn('bg-white rounded-2xl border shadow-sm p-5 flex items-center gap-4 text-left transition-all hover:shadow-md',
                   leadStatusFilter === label.toLowerCase() ? 'border-indigo-300 ring-1 ring-indigo-200' : 'border-slate-100')}
               >
                 <div className={cn('w-10 h-10 rounded-xl flex items-center justify-center flex-shrink-0 text-sm font-bold', classes)}>{value}</div>
@@ -540,18 +527,18 @@ export default function TrackerPage() {
             ))}
           </div>
 
-          <div className="bg-white rounded-2xl border border-slate-100 shadow-card overflow-hidden">
+          <div className="bg-white rounded-2xl border border-slate-100 shadow-sm overflow-hidden">
             {leadsLoading ? (
               <div className="flex items-center justify-center h-48">
                 <div className="flex flex-col items-center gap-3">
-                  <Loader2 className="h-8 w-8 animate-spin text-orange-400" />
+                  <Loader2 className="h-8 w-8 animate-spin text-indigo-400" />
                   <p className="text-sm text-slate-400">Loading startup leads…</p>
                 </div>
               </div>
             ) : filteredLeads.length === 0 ? (
               <div className="flex flex-col items-center justify-center h-56">
-                <div className="w-14 h-14 rounded-2xl bg-orange-50 flex items-center justify-center mb-4">
-                  <Compass className="h-7 w-7 text-orange-200" />
+                <div className="w-14 h-14 rounded-2xl bg-indigo-50 flex items-center justify-center mb-4">
+                  <Compass className="h-7 w-7 text-indigo-200" />
                 </div>
                 <p className="font-medium text-slate-600">No leads here yet</p>
                 <p className="text-sm text-slate-400 mt-1">
@@ -592,7 +579,7 @@ export default function TrackerPage() {
                             </span>
                           </TableCell>
                           <TableCell>
-                            <span className="inline-flex items-center px-2 py-0.5 rounded-md text-[10px] font-semibold bg-orange-50 text-orange-700 border border-orange-100">
+                            <span className="inline-flex items-center px-2 py-0.5 rounded-md text-[10px] font-semibold bg-slate-100 text-slate-600 border border-slate-200">
                               {lead.source_name}
                             </span>
                           </TableCell>
@@ -617,7 +604,7 @@ export default function TrackerPage() {
                               className={cn(
                                 'flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-semibold border transition-colors',
                                 docCount > 0
-                                  ? 'bg-violet-50 text-violet-700 border-violet-200 hover:bg-violet-100'
+                                  ? 'bg-indigo-50 text-indigo-700 border-indigo-200 hover:bg-indigo-100'
                                   : 'bg-slate-50 text-slate-400 border-slate-200 hover:bg-slate-100'
                               )}
                             >
@@ -648,21 +635,21 @@ export default function TrackerPage() {
                                 <DropdownMenuContent align="end" className="w-48">
                                   <DropdownMenuLabel>Use with tools</DropdownMenuLabel>
                                   <DropdownMenuItem onClick={() => router.push(`/resume-tailor?opportunity_id=${lead.id}`)}>
-                                    <FileSearch className="h-3.5 w-3.5 text-violet-500" />
+                                    <FileSearch className="h-3.5 w-3.5 text-slate-500" />
                                     Resume Tailor
                                   </DropdownMenuItem>
                                   <DropdownMenuItem onClick={() => router.push(`/cover-letter?opportunity_id=${lead.id}`)}>
-                                    <PenLine className="h-3.5 w-3.5 text-pink-500" />
+                                    <PenLine className="h-3.5 w-3.5 text-slate-500" />
                                     Cover Letter
                                   </DropdownMenuItem>
                                   <DropdownMenuItem onClick={() => router.push(`/interview-prep?opportunity_id=${lead.id}`)}>
-                                    <MessageSquare className="h-3.5 w-3.5 text-teal-500" />
+                                    <MessageSquare className="h-3.5 w-3.5 text-slate-500" />
                                     Interview Prep
                                   </DropdownMenuItem>
                                   <DropdownMenuSeparator />
                                   {lead.opportunity_kind === 'outreach_lead' && (
                                     <DropdownMenuItem onClick={() => updateLeadStatus(lead, 'contacted')} disabled={lead.opportunity_status === 'contacted'}>
-                                      <Mail className="h-3.5 w-3.5 text-pink-400" />
+                                      <Mail className="h-3.5 w-3.5 text-indigo-500" />
                                       Mark Contacted
                                     </DropdownMenuItem>
                                   )}
@@ -778,8 +765,8 @@ export default function TrackerPage() {
                 label: 'Partial / Failed',
                 value: scoutCompanies.filter((c) => ['partial', 'failed'].includes(c.crawl_status)).length,
                 icon: AlertCircle,
-                iconBg: 'bg-orange-100',
-                iconColor: 'text-orange-500',
+                iconBg: 'bg-amber-100',
+                iconColor: 'text-amber-500',
               },
             ].map(({ label, value, icon: Icon, iconBg, iconColor }) => (
               <div key={label} className="bg-white rounded-2xl border border-slate-100 shadow-sm p-5 flex items-center gap-4">
@@ -801,7 +788,7 @@ export default function TrackerPage() {
             {scoutLoading ? (
               <div className="p-4 space-y-3">
                 <div className="flex items-center gap-3 p-3 rounded-xl bg-slate-50/60">
-                  <Loader2 className="h-4 w-4 animate-spin text-cyan-400 flex-shrink-0" />
+                  <Loader2 className="h-4 w-4 animate-spin text-indigo-400 flex-shrink-0" />
                   <p className="text-sm text-slate-500">Loading scout companies…</p>
                 </div>
                 {Array.from({ length: 3 }).map((_, i) => (
@@ -820,13 +807,13 @@ export default function TrackerPage() {
             ) : scoutCompanies.length === 0 ? (
               /* Empty state */
               <div className="flex flex-col items-center justify-center py-20 px-6 text-center">
-                <div className="w-14 h-14 rounded-2xl bg-cyan-50 flex items-center justify-center mb-4">
-                  <Radar className="h-7 w-7 text-cyan-300" />
+                <div className="w-14 h-14 rounded-2xl bg-indigo-50 flex items-center justify-center mb-4">
+                  <Radar className="h-7 w-7 text-indigo-300" />
                 </div>
                 <p className="font-semibold text-slate-700 text-base">No companies saved yet</p>
                 <p className="text-sm text-slate-400 mt-1 max-w-xs leading-relaxed">
                   Discover startups in{' '}
-                  <button onClick={() => router.push('/startup-scout')} className="text-cyan-600 hover:underline font-medium">
+                  <button onClick={() => router.push('/startup-scout')} className="text-indigo-600 hover:underline font-medium">
                     Startup Scout
                   </button>
                   , then save them here to crawl for founder contacts.
@@ -862,13 +849,13 @@ export default function TrackerPage() {
                           {/* Company cell — avatar + name + description */}
                           <TableCell className="py-3.5">
                             <div className="flex items-center gap-3">
-                              <div className="w-9 h-9 rounded-xl bg-cyan-50 border border-cyan-100 flex items-center justify-center flex-shrink-0">
-                                <Building2 className="h-4 w-4 text-cyan-500" />
+                              <div className="w-9 h-9 rounded-xl bg-indigo-50 border border-indigo-100 flex items-center justify-center flex-shrink-0">
+                                <Building2 className="h-4 w-4 text-indigo-500" />
                               </div>
                               <div className="min-w-0">
                                 {company.website ? (
                                   <Link href={company.website} target="_blank"
-                                    className="text-sm font-semibold text-slate-800 hover:text-cyan-600 hover:underline transition-colors leading-snug">
+                                    className="text-sm font-semibold text-slate-800 hover:text-indigo-600 hover:underline transition-colors leading-snug">
                                     {company.name}
                                   </Link>
                                 ) : (
@@ -910,9 +897,9 @@ export default function TrackerPage() {
                             <span className={cn('inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[11px] font-semibold ring-1 ring-inset',
                               statusMeta.classes,
                               company.crawl_status === 'pending'  && 'ring-slate-200',
-                              company.crawl_status === 'crawling' && 'ring-yellow-200',
+                              company.crawl_status === 'crawling' && 'ring-indigo-200',
                               company.crawl_status === 'enriched' && 'ring-emerald-200',
-                              company.crawl_status === 'partial'  && 'ring-orange-200',
+                              company.crawl_status === 'partial'  && 'ring-amber-200',
                               company.crawl_status === 'failed'   && 'ring-red-200',
                             )}>
                               {isCrawling && <Loader2 className="h-2.5 w-2.5 animate-spin" />}
@@ -928,7 +915,7 @@ export default function TrackerPage() {
                                 className={cn(
                                   'flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[11px] font-semibold border transition-colors',
                                   contactsOpen
-                                    ? 'bg-cyan-50 text-cyan-700 border-cyan-200 hover:bg-cyan-100'
+                                    ? 'bg-indigo-50 text-indigo-700 border-indigo-200 hover:bg-indigo-100'
                                     : 'bg-slate-50 text-slate-500 border-slate-200 hover:bg-slate-100 hover:text-slate-700',
                                 )}
                               >
@@ -962,7 +949,7 @@ export default function TrackerPage() {
                               {canCrawl && (
                                 <button
                                   onClick={() => startCrawl(company)}
-                                  className="h-7 px-2.5 rounded-lg flex items-center gap-1 text-xs font-semibold text-cyan-700 bg-cyan-50 hover:bg-cyan-100 border border-cyan-200 transition-colors"
+                                  className="h-7 px-2.5 rounded-lg flex items-center gap-1 text-xs font-semibold text-indigo-700 bg-indigo-50 hover:bg-indigo-100 border border-indigo-200 transition-colors"
                                 >
                                   <Radar className="h-3 w-3" />
                                   {company.crawl_status === 'pending' ? 'Start Crawl' : 'Re-crawl'}
@@ -1017,7 +1004,7 @@ export default function TrackerPage() {
                                   {canCrawl && (
                                     <button
                                       onClick={() => startCrawl(company)}
-                                      className="mt-3 h-7 px-3 rounded-lg flex items-center gap-1.5 text-xs font-semibold text-cyan-700 bg-cyan-50 hover:bg-cyan-100 border border-cyan-200 transition-colors"
+                                      className="mt-3 h-7 px-3 rounded-lg flex items-center gap-1.5 text-xs font-semibold text-indigo-700 bg-indigo-50 hover:bg-indigo-100 border border-indigo-200 transition-colors"
                                     >
                                       <Radar className="h-3 w-3" /> Re-crawl now
                                     </button>
@@ -1028,7 +1015,7 @@ export default function TrackerPage() {
                                   {contacts.map((contact) => (
                                     <div key={contact.id} className="bg-white rounded-xl border border-slate-200 p-3 flex items-start gap-3">
                                       {/* Avatar */}
-                                      <div className="w-8 h-8 rounded-full bg-cyan-100 flex items-center justify-center flex-shrink-0 text-xs font-bold text-cyan-700">
+                                      <div className="w-8 h-8 rounded-full bg-indigo-100 flex items-center justify-center flex-shrink-0 text-xs font-bold text-indigo-700">
                                         {(contact.name || '?')[0].toUpperCase()}
                                       </div>
 
@@ -1094,7 +1081,7 @@ export default function TrackerPage() {
                                           <span className={cn(
                                             'inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-semibold',
                                             contact.source === 'apollo'
-                                              ? 'bg-violet-50 text-violet-700'
+                                              ? 'bg-slate-100 text-slate-700'
                                               : 'bg-slate-100 text-slate-500',
                                           )}>
                                             {contact.source === 'apollo' ? 'Apollo' : 'Web'}
@@ -1146,46 +1133,46 @@ export default function TrackerPage() {
           <form onSubmit={handleSubmit(onSubmit)} className="space-y-4">
             <div className="grid grid-cols-2 gap-4">
               <div className="space-y-1.5">
-                <Label className="text-sm font-medium">Company</Label>
-                <Input placeholder="Acme Corp" className="rounded-xl" {...register('company')} />
+                <Label>Company</Label>
+                <Input placeholder="Acme Corp" {...register('company')} />
                 {errors.company && <p className="text-xs text-destructive">{errors.company.message}</p>}
               </div>
               <div className="space-y-1.5">
-                <Label className="text-sm font-medium">Role</Label>
-                <Input placeholder="Software Engineer" className="rounded-xl" {...register('role')} />
+                <Label>Role</Label>
+                <Input placeholder="Software Engineer" {...register('role')} />
                 {errors.role && <p className="text-xs text-destructive">{errors.role.message}</p>}
               </div>
             </div>
             <div className="grid grid-cols-2 gap-4">
               <div className="space-y-1.5">
-                <Label className="text-sm font-medium">Applied date</Label>
-                <Input type="date" className="rounded-xl" {...register('applied_at')} />
+                <Label>Applied date</Label>
+                <Input type="date" {...register('applied_at')} />
               </div>
               <div className="space-y-1.5">
-                <Label className="text-sm font-medium">Status</Label>
+                <Label>Status</Label>
                 <Select value={watchStatus} onValueChange={(v) => setValue('status', v as ApplicationStatus)}>
-                  <SelectTrigger className="rounded-xl"><SelectValue /></SelectTrigger>
+                  <SelectTrigger><SelectValue /></SelectTrigger>
                   <SelectContent>{APPLICATION_STATUSES.map((s) => <SelectItem key={s} value={s}>{s}</SelectItem>)}</SelectContent>
                 </Select>
               </div>
             </div>
             <div className="space-y-1.5">
-              <Label className="text-sm font-medium">Follow-up date</Label>
-              <Input type="date" className="rounded-xl" {...register('follow_up_date')} />
+              <Label>Follow-up date</Label>
+              <Input type="date" {...register('follow_up_date')} />
             </div>
             <div className="grid grid-cols-2 gap-4">
               <div className="space-y-1.5">
-                <Label className="text-sm font-medium">Salary min ($)</Label>
-                <Input type="number" placeholder="80000" className="rounded-xl" {...register('salary_min')} />
+                <Label>Salary min ($)</Label>
+                <Input type="number" placeholder="80000" {...register('salary_min')} />
               </div>
               <div className="space-y-1.5">
-                <Label className="text-sm font-medium">Salary max ($)</Label>
-                <Input type="number" placeholder="120000" className="rounded-xl" {...register('salary_max')} />
+                <Label>Salary max ($)</Label>
+                <Input type="number" placeholder="120000" {...register('salary_max')} />
               </div>
             </div>
             <div className="space-y-1.5">
-              <Label className="text-sm font-medium">Notes</Label>
-              <Textarea rows={3} placeholder="Any notes about this application…" className="rounded-xl resize-none" {...register('notes')} />
+              <Label>Notes</Label>
+              <Textarea rows={3} placeholder="Any notes about this application…" className="resize-none" {...register('notes')} />
             </div>
             <DialogFooter>
               <Button type="button" variant="outline" onClick={() => setShowForm(false)} className="rounded-xl">Cancel</Button>

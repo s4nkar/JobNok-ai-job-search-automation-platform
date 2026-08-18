@@ -2,14 +2,16 @@
 
 import { useState, useEffect, Suspense } from 'react'
 import { useSearchParams } from 'next/navigation'
+import { useQuery } from '@tanstack/react-query'
 import { config } from '@/lib/config'
-import { Button } from '@/components/ui/button'
-import { Textarea } from '@/components/ui/textarea'
-import { Label } from '@/components/ui/label'
-import { useToast } from '@/components/ui/use-toast'
+import { Button } from '@jobnok/ui'
+import { Textarea } from '@jobnok/ui'
+import { Label } from '@jobnok/ui'
+import { useToast } from '@jobnok/ui'
 import { MessageSquare, Loader2, RefreshCw, ChevronDown, ChevronUp, Info, Compass, X } from 'lucide-react'
-import { apiFetch } from '@/lib/api'
-import { cn } from '@/lib/utils'
+import { apiFetch, apiGet } from '@/lib/api'
+import { queryKeys } from '@/lib/queryKeys'
+import { cn } from '@jobnok/ui'
 import { StartupHuntSavedOpportunity } from '@/lib/types'
 
 interface InterviewQuestion {
@@ -46,18 +48,20 @@ function InterviewPrepInner() {
   const [error, setError] = useState<string | null>(null)
   const { toast } = useToast()
 
+  const { data: opportunities } = useQuery({
+    queryKey: queryKeys.startupHuntOpportunities,
+    queryFn: () => apiGet<StartupHuntSavedOpportunity[]>('/api/startup-hunt/opportunities'),
+    enabled: !!opportunityId,
+  })
+
   useEffect(() => {
-    if (!opportunityId) return
-    apiFetch('/api/startup-hunt/opportunities')
-      .then((r) => r.json())
-      .then((rows: StartupHuntSavedOpportunity[]) => {
-        const found = rows.find((r) => r.id === opportunityId)
-        if (found) {
-          setLead(found)
-          setJd(buildJdFromOpportunity(found))
-        }
-      })
-  }, [opportunityId])
+    if (!opportunityId || !opportunities) return
+    const found = opportunities.find((r) => r.id === opportunityId)
+    if (found) {
+      setLead(found)
+      setJd(buildJdFromOpportunity(found))
+    }
+  }, [opportunityId, opportunities])
 
   async function generateQuestions() {
     if (!jd.trim()) return
@@ -125,8 +129,8 @@ function InterviewPrepInner() {
   return (
     <div className="animate-fade-in">
       <div className="flex items-center gap-4 mb-6">
-        <div className="page-header-icon bg-teal-100">
-          <MessageSquare className="h-5 w-5 text-teal-600" />
+        <div className="page-header-icon bg-indigo-100">
+          <MessageSquare className="h-5 w-5 text-indigo-600" />
         </div>
         <div>
           <h1 className="text-2xl font-bold text-slate-900 tracking-tight">Interview Prep</h1>
@@ -135,10 +139,10 @@ function InterviewPrepInner() {
       </div>
 
       {lead && (
-        <div className="flex items-center gap-2.5 bg-orange-50 border border-orange-100 text-orange-800 rounded-xl px-4 py-3 mb-4 text-sm">
-          <Compass className="h-4 w-4 flex-shrink-0 text-orange-500" />
+        <div className="flex items-center gap-2.5 bg-indigo-50 border border-indigo-100 text-indigo-800 rounded-xl px-4 py-3 mb-4 text-sm">
+          <Compass className="h-4 w-4 flex-shrink-0 text-indigo-500" />
           <span>Pre-filled from <strong>{lead.company_name} — {lead.role_title}</strong>. Add the full JD below the signals for best results.</span>
-          <button onClick={() => { setLead(null); setJd('') }} className="ml-auto text-orange-400 hover:text-orange-700">
+          <button onClick={() => { setLead(null); setJd('') }} className="ml-auto text-indigo-400 hover:text-indigo-700">
             <X className="h-4 w-4" />
           </button>
         </div>
@@ -149,8 +153,8 @@ function InterviewPrepInner() {
         <span><strong>{config.rateLimits.interviewPrepPerDay} preps/day</strong> on the free tier.</span>
       </div>
 
-      <div className="grid grid-cols-2 gap-6">
-        <div className="space-y-4">
+      <div className="grid grid-cols-2 gap-6 items-start">
+        <div className="space-y-4 sticky top-6">
           <div className="bg-white rounded-2xl border border-slate-100 shadow-card p-5">
             <Label className="text-sm font-semibold text-slate-700 mb-3 block">Job Description</Label>
             <Textarea
@@ -182,8 +186,8 @@ function InterviewPrepInner() {
           {!questions.length && !loading && (
             <div className="bg-white rounded-2xl border border-slate-100 shadow-card min-h-[400px] flex items-center justify-center p-8">
               <div className="text-center space-y-2">
-                <div className="w-14 h-14 rounded-2xl bg-teal-50 flex items-center justify-center mx-auto">
-                  <MessageSquare className="h-7 w-7 text-teal-200" />
+                <div className="w-14 h-14 rounded-2xl bg-indigo-50 flex items-center justify-center mx-auto">
+                  <MessageSquare className="h-7 w-7 text-indigo-200" />
                 </div>
                 <p className="font-semibold text-slate-500">Questions will appear here</p>
                 <p className="text-sm text-slate-400">Paste a job description to generate interview questions</p>

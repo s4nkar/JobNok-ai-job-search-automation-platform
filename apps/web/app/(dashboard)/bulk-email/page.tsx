@@ -1,23 +1,25 @@
 'use client'
 
-import { useEffect, useState, useRef } from 'react'
+import { useState, useRef } from 'react'
+import { useQuery, useQueryClient } from '@tanstack/react-query'
 import Papa from 'papaparse'
 import { config } from '@/lib/config'
 import { EmailCampaign, EmailRecipient } from '@/lib/types'
-import { extractPlaceholders } from '@/lib/utils'
-import { Button } from '@/components/ui/button'
-import { Input } from '@/components/ui/input'
-import { Textarea } from '@/components/ui/textarea'
-import { Label } from '@/components/ui/label'
-import { Badge } from '@/components/ui/badge'
-import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
-import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
-import { useToast } from '@/components/ui/use-toast'
+import { extractPlaceholders } from '@jobnok/ui'
+import { queryKeys } from '@/lib/queryKeys'
+import { Button } from '@jobnok/ui'
+import { Input } from '@jobnok/ui'
+import { Textarea } from '@jobnok/ui'
+import { Label } from '@jobnok/ui'
+import { Badge } from '@jobnok/ui'
+import { Tabs, TabsContent, TabsList, TabsTrigger } from '@jobnok/ui'
+import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@jobnok/ui'
+import { useToast } from '@jobnok/ui'
 import {
   Mail, Plus, Upload, Play, Pause, Loader2, CheckCircle, XCircle,
-  Clock, Send, RefreshCw, Info
+  Clock, Send, RefreshCw, Info, SlidersHorizontal,
 } from 'lucide-react'
-import { apiFetch } from '@/lib/api'
+import { apiFetch, apiGet } from '@/lib/api'
 
 const STATUS_BADGE: Record<string, JSX.Element> = {
   queued:    <Badge variant="secondary"><Clock className="h-3 w-3 mr-1" />Queued</Badge>,
@@ -32,7 +34,11 @@ const STATUS_BADGE: Record<string, JSX.Element> = {
 interface RecipientRow { email: string; name: string; [key: string]: string }
 
 export default function BulkEmailPage() {
-  const [campaigns, setCampaigns] = useState<EmailCampaign[]>([])
+  const queryClient = useQueryClient()
+  const { data: campaigns = [] } = useQuery({
+    queryKey: queryKeys.campaigns,
+    queryFn: () => apiGet<EmailCampaign[]>('/api/campaigns'),
+  })
   const [activeCampaign, setActiveCampaign] = useState<EmailCampaign | null>(null)
   const [recipients, setRecipients] = useState<EmailRecipient[]>([])
   const [polling, setPolling] = useState(false)
@@ -48,13 +54,6 @@ export default function BulkEmailPage() {
   const fileRef = useRef<HTMLInputElement>(null)
   const { toast } = useToast()
   const pollRef = useRef<NodeJS.Timeout | null>(null)
-
-  useEffect(() => { fetchCampaigns() }, [])
-
-  async function fetchCampaigns() {
-    const res = await apiFetch('/api/campaigns')
-    if (res.ok) setCampaigns(await res.json())
-  }
 
   async function openCampaign(c: EmailCampaign) {
     setActiveCampaign(c)
@@ -121,7 +120,7 @@ export default function BulkEmailPage() {
 
     if (res.ok) {
       const campaign = await res.json()
-      setCampaigns((prev) => [campaign, ...prev])
+      queryClient.setQueryData<EmailCampaign[]>(queryKeys.campaigns, (prev) => [campaign, ...(prev || [])])
       toast({ title: 'Campaign launched!', description: 'Emails are being queued.' })
       setName(''); setSubject(''); setBody(''); setCsvRows([])
       openCampaign(campaign)
@@ -134,7 +133,7 @@ export default function BulkEmailPage() {
 
   async function pauseCampaign(id: string) {
     await apiFetch(`/api/email/${id}/pause`, { method: 'POST' })
-    await fetchCampaigns()
+    await queryClient.invalidateQueries({ queryKey: queryKeys.campaigns })
     if (activeCampaign?.id === id) setActiveCampaign((p) => p ? { ...p, status: 'paused' } : p)
     stopPolling()
   }
@@ -147,8 +146,8 @@ export default function BulkEmailPage() {
     <div className="animate-fade-in">
       {/* Page Header */}
       <div className="flex items-center gap-4 mb-6">
-        <div className="page-header-icon bg-violet-100">
-          <Mail className="h-5 w-5 text-violet-600" />
+        <div className="page-header-icon bg-indigo-100">
+          <Mail className="h-5 w-5 text-indigo-600" />
         </div>
         <div>
           <h1 className="text-2xl font-bold text-slate-900 tracking-tight">Bulk Email Sender</h1>
@@ -176,27 +175,30 @@ export default function BulkEmailPage() {
 
         {/* Campaign Builder */}
         <TabsContent value="builder">
-          <div className="grid grid-cols-2 gap-6">
+          <div className="grid grid-cols-2 gap-5">
             <div className="space-y-4">
-              <div className="bg-white rounded-2xl border border-slate-100 shadow-card p-5 space-y-4">
-                <p className="text-sm font-semibold text-slate-700">Campaign Setup</p>
-                <div className="space-y-1.5">
-                  <Label className="text-sm font-medium">Campaign name</Label>
-                  <Input placeholder="Q1 Recruiter Outreach" className="rounded-xl border-slate-200" value={name} onChange={(e) => setName(e.target.value)} />
+              <div className="bg-white rounded-2xl border border-slate-100 shadow-sm p-5 space-y-5">
+                <div className="flex items-center gap-2 pb-1 border-b border-slate-100">
+                  <SlidersHorizontal className="h-3.5 w-3.5 text-slate-400" />
+                  <span className="text-xs font-semibold text-slate-500 uppercase tracking-wider">Campaign Setup</span>
                 </div>
                 <div className="space-y-1.5">
-                  <Label className="text-sm font-medium">Email subject</Label>
-                  <Input placeholder="{{name}}, exploring {{role}} opportunities" className="rounded-xl border-slate-200" value={subject} onChange={(e) => setSubject(e.target.value)} />
+                  <Label>Campaign name</Label>
+                  <Input placeholder="Q1 Recruiter Outreach" value={name} onChange={(e) => setName(e.target.value)} />
                 </div>
                 <div className="space-y-1.5">
-                  <Label className="text-sm font-medium">Email body</Label>
+                  <Label>Email subject</Label>
+                  <Input placeholder="{{name}}, exploring {{role}} opportunities" value={subject} onChange={(e) => setSubject(e.target.value)} />
+                </div>
+                <div className="space-y-1.5">
+                  <Label>Email body</Label>
                   <p className="text-xs text-slate-500">Use <code className="bg-slate-100 px-1.5 py-0.5 rounded-md font-mono">{'{{placeholder}}'}</code> for personalization</p>
                   <Textarea
                     value={body}
                     onChange={(e) => setBody(e.target.value)}
                     rows={10}
                     placeholder={`Hi {{name}},\n\nI'm reaching out about...`}
-                    className="text-sm font-mono rounded-xl border-slate-200 resize-none"
+                    className="text-sm font-mono resize-none"
                   />
                   {body && extractPlaceholders(body).length > 0 && (
                     <div className="flex flex-wrap gap-1.5 mt-2 p-3 bg-indigo-50 rounded-xl">
@@ -211,15 +213,14 @@ export default function BulkEmailPage() {
                 </div>
 
                 <div className="space-y-1.5">
-                  <Label className="text-sm font-medium">Delay between sends (seconds)</Label>
+                  <Label>Delay between sends (seconds)</Label>
                   <Input
                     type="number"
                     min={config.bulkEmail.minDelaySeconds}
-                    className="rounded-xl border-slate-200"
                     value={delay}
                     onChange={(e) => setDelay(Number(e.target.value))}
                   />
-                  <p className="text-xs text-slate-400">
+                  <p className="text-[10px] text-slate-400 leading-relaxed">
                     Min {config.bulkEmail.minDelaySeconds}s · Recommended 30–60s to avoid spam
                   </p>
                 </div>
@@ -227,8 +228,8 @@ export default function BulkEmailPage() {
             </div>
 
             <div className="space-y-4">
-              <div className="bg-white rounded-2xl border border-slate-100 shadow-card p-5">
-                <p className="text-sm font-semibold text-slate-700 mb-1">Recipients</p>
+              <div className="bg-white rounded-2xl border border-slate-100 shadow-sm p-5">
+                <p className="text-xs font-semibold text-slate-500 uppercase tracking-wider mb-1">Recipients</p>
                 <p className="text-xs text-slate-500 mb-4">Upload a CSV with columns: email, name, and any custom variables</p>
                 <div
                   onClick={() => fileRef.current?.click()}
@@ -275,13 +276,13 @@ export default function BulkEmailPage() {
               </div>
 
               <Button
-                className="w-full h-11 gradient-brand text-white border-0 shadow-brand-sm hover:opacity-90 transition-opacity rounded-xl font-semibold"
+                className="w-full gradient-brand text-white border-0 shadow-sm hover:opacity-90 transition-opacity rounded-xl h-9 text-sm font-semibold"
                 onClick={createCampaign}
                 disabled={creating}
               >
                 {creating
-                  ? <><Loader2 className="h-4 w-4 mr-2 animate-spin" /> Launching campaign…</>
-                  : <><Send className="h-4 w-4 mr-2" /> Launch Campaign</>
+                  ? <><Loader2 className="h-3.5 w-3.5 mr-2 animate-spin" />Launching campaign…</>
+                  : <><Send className="h-3.5 w-3.5 mr-2" />Launch Campaign</>
                 }
               </Button>
             </div>
@@ -307,7 +308,7 @@ export default function BulkEmailPage() {
                   className={`w-full text-left p-3.5 rounded-xl border text-sm transition-all ${
                     activeCampaign?.id === c.id
                       ? 'bg-indigo-600 text-white border-indigo-600 shadow-brand-sm'
-                      : 'bg-white hover:bg-slate-50 border-slate-100 shadow-card'
+                      : 'bg-white hover:bg-slate-50 border-slate-100 shadow-sm'
                   }`}
                 >
                   <p className="font-semibold truncate text-[13px]">{c.name}</p>
@@ -320,17 +321,17 @@ export default function BulkEmailPage() {
 
             <div className="col-span-2">
               {!activeCampaign ? (
-                <div className="bg-white rounded-2xl border border-slate-100 shadow-card min-h-[300px] flex items-center justify-center p-8">
+                <div className="bg-white rounded-2xl border border-slate-100 shadow-sm min-h-[300px] flex items-center justify-center p-8">
                   <div className="text-center space-y-2">
-                    <div className="w-12 h-12 rounded-2xl bg-violet-50 flex items-center justify-center mx-auto">
-                      <Mail className="h-6 w-6 text-violet-200" />
+                    <div className="w-12 h-12 rounded-2xl bg-indigo-50 flex items-center justify-center mx-auto">
+                      <Mail className="h-6 w-6 text-indigo-200" />
                     </div>
                     <p className="font-semibold text-slate-500">Select a campaign to see details</p>
                   </div>
                 </div>
               ) : (
                 <div className="space-y-4">
-                  <div className="bg-white rounded-2xl border border-slate-100 shadow-card p-5">
+                  <div className="bg-white rounded-2xl border border-slate-100 shadow-sm p-5">
                     <div className="flex items-center justify-between mb-4">
                       <div>
                         <h3 className="font-bold text-slate-800">{activeCampaign.name}</h3>
@@ -364,7 +365,7 @@ export default function BulkEmailPage() {
                     )}
                   </div>
 
-                  <div className="bg-white rounded-2xl border border-slate-100 shadow-card overflow-hidden">
+                  <div className="bg-white rounded-2xl border border-slate-100 shadow-sm overflow-hidden">
                     <div className="max-h-96 overflow-y-auto scrollbar-thin">
                       <Table>
                         <TableHeader>

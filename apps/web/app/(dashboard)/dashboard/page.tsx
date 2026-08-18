@@ -1,16 +1,17 @@
 'use client'
 
 import Link from 'next/link'
-import { useEffect, useState } from 'react'
+import { useQuery } from '@tanstack/react-query'
 import {
   LayoutDashboard, Briefcase, TrendingUp, Users, Award, AlertCircle,
   Loader2, Clock, ArrowRight, Compass, FileText, Mail, ChevronRight, Sparkles, Target,
 } from 'lucide-react'
 import { JobApplication, EmailCampaign, StartupHuntSavedOpportunity, StartupHuntSource, Template, UserProfile } from '@/lib/types'
 import { ScoutCompany } from '@/lib/types'
-import { cn, formatDate, isOverdue } from '@/lib/utils'
-import { apiFetch } from '@/lib/api'
-import { tools, toolBadgeColors } from '@/lib/tools'
+import { cn, formatDate, isOverdue } from '@jobnok/ui'
+import { apiGet } from '@/lib/api'
+import { queryKeys } from '@/lib/queryKeys'
+import { tools, toolBadgeColors } from '@jobnok/ui'
 
 const ACTIVE_STATUSES = ['Applied', 'Phone Screen', 'Interview'] as const
 const INTERVIEWING_STATUSES = ['Phone Screen', 'Interview'] as const
@@ -31,40 +32,39 @@ const PROFILE_FIELDS: Array<{ key: keyof UserProfile; label: string }> = [
 ]
 
 export default function DashboardPage() {
-  const [loading, setLoading] = useState(true)
-  const [applications, setApplications] = useState<JobApplication[]>([])
-  const [templates, setTemplates] = useState<Template[]>([])
-  const [leads, setLeads] = useState<StartupHuntSavedOpportunity[]>([])
-  const [scoutCompanies, setScoutCompanies] = useState<ScoutCompany[]>([])
-  const [campaigns, setCampaigns] = useState<EmailCampaign[]>([])
-  const [profile, setProfile] = useState<UserProfile | null>(null)
-  const [toolUsage, setToolUsage] = useState<ToolUsage[]>([])
-  const [huntSources, setHuntSources] = useState<StartupHuntSource[]>([])
-
-  useEffect(() => {
-    async function fetchAll() {
-      const [apps, tpls, leadList, scout, camps, prof, usage, huntSrc] = await Promise.all([
-        apiFetch('/api/tracker').then(r => r.ok ? r.json() : []).catch(() => []),
-        apiFetch('/api/templates').then(r => r.ok ? r.json() : []).catch(() => []),
-        apiFetch('/api/startup-hunt/opportunities').then(r => r.ok ? r.json() : []).catch(() => []),
-        apiFetch('/api/startup-scout/companies').then(r => r.ok ? r.json() : []).catch(() => []),
-        apiFetch('/api/campaigns').then(r => r.ok ? r.json() : []).catch(() => []),
-        apiFetch('/api/profile').then(r => r.ok ? r.json() : null).catch(() => null),
-        apiFetch('/api/usage/tools').then(r => r.ok ? r.json() : []).catch(() => []),
-        apiFetch('/api/startup-hunt/sources').then(r => r.ok ? r.json() : []).catch(() => []),
-      ])
-      setApplications(apps)
-      setTemplates(tpls)
-      setLeads(leadList)
-      setScoutCompanies(scout)
-      setCampaigns(camps)
-      setProfile(prof)
-      setToolUsage(usage)
-      setHuntSources(huntSrc)
-      setLoading(false)
-    }
-    fetchAll()
-  }, [])
+  const { data: applications = [], isLoading: l1 } = useQuery({
+    queryKey: queryKeys.tracker,
+    queryFn: () => apiGet<JobApplication[]>('/api/tracker'),
+  })
+  const { data: templates = [], isLoading: l2 } = useQuery({
+    queryKey: queryKeys.templates,
+    queryFn: () => apiGet<Template[]>('/api/templates'),
+  })
+  const { data: leads = [], isLoading: l3 } = useQuery({
+    queryKey: queryKeys.startupHuntOpportunities,
+    queryFn: () => apiGet<StartupHuntSavedOpportunity[]>('/api/startup-hunt/opportunities'),
+  })
+  const { data: scoutCompanies = [], isLoading: l4 } = useQuery({
+    queryKey: queryKeys.startupScoutCompanies,
+    queryFn: () => apiGet<ScoutCompany[]>('/api/startup-scout/companies'),
+  })
+  const { data: campaigns = [], isLoading: l5 } = useQuery({
+    queryKey: queryKeys.campaigns,
+    queryFn: () => apiGet<EmailCampaign[]>('/api/campaigns'),
+  })
+  const { data: profile, isLoading: l6 } = useQuery({
+    queryKey: queryKeys.profile,
+    queryFn: () => apiGet<UserProfile>('/api/profile'),
+  })
+  const { data: toolUsage = [], isLoading: l7 } = useQuery({
+    queryKey: queryKeys.toolUsage,
+    queryFn: () => apiGet<ToolUsage[]>('/api/usage/tools'),
+  })
+  const { data: huntSources = [], isLoading: l8 } = useQuery({
+    queryKey: queryKeys.startupHuntSources,
+    queryFn: () => apiGet<StartupHuntSource[]>('/api/startup-hunt/sources'),
+  })
+  const loading = l1 || l2 || l3 || l4 || l5 || l6 || l7 || l8
 
   const active = applications.filter((a) => (ACTIVE_STATUSES as readonly string[]).includes(a.status))
   const interviewing = applications.filter((a) => (INTERVIEWING_STATUSES as readonly string[]).includes(a.status))
@@ -96,11 +96,11 @@ export default function DashboardPage() {
 
   const statTiles = [
     { label: 'Applications Tracked', value: applications.length, Icon: Briefcase, iconBg: 'bg-indigo-100', iconColor: 'text-indigo-600' },
-    { label: 'Active', value: active.length, Icon: TrendingUp, iconBg: 'bg-blue-100', iconColor: 'text-blue-600' },
-    { label: 'Interviewing', value: interviewing.length, Icon: Users, iconBg: 'bg-violet-100', iconColor: 'text-violet-600' },
+    { label: 'Active', value: active.length, Icon: TrendingUp, iconBg: 'bg-indigo-100', iconColor: 'text-indigo-600' },
+    { label: 'Interviewing', value: interviewing.length, Icon: Users, iconBg: 'bg-indigo-100', iconColor: 'text-indigo-600' },
     { label: 'Offers', value: offers.length, Icon: Award, iconBg: 'bg-emerald-100', iconColor: 'text-emerald-600' },
     { label: 'Follow-ups Due', value: overdueCount, Icon: AlertCircle, iconBg: 'bg-red-100', iconColor: 'text-red-600' },
-    { label: 'Startup Leads', value: openLeads.length, Icon: Compass, iconBg: 'bg-orange-100', iconColor: 'text-orange-600' },
+    { label: 'Startup Leads', value: openLeads.length, Icon: Compass, iconBg: 'bg-indigo-100', iconColor: 'text-indigo-600' },
   ]
 
   if (loading) {

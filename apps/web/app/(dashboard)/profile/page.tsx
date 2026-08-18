@@ -2,17 +2,24 @@
 
 import { useState, useEffect, useRef } from 'react'
 import { useUser } from '@clerk/nextjs'
+import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { User, Camera, Save, Loader2, CheckCircle, KeyRound } from 'lucide-react'
-import { Button } from '@/components/ui/button'
-import { Input } from '@/components/ui/input'
-import { Label } from '@/components/ui/label'
-import { useToast } from '@/components/ui/use-toast'
-import { apiFetch } from '@/lib/api'
+import { Button } from '@jobnok/ui'
+import { Input } from '@jobnok/ui'
+import { Label } from '@jobnok/ui'
+import { useToast } from '@jobnok/ui'
+import { apiFetch, apiGet } from '@/lib/api'
+import { queryKeys } from '@/lib/queryKeys'
 import { UserProfile } from '@/lib/types'
 
 export default function ProfilePage() {
+  const queryClient = useQueryClient()
+  const { data: serverProfile, isLoading: loading, isError: loadError } = useQuery({
+    queryKey: queryKeys.profile,
+    queryFn: () => apiGet<UserProfile>('/api/profile'),
+  })
   const [profile, setProfile] = useState<UserProfile | null>(null)
-  const [loading, setLoading] = useState(true)
+  const hasSyncedRef = useRef(false)
   const [saving, setSaving] = useState(false)
   const [uploadingPhoto, setUploadingPhoto] = useState(false)
   const [photoPreview, setPhotoPreview] = useState<string | null>(null)
@@ -26,15 +33,16 @@ export default function ProfilePage() {
   const { user } = useUser()
 
   useEffect(() => {
-    apiFetch('/api/profile')
-      .then(r => r.json())
-      .then((data: UserProfile) => {
-        setProfile(data)
-        if (data.cv_photo_url) setPhotoPreview(data.cv_photo_url)
-      })
-      .catch(() => toast({ title: 'Could not load profile', variant: 'destructive' }))
-      .finally(() => setLoading(false))
-  }, [])
+    if (serverProfile && !hasSyncedRef.current) {
+      hasSyncedRef.current = true
+      setProfile(serverProfile)
+      if (serverProfile.cv_photo_url) setPhotoPreview(serverProfile.cv_photo_url)
+    }
+  }, [serverProfile])
+
+  useEffect(() => {
+    if (loadError) toast({ title: 'Could not load profile', variant: 'destructive' })
+  }, [loadError, toast])
 
   function handleField(field: keyof UserProfile, value: string) {
     setProfile(prev => prev ? { ...prev, [field]: value } : prev)
@@ -56,6 +64,7 @@ export default function ProfilePage() {
       const data = await res.json()
       if (!res.ok) throw new Error(data.detail || 'Upload failed')
       setProfile(prev => prev ? { ...prev, cv_photo_url: data.cv_photo_url } : prev)
+      queryClient.setQueryData<UserProfile>(queryKeys.profile, (prev) => prev ? { ...prev, cv_photo_url: data.cv_photo_url } : prev)
       toast({ title: 'Photo uploaded!' })
     } catch (err) {
       toast({ title: 'Photo upload failed', description: err instanceof Error ? err.message : undefined, variant: 'destructive' })
@@ -86,27 +95,29 @@ export default function ProfilePage() {
     if (!profile) return
     setSaving(true)
     try {
+      const payload = {
+        full_name: profile.full_name,
+        job_title: profile.job_title,
+        cv_email: profile.cv_email ?? profile.email,
+        phone: profile.phone,
+        address_street: profile.address_street,
+        address_city: profile.address_city,
+        address_postal_code: profile.address_postal_code,
+        address_country: profile.address_country,
+        date_of_birth: profile.date_of_birth,
+        nationality: profile.nationality,
+        linkedin_url: profile.linkedin_url,
+        github_url: profile.github_url,
+        website_url: profile.website_url,
+        work_authorization: profile.work_authorization,
+      }
       const res = await apiFetch('/api/profile', {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          full_name: profile.full_name,
-          job_title: profile.job_title,
-          cv_email: profile.cv_email ?? profile.email,
-          phone: profile.phone,
-          address_street: profile.address_street,
-          address_city: profile.address_city,
-          address_postal_code: profile.address_postal_code,
-          address_country: profile.address_country,
-          date_of_birth: profile.date_of_birth,
-          nationality: profile.nationality,
-          linkedin_url: profile.linkedin_url,
-          github_url: profile.github_url,
-          website_url: profile.website_url,
-          work_authorization: profile.work_authorization,
-        }),
+        body: JSON.stringify(payload),
       })
       if (!res.ok) throw new Error()
+      queryClient.setQueryData<UserProfile>(queryKeys.profile, (prev) => prev ? { ...prev, ...payload } : prev)
       setSaved(true)
       toast({ title: 'Profile saved!' })
       setTimeout(() => setSaved(false), 3000)

@@ -29,7 +29,7 @@ JobNok utilizes **Neon (PostgreSQL)** for its primary data store, accessed from 
 - **Access:** Owning user only, enforced by `UserScopedRepository`.
 
 ### `email_recipients`
-- **Purpose:** Individual recipients tied to a specific campaign. Processed by Celery workers.
+- **Purpose:** Individual recipients tied to a specific campaign. Processed by ARQ workers.
 - **Fields:** `id`, `campaign_id` (references `email_campaigns`), `email`, `name`, `variables`, `status`, `sent_at`, `error`.
 - **Access:** Scoped transitively through the parent `email_campaigns.user_id` (no `user_id` column of its own).
 

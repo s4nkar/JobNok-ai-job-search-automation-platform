@@ -7,6 +7,7 @@ every recipient query is scoped by first verifying campaign ownership.
 
 from datetime import datetime, timezone
 
+from arq.connections import ArqRedis
 from fastapi import HTTPException
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -16,7 +17,6 @@ from app.shared.repository import UserScopedRepository
 from app.shared.utils import row_to_dict
 from app.modules.bulk_email.models import EmailCampaign, EmailRecipient
 from app.modules.bulk_email.schemas import CreateCampaignRequest
-from app.modules.bulk_email.tasks import send_campaign_email
 
 
 class CampaignRepository(UserScopedRepository[EmailCampaign]):
@@ -47,7 +47,7 @@ async def list_recipients(db: AsyncSession, user_id: str, campaign_id: str) -> l
     return [row_to_dict(r) for r in rows]
 
 
-async def create_campaign(db: AsyncSession, user_id: str, body: CreateCampaignRequest) -> dict:
+async def create_campaign(db: AsyncSession, user_id: str, body: CreateCampaignRequest, arq_pool: ArqRedis) -> dict:
     month_start = datetime.now(timezone.utc).replace(day=1, hour=0, minute=0, second=0, microsecond=0)
 
     campaign_ids_this_month = select(EmailCampaign.id).where(
@@ -94,19 +94,16 @@ async def create_campaign(db: AsyncSession, user_id: str, body: CreateCampaignRe
     db.add_all(recipients)
     await db.flush()
 
-    for i, recipient in enumerate(recipients):
-        delay_seconds = i * body.delay_seconds
-        send_campaign_email.apply_async(
-            kwargs={
-                "campaign_id": str(campaign.id),
-                "recipient_id": str(recipient.id),
-                "to_email": recipient.email,
-                "to_name": recipient.name,
-                "subject": body.subject,
-                "body_template": body.body,
-                "variables": recipient.variables,
-            },
-            countdown=delay_seconds,
+    for recipient in recipients:
+        await arq_pool.enqueue_job(
+            "send_campaign_email",
+            campaign_id=str(campaign.id),
+            recipient_id=str(recipient.id),
+            to_email=recipient.email,
+            to_name=recipient.name,
+            subject=body.subject,
+            body_template=body.body,
+            variables=recipient.variables,
         )
 
     campaign.status = "sending"
@@ -146,5 +143,6 @@ async def pause_campaign(db: AsyncSession, user_id: str, campaign_id: str) -> No
     campaign = await _get_owned_campaign(db, user_id, campaign_id)
     campaign.status = "paused"
     await db.flush()
-    # Note: Celery tasks already queued will still run unless manually revoked.
-    # For a production pause, use Celery's revoke() with a task ID list.
+    # Note: ARQ jobs already queued will still run — this only flips the DB
+    # status. A production pause would need to track enqueued job IDs and
+    # call ArqRedis.abort_job() for each.

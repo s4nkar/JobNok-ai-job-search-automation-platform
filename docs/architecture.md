@@ -1,6 +1,6 @@
 # 🏗️ System Architecture
 
-JobNok is built on a modern, distributed architecture designed for high performance, scalability, and cost efficiency (currently free-tier optimized). The system strictly separates the user interface from business logic, utilizing a robust stack of Next.js, FastAPI, Neon, Clerk (Auth), Supabase (Storage), Redis, and Celery.
+JobNok is built on a modern, distributed architecture designed for high performance, scalability, and cost efficiency (currently free-tier optimized). The system strictly separates the user interface from business logic, utilizing a robust stack of Next.js, FastAPI, Neon, Clerk (Auth), Supabase (Storage), Redis, and ARQ.
 
 ## High-Level Architecture Diagram
 
@@ -12,8 +12,8 @@ graph TD
     FastAPI --> |SQLAlchemy async ORM| Neon[(Neon-hosted Postgres)]
     FastAPI --> |Cache & Rate Limits| Redis[(Upstash Redis)]
     FastAPI --> |Task Queue| Redis
-    Redis --> |Consume| Celery[Celery Worker]
-    Celery --> |Send Emails| Resend[Resend API]
+    Redis --> |Consume| ARQ[ARQ Worker]
+    ARQ --> |Send Emails| Resend[Resend API]
     FastAPI --> |LLM Prompts| AI[Anthropic / HuggingFace API]
     FastAPI --> |Scraping Requests| RapidAPI[RapidAPI / PhantomBuster]
 ```
@@ -56,11 +56,11 @@ graph TD
 - **Role:** High-speed in-memory datastore.
 - **Responsibilities:**
   - **Rate Limiting:** Enforcing per-user limits on tool usage (sliding window, reset midnight UTC).
-  - **Celery Broker:** Managing background task queues for asynchronous operations like bulk email sending.
+  - **ARQ Broker:** Managing background task queues for asynchronous operations like bulk email sending.
 
-### 6. Background Workers (Celery)
+### 6. Background Workers (ARQ)
 - **Role:** Asynchronous task processing.
-- **Responsibilities:** Handling long-running or batch tasks (e.g., sending bulk emails via Resend with configured delays) so that the FastAPI main thread is never blocked.
+- **Responsibilities:** Handling long-running or batch tasks (e.g., sending bulk emails via Resend, rate-limited by a Redis token bucket) so that the FastAPI main thread is never blocked. Runs as plain `async def` tasks sharing the same async SQLAlchemy session pattern as the API — no separate sync DB path.
 
 ## Security Principles
 

@@ -15,7 +15,7 @@
 #                       './run.sh restart api' to manually restart the container.
 #
 # OTHER
-#   ./run.sh logs [svc] Tail logs. Scope to: api | nextjs | celery | redis | nginx | postgres
+#   ./run.sh logs [svc] Tail logs. Scope to: api | nextjs | worker | redis | nginx | postgres
 #   ./run.sh restart    Stop then start in production mode.
 #   ./run.sh ps         Show container status and health checks.
 #   ./run.sh shell [s]  Open a shell inside a container (default: api).
@@ -259,7 +259,7 @@ cmd_help() {
     ./run.sh dev            Dev mode — FastAPI hot-reload on :8000, Next.js on :3000.
                             Source directories mounted. No nginx.
 
-    ./run.sh logs [service] Tail logs. Scope to: api | nextjs | celery | redis | nginx | postgres
+    ./run.sh logs [service] Tail logs. Scope to: api | nextjs | worker | redis | nginx | postgres
     ./run.sh restart        Stop then start in production mode.
     ./run.sh ps             Show container status and health.
     ./run.sh shell [svc]    Shell into a container (default: api).

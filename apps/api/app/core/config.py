@@ -65,7 +65,7 @@ class Settings(BaseSettings):
     cohere_embedding_model: str = "embed-english-v3.0"
     cohere_base_url: str = "https://api.cohere.com/v2"
 
-    # ── Rate Limits (enforced via Redis sliding window) ──────────────────────
+    # ── Rate Limits (enforced via a Redis fixed window counter, reset at midnight UTC) ──
     # All limits are per-user per-day unless stated otherwise
     rate_limit_linkedin_per_day: int = 10
     rate_limit_resume_per_day: int = 5
@@ -88,11 +88,15 @@ class Settings(BaseSettings):
     # Shared LinkedIn profile cache TTL (days)
     linkedin_cache_ttl_days: int = 7 
 
-    # ── Job Search ──────────────────────────────────────────────────────────
-    # JSON array of ATS sources to search, e.g.
-    # [{"type":"greenhouse","name":"Acme","slug":"acme","company":"Acme","metadata":{"stage":"seed","languages":["english"]}}]
-    job_search_sources_json: str = "[]"
+    # ── Job Search (Adzuna) ────────────────────────────────────────────────
+    adzuna_app_id: str = ""
+    adzuna_app_key: str = ""
+    adzuna_base_url: str = "https://api.adzuna.com/v1/api"
     job_search_timeout_seconds: int = 12
+    # Postgres `jobs` cache row TTL — how long a cached listing is considered fresh.
+    job_search_cache_ttl_days: int = 14
+    # Redis response cache TTL for identical (query, location, country, ...) searches.
+    job_search_response_cache_ttl_seconds: int = 900
 
     # Startup Hunt v2 seeded sources (global curated + per-user custom) now live in
     # the startup_hunt_sources table (see app/modules/startup_hunt/models.py) —
@@ -108,6 +112,11 @@ class Settings(BaseSettings):
     apify_indeed_actor_id: str = ""
     theirstack_api_key: str = ""
     theirstack_base_url: str = "https://api.theirstack.com"
+    # TheirStack's free plan hard-caps `limit` at 25 results/page (HTTP 403,
+    # error code E-020, "Premium functionality limitation") — any request
+    # above this is rejected outright, zeroing the whole bucket. Configurable
+    # so upgrading the TheirStack plan doesn't require a code change.
+    theirstack_max_page_size: int = 25
     startup_hunt_contact_enrichment_provider: str = ""
     apollo_api_key: str = ""
     people_data_labs_api_key: str = ""
@@ -119,6 +128,8 @@ class Settings(BaseSettings):
     # ── Bulk Email ───────────────────────────────────────────────────────────
     # Minimum delay between individual emails to avoid spam flags (seconds)
     bulk_email_min_delay_seconds: int = 20
+    # Worker-side token-bucket cap on Resend sends across all campaigns combined
+    bulk_email_sends_per_second: int = 5
 
     # ── Cloudinary (CV photo storage) ───────────────────────────────────────
     # Get from Cloudinary dashboard's Account Details page.
@@ -151,13 +162,8 @@ class Settings(BaseSettings):
 
     @property
     def database_url_async(self) -> str:
-        """asyncpg driver — used by the FastAPI app (app/core/database.py)."""
+        """asyncpg driver — used by the FastAPI app and ARQ worker (app/core/database.py)."""
         return self.database_url.replace("postgresql://", "postgresql+asyncpg://", 1)
-
-    @property
-    def database_url_sync(self) -> str:
-        """psycopg driver — used by Celery tasks (no event loop)."""
-        return self.database_url.replace("postgresql://", "postgresql+psycopg://", 1)
 
     @property
     def migrations_database_url_sync(self) -> str:
@@ -168,7 +174,7 @@ class Settings(BaseSettings):
     # REST-based Redis for rate limiting — get from Upstash console
     upstash_redis_rest_url: str = ""
     upstash_redis_rest_token: str = ""
-    # TCP Redis URL for Celery broker/backend (can reuse Upstash rediss:// URL)
+    # TCP Redis URL for the ARQ broker (can reuse Upstash rediss:// URL)
     redis_url: str = "redis://localhost:6379/0"
 
     # ── Resend ───────────────────────────────────────────────────────────────

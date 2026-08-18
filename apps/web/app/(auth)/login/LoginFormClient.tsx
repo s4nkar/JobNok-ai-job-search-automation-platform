@@ -7,11 +7,11 @@ import { useSignIn } from '@clerk/nextjs'
 import { useForm } from 'react-hook-form'
 import { zodResolver } from '@hookform/resolvers/zod'
 import { z } from 'zod'
-import { Button } from '@/components/ui/button'
-import { Input } from '@/components/ui/input'
-import { Label } from '@/components/ui/label'
+import { Button } from '@jobnok/ui'
+import { Input } from '@jobnok/ui'
+import { Label } from '@jobnok/ui'
 import { Loader2, CheckCircle, ArrowLeft } from 'lucide-react'
-import { useToast } from '@/components/ui/use-toast'
+import { useToast } from '@jobnok/ui'
 
 const schema = z.object({
   email: z.string().email('Enter a valid email'),
@@ -161,7 +161,7 @@ export default function LoginFormClient() {
         ) : (
           <>
             <h2 className="text-xl font-bold text-slate-900 mb-1">Reset your password</h2>
-            <p className="text-slate-500 text-sm mb-6">Enter your email and we'll send a reset code.</p>
+            <p className="text-slate-500 text-sm mb-6">Enter your email and we&apos;ll send a reset code.</p>
             <div className="space-y-4">
               <div className="space-y-1.5">
                 <Label className="text-sm font-medium text-slate-700">Email</Label>
