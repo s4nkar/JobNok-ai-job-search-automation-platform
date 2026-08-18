@@ -73,6 +73,7 @@ class Settings(BaseSettings):
     rate_limit_interview_per_day: int = 10
     rate_limit_salary_per_day: int = 5
     rate_limit_job_search_per_day: int = 10
+    rate_limit_job_search_applications_per_day: int = 200
     rate_limit_startup_hunt_per_day: int = 8
     rate_limit_bulk_email_per_campaign: int = 500
     rate_limit_bulk_email_per_month: int = 3000
@@ -97,6 +98,11 @@ class Settings(BaseSettings):
     job_search_cache_ttl_days: int = 14
     # Redis response cache TTL for identical (query, location, country, ...) searches.
     job_search_response_cache_ttl_seconds: int = 900
+    # Caps how much of a user's own job_search_applications history is loaded per
+    # request (search's "already applied" lookup, and the applications list endpoint).
+    job_search_max_tracked_history: int = 2000
+    job_search_applications_page_size_default: int = 50
+    job_search_applications_page_size_max: int = 200
 
     # Startup Hunt v2 seeded sources (global curated + per-user custom) now live in
     # the startup_hunt_sources table (see app/modules/startup_hunt/models.py) —

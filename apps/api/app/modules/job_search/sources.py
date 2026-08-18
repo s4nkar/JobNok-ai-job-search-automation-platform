@@ -1,4 +1,4 @@
-"""Job search provider layer — Adzuna-backed general market search."""
+"""Job search provider layer - Adzuna-backed general market search."""
 
 from __future__ import annotations
 
@@ -17,7 +17,8 @@ from app.core.config import settings
 
 logger = logging.getLogger(__name__)
 
-# Adzuna's supported country path segments — https://developer.adzuna.com/
+# Adzuna's supported country path segments - https://developer.adzuna.com/
+# Keep in sync with apps/web/app/(dashboard)/recent-job-search/page.tsx ADZUNA_COUNTRIES
 _ADZUNA_COUNTRY_ALIASES: dict[str, str] = {
     "at": "at", "austria": "at",
     "au": "au", "australia": "au",
@@ -91,7 +92,7 @@ def adzuna_country_code(country: str | None) -> str | None:
 
 def _classify_fatal(exc: Exception) -> str | None:
     """Return a plain-language, user-facing reason with no HTTP status codes
-    or provider-internal details — those are logged separately for debugging."""
+    or provider-internal details - those are logged separately for debugging."""
     if isinstance(exc, httpx.HTTPStatusError):
         status = exc.response.status_code
         if status in _FATAL_STATUSES:
@@ -154,7 +155,7 @@ async def fetch_adzuna_raw(payload: dict[str, Any]) -> list[dict[str, Any]]:
     Raises AdzunaConfigError for missing credentials / unsupported country
     (caller turns this into a clean 4xx). Fatal upstream errors (401/402/403/429)
     are caught and surfaced as an empty list with the caller expected to inspect
-    logs — this mirrors startup_hunt's per-bucket fatal-error handling but there's
+    logs - this mirrors startup_hunt's per-bucket fatal-error handling but there's
     only one provider here, so there's no "other buckets keep going" concern.
     """
     if not settings.adzuna_app_id or not settings.adzuna_app_key:
@@ -180,7 +181,7 @@ async def fetch_adzuna_raw(payload: dict[str, Any]) -> list[dict[str, Any]]:
         "content-type": "application/json",
     }
 
-    # Adzuna's `where` expects a city/region, not a country — the country is
+    # Adzuna's `where` expects a city/region, not a country - the country is
     # already scoped via the /jobs/{country_code}/ URL segment. Passing the
     # country's own name as `where` (e.g. "Germany") makes Adzuna's location
     # resolver match nothing and silently return zero results, so only send
@@ -200,6 +201,12 @@ async def fetch_adzuna_raw(payload: dict[str, Any]) -> list[dict[str, Any]]:
             if not friendly:
                 logger.warning("Adzuna returned HTTP %s: %s", exc.response.status_code, exc.response.text[:500])
             raise AdzunaConfigError(friendly or "Job search is temporarily unavailable.") from exc
+        except httpx.HTTPError as exc:
+            # Timeouts, connection resets, DNS failures, etc, not an HTTPStatusError
+            # (no response was ever received), so it needs its own catch to degrade
+            # the same way instead of surfacing as an unhandled 500.
+            logger.warning("Adzuna request failed: %s", exc)
+            raise AdzunaConfigError("Job search is temporarily unavailable.") from exc
 
     body = response.json()
 
@@ -225,7 +232,7 @@ async def fetch_adzuna_raw(payload: dict[str, Any]) -> list[dict[str, Any]]:
                 "job_url": redirect_url,
                 "job_url_canonical": canonicalize_job_url(redirect_url),
                 # Kept as an ISO string (not parsed to datetime) so this dict stays
-                # JSON-serializable — needed for the Redis response cache.
+                # JSON-serializable, needed for the Redis response cache.
                 "posted_at": item.get("created"),
                 "description_text": description,
                 "metadata": {
@@ -344,7 +351,7 @@ def _score_job(
             score += 2
             evidence.append(f"Matched company stage: {metadata.get('stage')}")
 
-    score += 2  # flat source-quality baseline (single provider — no cross-source weighting needed)
+    score += 2  # flat source-quality baseline (single provider, no cross-source weighting needed)
 
     canonical_url = job["job_url_canonical"]
     application = user_applications.get(canonical_url)

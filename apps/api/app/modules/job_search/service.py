@@ -1,8 +1,8 @@
-"""Recent job search + apply-tracking business logic — SQLAlchemy-backed.
+"""Recent job search + apply-tracking business logic, SQLAlchemy-backed.
 
 Cross-module note: this module writes to tracker's job_applications table
 (via a direct query using JobApplication, not an ORM relationship()) when an
-application is marked "applied" — mirrors the pre-migration supabase-py
+application is marked "applied", mirroring the pre-migration supabase-py
 behavior exactly. See app/modules/job_search/models.py for the FK.
 """
 
@@ -59,9 +59,32 @@ async def _check_rate_limit_fail_open(user_id: str) -> None:
         )
 
 
+async def _check_applications_rate_limit_fail_open(user_id: str) -> None:
+    try:
+        allowed, _ = await check_rate_limit(
+            user_id, "job_search_applications", settings.rate_limit_job_search_applications_per_day
+        )
+    except Exception:
+        return
+    if not allowed:
+        raise HTTPException(
+            status_code=429,
+            detail=f"Daily limit of {settings.rate_limit_job_search_applications_per_day} tracked-application "
+            "updates reached. Resets at midnight UTC.",
+        )
+
+
 async def _load_user_job_search_applications(db: AsyncSession, user_id: str) -> list[JobSearchApplication]:
+    # Bounded to the most recent N rows, this backs the "already applied" lookup
+    # on every /search call, so an unbounded scan would grow linearly with a
+    # power-user's history on every request.
     rows = (
-        await db.execute(select(JobSearchApplication).where(JobSearchApplication.user_id == user_id))
+        await db.execute(
+            select(JobSearchApplication)
+            .where(JobSearchApplication.user_id == user_id)
+            .order_by(JobSearchApplication.created_at.desc())
+            .limit(settings.job_search_max_tracked_history)
+        )
     ).scalars().all()
     return list(rows)
 
@@ -86,7 +109,7 @@ def _response_cache_key(payload: dict) -> str:
 
 async def _upsert_jobs_cache(db: AsyncSession, raw_jobs: list[dict], *, origin_tool: str = "recent_job_search") -> None:
     """Upsert every fetched listing into the shared `jobs` cache table, keyed
-    by (source, source_job_id) — refreshes last_seen_at/expires_at on repeat
+    by (source, source_job_id), refreshes last_seen_at/expires_at on repeat
     sightings instead of inserting duplicates."""
     if not raw_jobs:
         return
@@ -171,7 +194,7 @@ def _job_row_to_raw_dict(row: Job) -> dict:
 
 
 async def _fetch_db_candidates(db: AsyncSession, payload: dict) -> list[dict]:
-    """Coarse pre-filter over the shared `jobs` cache — bounded, not exact
+    """Coarse pre-filter over the shared `jobs` cache, bounded, not exact
     matching. `score_all`/`_score_job` does the precise per-item decision
     afterward, identically for these DB-sourced candidates and for anything
     freshly fetched from Adzuna, so matching semantics never diverge between
@@ -179,7 +202,7 @@ async def _fetch_db_candidates(db: AsyncSession, payload: dict) -> list[dict]:
     """
     country_code = adzuna_country_code(payload.get("country")) or adzuna_country_code(payload.get("location"))
     if not country_code:
-        # Can't pass _score_job's country-match gate anyway — skip the DB
+        # Can't pass _score_job's country-match gate anyway, skip the DB
         # round-trip and let the caller fall through to fetch_adzuna_raw,
         # which raises the same AdzunaConfigError for an unresolved country.
         return []
@@ -224,14 +247,14 @@ async def search_recent_jobs(db: AsyncSession, user_id: str, body: JobSearchRequ
     shortfall = limit - len(db_scored)
     fresh_raw_jobs: list[dict] = []
     if shortfall > 0:
-        topup_limit = min(50, shortfall * 3)  # headroom — not everything survives scoring
+        topup_limit = min(50, shortfall * 3)  # headroom, not everything survives scoring
         topup_payload = {**payload, "result_limit": topup_limit}
         try:
             fresh_raw_jobs = await fetch_adzuna_raw(topup_payload)
         except AdzunaConfigError as exc:
             if not db_scored:
                 raise HTTPException(status_code=400, detail=str(exc))
-            # DB already has something to show — degrade gracefully instead
+            # DB already has something to show, degrade gracefully instead
             # of failing the whole request over the top-up call.
         else:
             await _upsert_jobs_cache(db, fresh_raw_jobs)
@@ -256,12 +279,18 @@ async def search_recent_jobs(db: AsyncSession, user_id: str, body: JobSearchRequ
     }
 
 
-async def list_job_search_applications(db: AsyncSession, user_id: str) -> list[dict]:
+async def list_job_search_applications(
+    db: AsyncSession, user_id: str, *, limit: int | None = None, offset: int = 0
+) -> list[dict]:
+    page_size = min(limit or settings.job_search_applications_page_size_default,
+                     settings.job_search_applications_page_size_max)
     rows = (
         await db.execute(
             select(JobSearchApplication)
             .where(JobSearchApplication.user_id == user_id)
             .order_by(JobSearchApplication.created_at.desc())
+            .limit(page_size)
+            .offset(max(0, offset))
         )
     ).scalars().all()
     return [row_to_dict(r) for r in rows]
@@ -282,7 +311,9 @@ async def _find_job_id(
             return str(row)
 
     row = (
-        await db.execute(select(Job.id).where(Job.canonical_url == job_url_canonical))
+        await db.execute(
+            select(Job.id).where(Job.canonical_url == job_url_canonical).limit(1)
+        )
     ).scalar_one_or_none()
     return str(row) if row is not None else None
 
@@ -329,6 +360,8 @@ async def _upsert_tracker_application(
 async def create_job_search_application(
     db: AsyncSession, user_id: str, body: JobSearchApplicationCreateRequest
 ) -> dict:
+    await _check_applications_rate_limit_fail_open(user_id)
+
     job_url = str(body.job_url)
     job_url_canonical = canonicalize_job_url(str(body.job_url_canonical or body.job_url))
 
@@ -397,6 +430,8 @@ async def create_job_search_application(
 async def update_job_search_application(
     db: AsyncSession, user_id: str, application_id: str, body: JobSearchApplicationUpdateRequest
 ) -> dict:
+    await _check_applications_rate_limit_fail_open(user_id)
+
     existing = (
         await db.execute(
             select(JobSearchApplication).where(

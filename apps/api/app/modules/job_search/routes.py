@@ -1,6 +1,6 @@
 """Recent job search endpoints and apply tracking."""
 
-from fastapi import APIRouter, Depends, Request
+from fastapi import APIRouter, Depends, Query, Request
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.database import get_db
@@ -22,9 +22,14 @@ async def search_recent_jobs(request: Request, body: JobSearchRequest, db: Async
 
 
 @router.get("/applications")
-async def list_job_search_applications(request: Request, db: AsyncSession = Depends(get_db)):
+async def list_job_search_applications(
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+    limit: int | None = Query(default=None, ge=1, le=200),
+    offset: int = Query(default=0, ge=0),
+):
     user_id = await get_current_user_id(request, db)
-    return await service.list_job_search_applications(db, user_id)
+    return await service.list_job_search_applications(db, user_id, limit=limit, offset=offset)
 
 
 @router.post("/applications", status_code=201)

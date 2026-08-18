@@ -13,7 +13,7 @@ from app.shared.models import Base, UUIDPKMixin, CreatedAtMixin
 class Job(Base, UUIDPKMixin, CreatedAtMixin):
     """Shared, deduplicated cache of external job listings (e.g. Adzuna).
 
-    No user_id — this table is fully shared across every user's searches,
+    No user_id, this table is fully shared across every user's searches,
     mirroring the `startup_hunt_sources`-style shared-row precedent, just
     with no per-user rows at all (see app/modules/startup_hunt/models.py).
     """
@@ -23,12 +23,16 @@ class Job(Base, UUIDPKMixin, CreatedAtMixin):
         UniqueConstraint("source", "source_job_id", name="jobs_source_job_id_key"),
         Index("jobs_canonical_url_idx", "canonical_url"),
         Index("jobs_expires_at_idx", "expires_at"),
+        # Backs query_job_cache_candidates()'s country + posted_at filter/sort below.
+        # Added by alembic/versions/e2f7c9a4b8d1_add_jobs_origin_tool_and_search_index.py
+        # It must stay declared here too, or a future autogenerate will propose dropping it.
+        Index("jobs_country_posted_at_idx", "country", desc("posted_at")),
     )
 
     source: Mapped[str] = mapped_column(Text, nullable=False)
     source_job_id: Mapped[str] = mapped_column(Text, nullable=False)
     # Which internal tool/feature fetched this row (e.g. "recent_job_search",
-    # later "startup_hunt") — distinct from `source`, which is the external
+    # later "startup_hunt"), distinct from `source`, which is the external
     # provider (e.g. "adzuna"). Lets multiple tools share this cache without
     # losing track of where a row came from.
     origin_tool: Mapped[str] = mapped_column(Text, nullable=False, server_default="recent_job_search")
@@ -87,7 +91,7 @@ class JobSearchApplication(Base, UUIDPKMixin, CreatedAtMixin):
     )
     applied_at: Mapped[datetime | None] = mapped_column(TIMESTAMP(timezone=True), nullable=True)
     application_status: Mapped[str] = mapped_column(Text, server_default="saved", nullable=False)
-    # Cross-module FK to tracker's job_applications — declared as a plain FK
+    # Cross-module FK to tracker's job_applications, declared as a plain FK
     # column, no ORM relationship() across module boundaries (see plan notes).
     tracker_application_id: Mapped[uuid.UUID | None] = mapped_column(
         PG_UUID(as_uuid=True), ForeignKey("job_applications.id", ondelete="SET NULL"), nullable=True
@@ -100,7 +104,7 @@ class JobSearchApplication(Base, UUIDPKMixin, CreatedAtMixin):
     )
     citation_payload: Mapped[dict] = mapped_column(JSONB, server_default="{}", nullable=False)
     search_context: Mapped[dict] = mapped_column(JSONB, server_default="{}", nullable=False)
-    # Trigger-managed (set_updated_at()) — no ORM onupdate, see shared/models.py note.
+    # Trigger-managed (set_updated_at()), no ORM onupdate, see shared/models.py note.
     updated_at: Mapped[datetime] = mapped_column(
         TIMESTAMP(timezone=True), server_default=func.now(), nullable=False
     )
@@ -114,14 +118,14 @@ async def query_job_cache_candidates(
     posted_within_hours: int | None,
     limit: int,
 ) -> list[Job]:
-    """Coarse, bounded pre-filter over the shared `jobs` cache — not exact
+    """Coarse, bounded pre-filter over the shared `jobs` cache, not exact
     matching, just narrows the candidate pool. Callers run their own
     fine-grained scorer over the result (e.g. job_search's `_score_job` or
     startup_hunt's `_score_opportunity`), identically to how they score
     freshly-fetched external results, so matching semantics never diverge
     between DB-sourced and live-fetched candidates. Shared across modules
     (job_search and startup_hunt both call this) since it's a query against
-    one shared table — each caller maps the returned rows into its own
+    one shared table, each caller maps the returned rows into its own
     dict shape afterward, since those shapes genuinely differ per tool.
     """
     conditions = [Job.expires_at > datetime.now(timezone.utc), Job.country == country_code]
@@ -146,7 +150,7 @@ async def query_job_cache_candidates(
 
 async def touch_job_cache_rows(db: AsyncSession, job_ids: list[uuid.UUID], *, ttl_days: int) -> None:
     """Refresh last_seen_at/expires_at for already-cached rows a search actually
-    used as candidates — cheaper than re-running the full upsert for rows that
+    used as candidates, cheaper than re-running the full upsert for rows that
     already exist and haven't changed."""
     if not job_ids:
         return

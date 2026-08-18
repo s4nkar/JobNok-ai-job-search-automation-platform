@@ -2,6 +2,7 @@
 
 import Link from 'next/link'
 import { useState } from 'react'
+import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { useForm } from 'react-hook-form'
 import { zodResolver } from '@hookform/resolvers/zod'
 import { z } from 'zod'
@@ -11,11 +12,13 @@ import { Label } from '@jobnok/ui'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@jobnok/ui'
 import { Textarea } from '@jobnok/ui'
 import { useToast } from '@jobnok/ui'
-import { apiFetch } from '@/lib/api'
+import { apiFetch, apiGet } from '@/lib/api'
 import { config } from '@/lib/config'
 import { formatDate } from '@jobnok/ui'
-import { JobSearchResponse, JobSearchResult } from '@/lib/types'
+import { JobSearchApplication, JobSearchResponse, JobSearchResult } from '@/lib/types'
+import { queryKeys } from '@/lib/queryKeys'
 import {
+  Bookmark,
   BriefcaseBusiness,
   CheckCircle2,
   ExternalLink,
@@ -27,7 +30,8 @@ import {
   Sparkles,
 } from 'lucide-react'
 
-// Adzuna's supported country path segments — https://developer.adzuna.com/
+// Adzuna's supported country path segments - https://developer.adzuna.com/
+// Keep in sync with apps/api/app/modules/job_search/sources.py _ADZUNA_COUNTRY_ALIASES
 const ADZUNA_COUNTRIES: { value: string; label: string }[] = [
   { value: 'de', label: 'Germany' },
   { value: 'gb', label: 'United Kingdom' },
@@ -49,13 +53,13 @@ const ADZUNA_COUNTRIES: { value: string; label: string }[] = [
 ]
 
 const schema = z.object({
-  query: z.string().min(2, 'Enter a role or keyword'),
-  location: z.string().min(2, 'Enter a location'),
+  query: z.string().min(2, 'Enter a role or keyword').max(200, 'Keep it under 200 characters'),
+  location: z.string().min(2, 'Enter a location').max(200, 'Keep it under 200 characters'),
   country: z.string().min(2, 'Select a country'),
   posted_within_hours: z.coerce.number().int().min(1).max(720),
   result_limit: z.coerce.number().int().min(1).max(50),
   remote_only: z.enum(['false', 'true']).default('false'),
-  preferences_prompt: z.string().optional(),
+  preferences_prompt: z.string().max(500, 'Keep it under 500 characters').optional(),
 })
 
 type FormData = z.infer<typeof schema>
@@ -71,12 +75,31 @@ const DEFAULT_VALUES: FormData = {
 }
 
 export default function RecentJobSearchPage() {
+  const queryClient = useQueryClient()
   const [loading, setLoading] = useState(false)
   const [applyingId, setApplyingId] = useState<string | null>(null)
   const [results, setResults] = useState<JobSearchResult[]>([])
   const [parsedPreferences, setParsedPreferences] = useState<JobSearchResponse['parsed_preferences'] | null>(null)
   const [error, setError] = useState<string | null>(null)
   const { toast } = useToast()
+
+  // Shares its cache key with the Tracker page's "Job Search" tab, which owns
+  // the actual list UI and status editing - this page only needs the count.
+  const { data: tracked = [] } = useQuery({
+    queryKey: queryKeys.jobSearchApplications,
+    queryFn: () => apiGet<JobSearchApplication[]>('/api/job-search/applications?limit=200'),
+  })
+
+  function setTracked(updater: (prev: JobSearchApplication[]) => JobSearchApplication[]) {
+    queryClient.setQueryData<JobSearchApplication[]>(queryKeys.jobSearchApplications, (prev) => updater(prev || []))
+  }
+
+  function upsertTracked(row: JobSearchApplication) {
+    setTracked((prev) => {
+      const withoutRow = prev.filter((a) => a.id !== row.id)
+      return [row, ...withoutRow]
+    })
+  }
 
   const { register, handleSubmit, setValue, watch, formState: { errors } } = useForm<FormData>({
     resolver: zodResolver(schema),
@@ -167,6 +190,7 @@ export default function RecentJobSearchPage() {
         }
         : item
       ))
+      upsertTracked(json as JobSearchApplication)
       toast({ title: 'Application tracked', description: 'This job is now synced to your Follow-Up Tracker.' })
     } catch {
       toast({ title: 'Could not update tracking', description: 'Network error. Please try again.', variant: 'destructive' })
@@ -194,9 +218,20 @@ export default function RecentJobSearchPage() {
       <div className="flex items-start gap-2.5 bg-indigo-50 border border-indigo-100 text-indigo-700 rounded-xl px-4 py-3 mb-6 text-sm">
         <Info className="h-4 w-4 flex-shrink-0 text-indigo-500 mt-0.5" />
         <span>
-          <strong>{config.rateLimits.jobSearchPerDay} searches/day</strong> on the free tier. General-market search, not limited to startups or curated ATS boards — and each result keeps a citation trail.
+          <strong>{config.rateLimits.jobSearchPerDay} searches/day</strong> on the free tier. General-market search, not limited to startups or curated ATS boards. Each result keeps a citation trail.
         </span>
       </div>
+
+      {/* Tracked count - the actual list and status editing live in the Follow-Up
+          Tracker's "Job Search" tab, not duplicated here. */}
+      <Link
+        href="/tracker?tab=job-search"
+        className="inline-flex items-center gap-2 mb-6 px-3.5 py-2 rounded-xl border border-slate-100 bg-white shadow-sm text-sm text-slate-600 hover:border-indigo-200 hover:text-indigo-700 transition-colors"
+      >
+        <Bookmark className="h-3.5 w-3.5 text-indigo-500" />
+        <span className="font-semibold">{tracked.length}</span> tracked from this tool
+        <span className="text-indigo-600">- view in Tracker</span>
+      </Link>
 
       <div className="grid grid-cols-[320px_1fr] gap-5 items-start">
         <form
@@ -285,6 +320,7 @@ export default function RecentJobSearchPage() {
               className="rounded-xl text-sm border-slate-200 focus:border-indigo-300 focus:ring-1 focus:ring-indigo-200 resize-none"
               {...register('preferences_prompt')}
             />
+            {errors.preferences_prompt && <p className="text-xs text-destructive">{errors.preferences_prompt.message}</p>}
           </div>
 
           <Button

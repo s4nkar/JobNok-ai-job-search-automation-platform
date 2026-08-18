@@ -1,8 +1,8 @@
 'use client'
 
-import React from 'react'
+import React, { Suspense } from 'react'
 import Link from 'next/link'
-import { useRouter } from 'next/navigation'
+import { useRouter, useSearchParams } from 'next/navigation'
 import { useRef, useState } from 'react'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { useForm } from 'react-hook-form'
@@ -16,6 +16,8 @@ import {
   StartupHuntSavedOpportunity,
   StartupHuntOpportunityStatus,
   OpportunityArtifact,
+  JobSearchApplication,
+  JobSearchApplicationStatus,
 } from '@/lib/types'
 import { isOverdue, formatDate, formatCurrency, cn } from '@jobnok/ui'
 import { Button } from '@jobnok/ui'
@@ -38,7 +40,7 @@ import {
   Plus, Pencil, Trash2, Briefcase, Loader2, AlertCircle, TrendingUp, CheckCircle,
   Clock, ExternalLink, Compass, Mail, MapPin, MoreHorizontal, FileSearch, PenLine,
   MessageSquare, ChevronDown, ChevronUp, FileText, Radar, Users, Globe, Linkedin,
-  StopCircle, Building2, BookmarkCheck, ScanSearch,
+  StopCircle, Building2, BookmarkCheck, ScanSearch, Search,
 } from 'lucide-react'
 import { ScoutCompany, ScoutContact, ScoutCrawlStatus } from '@/lib/types'
 import { apiFetch, apiGet } from '@/lib/api'
@@ -67,6 +69,14 @@ const STARTUP_STATUS_META: Record<StartupHuntOpportunityStatus, { label: string;
 
 const LEAD_STATUS_ORDER: StartupHuntOpportunityStatus[] = ['saved', 'contacted', 'applied', 'skipped']
 
+const JOB_SEARCH_STATUS_META: Record<JobSearchApplicationStatus, { label: string; classes: string }> = {
+  saved: { label: 'Saved', classes: 'bg-slate-100 text-slate-700' },
+  applied: { label: 'Applied', classes: 'bg-emerald-100 text-emerald-700' },
+  skipped: { label: 'Skipped', classes: 'bg-gray-100 text-gray-500' },
+}
+
+const JOB_SEARCH_STATUS_ORDER: JobSearchApplicationStatus[] = ['saved', 'applied', 'skipped']
+
 const ARTIFACT_META: Record<string, { label: string; icon: React.ElementType; color: string; tool: string }> = {
   resume_analysis: { label: 'Resume Analysis', icon: FileSearch, color: 'text-slate-600', tool: 'resume-tailor' },
   cover_letter: { label: 'Cover Letter', icon: PenLine, color: 'text-slate-600', tool: 'cover-letter' },
@@ -94,14 +104,26 @@ const SCOUT_STAGE_PILL: Record<string, string> = {
   'Angel':    'bg-slate-50 text-slate-700 ring-slate-200',
 }
 
-export default function TrackerPage() {
+type TrackerTab = 'applications' | 'leads' | 'scout' | 'job-search'
+
+function initialTrackerTab(searchParams: URLSearchParams): TrackerTab {
+  const requested = searchParams.get('tab')
+  return requested === 'leads' || requested === 'scout' || requested === 'job-search' ? requested : 'applications'
+}
+
+function TrackerPageInner() {
   const router = useRouter()
+  const searchParams = useSearchParams()
   const queryClient = useQueryClient()
-  const [tab, setTab] = useState<'applications' | 'leads' | 'scout'>('applications')
+  const [tab, setTab] = useState<TrackerTab>(() => initialTrackerTab(searchParams))
 
   const { data: applications = [], isLoading: appsLoading } = useQuery({
     queryKey: queryKeys.tracker,
     queryFn: () => apiGet<JobApplication[]>('/api/tracker'),
+  })
+  const { data: jobSearchApplications = [], isLoading: jobSearchLoading } = useQuery({
+    queryKey: queryKeys.jobSearchApplications,
+    queryFn: () => apiGet<JobSearchApplication[]>('/api/job-search/applications?limit=200'),
   })
   const { data: leads = [], isLoading: leadsLoading } = useQuery({
     queryKey: queryKeys.startupHuntOpportunities,
@@ -128,6 +150,8 @@ export default function TrackerPage() {
   const [saving, setSaving] = useState(false)
   const [updatingLeadId, setUpdatingLeadId] = useState<string | null>(null)
   const [leadStatusFilter, setLeadStatusFilter] = useState<StartupHuntOpportunityStatus | 'all'>('all')
+  const [updatingJobSearchId, setUpdatingJobSearchId] = useState<string | null>(null)
+  const [jobSearchStatusFilter, setJobSearchStatusFilter] = useState<JobSearchApplicationStatus | 'all'>('all')
   const [expandedDocs, setExpandedDocs] = useState<Record<string, boolean>>({})
   const [docsCache, setDocsCache] = useState<Record<string, OpportunityArtifact[]>>({})
   const [docsLoading, setDocsLoading] = useState<Record<string, boolean>>({})
@@ -150,6 +174,9 @@ export default function TrackerPage() {
   }
   function setArtifactCounts(updater: (prev: Record<string, number>) => Record<string, number>) {
     queryClient.setQueryData<Record<string, number>>(queryKeys.startupHuntArtifactCounts, (prev) => updater(prev || {}))
+  }
+  function setJobSearchApplications(updater: (prev: JobSearchApplication[]) => JobSearchApplication[]) {
+    queryClient.setQueryData<JobSearchApplication[]>(queryKeys.jobSearchApplications, (prev) => updater(prev || []))
   }
 
   function _clearCrawlInterval(id: string) {
@@ -299,6 +326,24 @@ export default function TrackerPage() {
     setUpdatingLeadId(null)
   }
 
+  async function updateJobSearchStatus(app: JobSearchApplication, status: JobSearchApplicationStatus) {
+    setUpdatingJobSearchId(app.id)
+    const res = await apiFetch(`/api/job-search/applications/${app.id}`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ application_status: status }),
+    })
+    if (res.ok) {
+      const updated: JobSearchApplication = await res.json()
+      setJobSearchApplications((prev) => prev.map((a) => a.id === updated.id ? updated : a))
+      toast({ title: 'Status updated' })
+    } else {
+      const err = await res.json().catch(() => ({}))
+      toast({ title: 'Could not update status', description: err.detail || 'Try again.', variant: 'destructive' })
+    }
+    setUpdatingJobSearchId(null)
+  }
+
   async function deleteLead(id: string) {
     const res = await apiFetch(`/api/startup-hunt/opportunities/${id}`, { method: 'DELETE' })
     if (res.ok) {
@@ -345,6 +390,15 @@ export default function TrackerPage() {
     return acc
   }, {} as Record<StartupHuntOpportunityStatus, number>)
 
+  const filteredJobSearchApplications = jobSearchStatusFilter === 'all'
+    ? jobSearchApplications
+    : jobSearchApplications.filter((a) => a.application_status === jobSearchStatusFilter)
+
+  const jobSearchCounts = JOB_SEARCH_STATUS_ORDER.reduce((acc, s) => {
+    acc[s] = jobSearchApplications.filter((a) => a.application_status === s).length
+    return acc
+  }, {} as Record<JobSearchApplicationStatus, number>)
+
   return (
     <div className="animate-fade-in">
       <div className="flex items-start justify-between mb-6">
@@ -370,10 +424,11 @@ export default function TrackerPage() {
           ['applications', Briefcase, 'Applications', applications.length, 'bg-indigo-100 text-indigo-700'],
           ['leads', Compass, 'Startup Leads', leads.length, 'bg-indigo-100 text-indigo-700'],
           ['scout', Radar, 'Startup Scout', scoutCompanies.length, 'bg-indigo-100 text-indigo-700'],
+          ['job-search', Search, 'Job Search', jobSearchApplications.length, 'bg-indigo-100 text-indigo-700'],
         ] as const).map(([id, Icon, label, count, badgeClass]) => (
           <button
             key={id}
-            onClick={() => setTab(id as 'applications' | 'leads' | 'scout')}
+            onClick={() => setTab(id as TrackerTab)}
             className={cn(
               'flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-semibold transition-colors',
               tab === id ? 'bg-white text-slate-900 shadow-sm' : 'text-slate-500 hover:text-slate-700'
@@ -1124,6 +1179,119 @@ export default function TrackerPage() {
         </>
       )}
 
+      {/* ─── JOB SEARCH TAB ─── */}
+      {tab === 'job-search' && (
+        <>
+          <div className="grid grid-cols-3 gap-4 mb-6">
+            {[
+              { label: 'Saved', value: jobSearchCounts.saved, classes: 'bg-slate-100 text-slate-600' },
+              { label: 'Applied', value: jobSearchCounts.applied, classes: 'bg-emerald-100 text-emerald-600' },
+              { label: 'Skipped', value: jobSearchCounts.skipped, classes: 'bg-gray-100 text-gray-500' },
+            ].map(({ label, value, classes }) => (
+              <button
+                key={label}
+                onClick={() => setJobSearchStatusFilter(jobSearchStatusFilter === label.toLowerCase() as JobSearchApplicationStatus ? 'all' : label.toLowerCase() as JobSearchApplicationStatus)}
+                className={cn('bg-white rounded-2xl border shadow-sm p-5 flex items-center gap-4 text-left transition-all hover:shadow-md',
+                  jobSearchStatusFilter === label.toLowerCase() ? 'border-indigo-300 ring-1 ring-indigo-200' : 'border-slate-100')}
+              >
+                <div className={cn('w-10 h-10 rounded-xl flex items-center justify-center flex-shrink-0 text-sm font-bold', classes)}>{value}</div>
+                <div>
+                  <p className="text-2xl font-bold text-slate-900 leading-none">{value}</p>
+                  <p className="text-xs text-slate-500 mt-1">{label}</p>
+                </div>
+              </button>
+            ))}
+          </div>
+
+          <div className="flex items-center gap-2 mb-4">
+            <span className="text-xs text-slate-500 font-medium">Filter:</span>
+            {(['all', ...JOB_SEARCH_STATUS_ORDER] as const).map((s) => (
+              <button
+                key={s}
+                onClick={() => setJobSearchStatusFilter(s)}
+                className={cn('px-3 py-1 rounded-full text-xs font-semibold border transition-colors',
+                  jobSearchStatusFilter === s ? 'bg-slate-900 text-white border-slate-900' : 'bg-white text-slate-600 border-slate-200 hover:border-slate-400')}
+              >
+                {s === 'all' ? `All (${jobSearchApplications.length})` : `${JOB_SEARCH_STATUS_META[s].label} (${jobSearchCounts[s]})`}
+              </button>
+            ))}
+          </div>
+
+          <div className="bg-white rounded-2xl border border-slate-100 shadow-sm overflow-hidden">
+            {jobSearchLoading ? (
+              <div className="flex items-center justify-center h-48">
+                <div className="flex flex-col items-center gap-3">
+                  <Loader2 className="h-8 w-8 animate-spin text-indigo-400" />
+                  <p className="text-sm text-slate-400">Loading tracked jobs…</p>
+                </div>
+              </div>
+            ) : filteredJobSearchApplications.length === 0 ? (
+              <div className="flex flex-col items-center justify-center h-56">
+                <div className="w-14 h-14 rounded-2xl bg-indigo-50 flex items-center justify-center mb-4">
+                  <Search className="h-7 w-7 text-indigo-200" />
+                </div>
+                <p className="font-medium text-slate-600">No tracked jobs here yet</p>
+                <p className="text-sm text-slate-400 mt-1">
+                  {jobSearchStatusFilter === 'all' ? 'Mark a result as applied in Recent Job Search to see it here' : `No ${jobSearchStatusFilter} jobs.`}
+                </p>
+              </div>
+            ) : (
+              <Table>
+                <TableHeader>
+                  <TableRow className="bg-slate-50/50 border-b border-slate-100 hover:bg-slate-50/50">
+                    {['Role', 'Company', 'Location', 'Source', 'Status', 'Tracked'].map((h) => (
+                      <TableHead key={h} className="text-xs font-semibold text-slate-500 uppercase tracking-wider">{h}</TableHead>
+                    ))}
+                    <TableHead className="w-16" />
+                  </TableRow>
+                </TableHeader>
+                <TableBody>
+                  {filteredJobSearchApplications.map((app) => {
+                    const isUpdating = updatingJobSearchId === app.id
+                    return (
+                      <TableRow key={app.id} className="border-b border-slate-50 hover:bg-slate-50/50 transition-colors">
+                        <TableCell className="font-semibold text-slate-800">{app.role}</TableCell>
+                        <TableCell className="text-slate-600">{app.company}</TableCell>
+                        <TableCell>
+                          <span className="flex items-center gap-1 text-xs text-slate-500">
+                            <MapPin className="h-3 w-3 flex-shrink-0" />{app.location}
+                          </span>
+                        </TableCell>
+                        <TableCell>
+                          <span className="inline-flex items-center px-2 py-0.5 rounded-md text-[10px] font-semibold bg-slate-100 text-slate-600 border border-slate-200">
+                            {app.source_name}
+                          </span>
+                        </TableCell>
+                        <TableCell>
+                          <Select value={app.application_status} onValueChange={(v) => updateJobSearchStatus(app, v as JobSearchApplicationStatus)} disabled={isUpdating}>
+                            <SelectTrigger className={cn('h-7 text-xs rounded-full border-0 px-2.5 py-0.5 font-semibold w-auto gap-1', JOB_SEARCH_STATUS_META[app.application_status].classes)}>
+                              <SelectValue />
+                            </SelectTrigger>
+                            <SelectContent>
+                              {JOB_SEARCH_STATUS_ORDER.map((s) => (
+                                <SelectItem key={s} value={s} className="text-xs">{JOB_SEARCH_STATUS_META[s].label}</SelectItem>
+                              ))}
+                            </SelectContent>
+                          </Select>
+                        </TableCell>
+                        <TableCell className="text-xs text-slate-400">{formatDate(app.discovered_at)}</TableCell>
+                        <TableCell>
+                          <Link href={app.job_url} target="_blank">
+                            <button className="h-7 w-7 rounded-lg flex items-center justify-center text-slate-400 hover:text-indigo-600 hover:bg-indigo-50 transition-colors">
+                              <ExternalLink className="h-3.5 w-3.5" />
+                            </button>
+                          </Link>
+                        </TableCell>
+                      </TableRow>
+                    )
+                  })}
+                </TableBody>
+              </Table>
+            )}
+          </div>
+        </>
+      )}
+
       {/* Add/Edit Application Dialog */}
       <Dialog open={showForm} onOpenChange={setShowForm}>
         <DialogContent className="max-w-lg rounded-2xl">
@@ -1185,5 +1353,13 @@ export default function TrackerPage() {
         </DialogContent>
       </Dialog>
     </div>
+  )
+}
+
+export default function TrackerPage() {
+  return (
+    <Suspense>
+      <TrackerPageInner />
+    </Suspense>
   )
 }

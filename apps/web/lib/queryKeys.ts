@@ -18,4 +18,5 @@ export const queryKeys = {
   startupScoutCompanies: ['startup-scout', 'companies'] as const,
   startupScoutCompany: (companyId: string) => ['startup-scout', 'companies', companyId] as const,
   scoutContacts: (companyId: string) => ['startup-scout', 'companies', companyId, 'contacts'] as const,
+  jobSearchApplications: ['job-search', 'applications'] as const,
 }
