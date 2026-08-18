@@ -160,11 +160,11 @@ export default function RecentJobSearchPage() {
 
       setResults((prev) => prev.map((item) => item.job_url_canonical === job.job_url_canonical
         ? {
-            ...item,
-            applied: true,
-            application_status: 'applied',
-            tracked_application_id: json.id,
-          }
+          ...item,
+          applied: true,
+          application_status: 'applied',
+          tracked_application_id: json.id,
+        }
         : item
       ))
       toast({ title: 'Application tracked', description: 'This job is now synced to your Follow-Up Tracker.' })
@@ -185,7 +185,7 @@ export default function RecentJobSearchPage() {
         <div>
           <h1 className="text-2xl font-bold text-slate-900 tracking-tight">Recent Job Search</h1>
           <p className="text-slate-500 text-sm mt-0.5">
-            Search live postings across Germany, the UK, and more — any company, any role, powered by Adzuna
+            Search live postings across Germany, the UK, and more. Any company, any role, powered by Jobnok.
           </p>
         </div>
       </div>
@@ -194,8 +194,7 @@ export default function RecentJobSearchPage() {
       <div className="flex items-start gap-2.5 bg-indigo-50 border border-indigo-100 text-indigo-700 rounded-xl px-4 py-3 mb-6 text-sm">
         <Info className="h-4 w-4 flex-shrink-0 text-indigo-500 mt-0.5" />
         <span>
-          <strong>{config.rateLimits.jobSearchPerDay} searches/day</strong> on the free tier. General-market search across
-          Adzuna&apos;s job index — not limited to startups or curated ATS boards — and each result keeps a citation trail.
+          <strong>{config.rateLimits.jobSearchPerDay} searches/day</strong> on the free tier. General-market search, not limited to startups or curated ATS boards — and each result keeps a citation trail.
         </span>
       </div>
 
