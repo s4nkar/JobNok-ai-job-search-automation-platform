@@ -5,12 +5,12 @@ import { createContext, useContext, useEffect, useState, type ReactNode } from '
 const SidebarContext = createContext<{ collapsed: boolean; toggleCollapsed: () => void } | null>(null)
 
 export function SidebarProvider({ children }: { children: ReactNode }) {
-  // Collapsed by default on first visit (no stored preference yet). A
-  // returning user who explicitly expanded it gets that choice restored.
-  const [collapsed, setCollapsed] = useState(true)
+  // Open by default on first visit (no stored preference yet). A returning
+  // user who explicitly collapsed it gets that choice restored.
+  const [collapsed, setCollapsed] = useState(false)
 
   useEffect(() => {
-    if (localStorage.getItem('sidebar_collapsed') === 'false') setCollapsed(false)
+    if (localStorage.getItem('sidebar_collapsed') === 'true') setCollapsed(true)
   }, [])
 
   function toggleCollapsed() {
