@@ -151,6 +151,13 @@ services:
       # Server-side only — used by Next.js rewrites to reach the API inside Docker.
       # Never exposed to the browser (no NEXT_PUBLIC_ prefix).
       - BACKEND_URL=http://api:8000
+      # Docker Desktop's bind-mount layer on Windows can silently drop native
+      # filesystem change events (inotify), so webpack's watcher never fires
+      # and edits stop hot-reloading until the route is freshly requested.
+      # Polling sidesteps this — it checks file mtimes on an interval instead
+      # of relying on those events.
+      - WATCHPACK_POLLING=true
+      - CHOKIDAR_USEPOLLING=true
     # The base docker-compose.yml's 512M/1.0cpu limit is sized for a built
     # production server — dev-mode webpack/HMR needs much more headroom, or
     # compiles thrash at the memory ceiling and crawl (observed at 97%+ usage).
@@ -177,6 +184,9 @@ services:
       # Points at the dashboard app — marketing's Log in/Sign up/tool links
       # are absolute URLs since the two apps live on separate subdomains in prod.
       - NEXT_PUBLIC_APP_URL=http://localhost:3000
+      # See the nextjs service's identical vars above — same Windows bind-mount reason.
+      - WATCHPACK_POLLING=true
+      - CHOKIDAR_USEPOLLING=true
     # Overrides the base docker-compose.yml healthcheck, which checks port 3000
     # (the prod `next start` port). Dev mode runs `next dev -p 3001` instead —
     # without this override the healthcheck always fails against a port nothing
