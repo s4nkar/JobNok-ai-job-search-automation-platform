@@ -6,17 +6,19 @@ AI-powered job search automation platform. Eleven tools in one place to cover ev
 
 | Tool | What it does |
 |------|-------------|
+| Recent Job Search | General-market job search (Adzuna-backed), DB-first cache shared across tools |
 | Smart Templates | Reusable message templates with `{{placeholder}}` auto-fill |
 | LinkedIn Auto-Fill | Paste a LinkedIn URL, get template fields populated from their profile |
 | Resume Tailor | Upload resume + job description, get ATS match score, missing keywords, and bullet rewrites |
 | Cover Letter Generator | Generates a tailored cover letter, editable inline before export |
 | Interview Prep | Paste a JD, get 10 STAR-method Q&As scoped to that exact role |
 | Follow-Up Tracker | Lightweight application CRM with overdue follow-up highlighting |
+| Startup Scout | Discover early-stage companies by sector, stage, and location |
+| Startup Hunt | Multi-source startup job/lead discovery with contact enrichment |
 | Salary Research | Job title + location to median salary, range, and negotiation talking points |
 | Bulk Email Sender | CSV upload, configurable send delay, live per-recipient status |
-| Recent Job Search | Cross-platform job search with one-click sync to the tracker |
-| Startup Hunt | Discover and track early-stage companies, leads, and contacts |
-| Profile Management | Store CV details, skills, and photo used by all AI generation tools |
+
+Profile Management (CV details, skills, photo) backs all of the above but isn't a standalone tool.
 
 ## Architecture
 
@@ -25,7 +27,7 @@ Browser
   |
   | HTTPS
   v
-Vercel (Next.js)
+Next.js (UI only)
   |
   | /api/* proxy
   v
@@ -33,29 +35,38 @@ Nginx
   |
   | HTTP
   v
-Railway (FastAPI)
-  |-- Supabase (PostgreSQL + Auth) — accessed via SQLAlchemy + Alembic
-  |-- Upstash Redis (rate limits + ARQ broker)
+FastAPI (all business logic, modular monolith)
+  |-- PostgreSQL (Supabase-hosted) — accessed via SQLAlchemy (async) + Alembic, no RLS/PostgREST
+  |-- Clerk (Auth) — JWT verified against Clerk's JWKS endpoint
+  |-- Cloudinary (CV photo storage)
+  |-- Upstash Redis (rate limits) + Redis (ARQ broker)
   |-- ARQ Worker (bulk email, background tasks)
   |-- Groq / Cerebras / HuggingFace (AI generation, fallback chain)
   |-- Jina / Cohere (embeddings, fallback chain)
   |-- Resend (transactional + bulk email)
   |-- RapidAPI / PhantomBuster (LinkedIn scraping)
+  |-- Adzuna (Recent Job Search) / TheirStack, Apify, Google CSE (Startup Hunt) / Crunchbase and others (Startup Scout)
 ```
 
-The frontend is UI-only. All business logic lives in FastAPI. Next.js `/api/*` routes exist only for Supabase Auth; everything else proxies straight to the backend.
+The frontend is UI-only — all business logic lives in FastAPI. Data isolation is enforced at the application layer (explicit `user_id` filtering on every query), not via Postgres RLS.
+
+**Hosting:** target is AWS. Not deploying to Railway, Render, or Vercel — the previous Vercel/Railway/Neon setup referenced in older docs no longer applies and the AWS architecture isn't finalized yet, so it isn't documented here until it's decided.
 
 ## Tech Stack
 
-**Frontend:** Next.js 14, TypeScript, Tailwind CSS, shadcn/ui, Zustand, React Hook Form, Zod
+**Frontend:** Next.js 14, TypeScript, Tailwind CSS, a shared `packages/ui` component library, React Hook Form, Zod — `apps/web` (dashboard) and `apps/marketing` (public site) as separate apps in one pnpm workspace
 
-**Backend:** FastAPI, Python 3.12, Pydantic v2, SQLAlchemy (async) + Alembic, ARQ, PyMuPDF, WeasyPrint, httpx, Sentry — modular monolith at `apps/api/app/`, one module per feature under `app/modules/`
+**Backend:** FastAPI, Python 3.12, Pydantic v2, SQLAlchemy (async) + Alembic, ARQ, PyMuPDF, WeasyPrint, httpx — modular monolith at `apps/api/app/`, one module per feature under `app/modules/`
+
+**Auth:** Clerk (JWT verified via JWKS in FastAPI; Next.js `/api/auth/*` routes are the only frontend routes carrying auth logic)
+
+**Database:** PostgreSQL, Supabase-hosted, accessed only through SQLAlchemy async sessions — no Supabase client, no RLS reliance
 
 **AI:** Groq (primary), Cerebras (fallback), HuggingFace (last resort) via `app/ai/llm/provider.py`
 
 **Embeddings:** Jina (primary), Cohere (fallback) via `app/ai/embeddings.py` — used for resume/JD semantic matching
 
-**Infrastructure:** Vercel, Railway, Supabase, Upstash Redis, Resend, Cloudflare
+**Cache/Queue:** Upstash Redis (REST, rate limiting + response caching) + Redis (TCP, ARQ broker)
 
 ## Resume Tailor Pipeline
 
@@ -64,7 +75,7 @@ The tailor endpoint uses a deterministic + LLM-focused split to keep costs down 
 1. Chunk resume with regex (cached by PDF hash for 30 days)
 2. Embed resume via Jina/Cohere (cached alongside chunks)
 3. Chunk JD fresh on every request
-4. Embed JD with jina
+4. Embed JD with Jina/Cohere
 5. Deterministic matching: numpy similarity matrix, per-requirement evidence, no AI
 6. Deterministic scoring: keyword overlap + embedding similarity per category
 7. Single focused LLM call (~1.2k tokens) for prose only: headline, tailored summary, bullet rewrites
@@ -78,7 +89,7 @@ If embeddings fail, the matcher falls back to keyword-only and sets `degraded: t
 git clone <repo>
 cp apps/web/.env.example apps/web/.env.local
 cp apps/api/.env.example apps/api/.env
-# fill in keys: Supabase (Auth), Upstash, Resend, Groq, Jina, DATABASE_URL/MIGRATIONS_DATABASE_URL (Neon)
+# fill in keys: Clerk, Supabase (Postgres connection string), Upstash, Cloudinary, Resend, Groq, Jina
 ```
 
 Three ways to run it locally, pick one — then, against a fresh database (first run, or after resetting the local Postgres volume), apply the schema once: `pnpm api:migrate`.
@@ -87,13 +98,13 @@ Three ways to run it locally, pick one — then, against a fresh database (first
 ```bash
 pnpm dev          # or: docker compose -f docker-compose.yml -f docker-compose.dev.yml up --build
 ```
-Everything — Postgres, Redis, the API, the ARQ worker, and Next.js — runs in Docker with hot reload via bind mounts.
+Everything — Postgres, Redis, the API, the ARQ worker, and both Next.js apps — runs in Docker with hot reload via bind mounts. Adminer is available at `http://localhost:8085` for browsing the local database.
 
 ### 2. Native frontend + Dockerized backend (`dev:local`)
 ```bash
 pnpm dev:local
 ```
-Runs Postgres/Redis/API/worker in Docker (same as above) but Next.js natively on the host via `pnpm --filter jobnok-frontend dev`. Sidesteps a real limitation of option 1 on Windows: Docker Desktop's WSL2 inotify layer can miss file-change events on bind-mounted volumes, so hot reload for both the API and Next.js can silently stop working. Requires [pnpm](https://pnpm.io/installation) (Node ≥ 22) on the host — `corepack enable` picks up the pinned version automatically.
+Runs Postgres/Redis/API/worker in Docker (same as above) but Next.js natively on the host. Sidesteps a real limitation of option 1 on Windows: Docker Desktop's WSL2 inotify layer can miss file-change events on bind-mounted volumes, so hot reload can silently stop working. Requires [pnpm](https://pnpm.io/installation) (Node ≥ 22) on the host — `corepack enable` picks up the pinned version automatically.
 
 ### 3. Fully manual (no Docker)
 
@@ -136,40 +147,47 @@ No API keys or secrets other than `CLERK_SECRET_KEY` belong in frontend env vars
 
 | Variable | Purpose |
 |----------|---------|
-| `SUPABASE_URL` | Supabase project URL (Storage only — not used for Auth or as a query client) |
-| `SUPABASE_SERVICE_KEY` | Service role key (server-only, Storage) |
 | `CLERK_JWKS_URL` | Clerk JWKS endpoint for verifying session tokens |
 | `CLERK_ISSUER` | Clerk issuer URL (Frontend API URL) |
 | `CLERK_WEBHOOK_SECRET` | Svix signing secret for verifying Clerk webhooks |
-| `DATABASE_URL` | Neon pooled connection string (SQLAlchemy runtime) |
-| `MIGRATIONS_DATABASE_URL` | Neon direct/unpooled connection string (Alembic only — DDL is unreliable through transaction pooling) |
-| `UPSTASH_REDIS_URL` | Redis URL for rate limits + ARQ |
+| `DATABASE_URL` | Direct Postgres connection string to the Supabase project (SQLAlchemy runtime) |
+| `MIGRATIONS_DATABASE_URL` | Session-pooler/direct connection to the same project (Alembic only — DDL is unreliable through the transaction pooler) |
+| `UPSTASH_REDIS_REST_URL` / `UPSTASH_REDIS_REST_TOKEN` | Rate limits + response caching |
+| `REDIS_URL` | TCP Redis URL for the ARQ broker |
+| `CLOUDINARY_CLOUD_NAME` / `CLOUDINARY_API_KEY` / `CLOUDINARY_API_SECRET` | CV photo storage |
 | `GROQ_API_KEY` | Primary AI provider |
 | `CEREBRAS_API_KEY` | AI fallback |
 | `HUGGINGFACE_API_KEY` | AI last resort |
 | `JINA_API_KEY` | Primary embeddings provider |
 | `COHERE_API_KEY` | Embeddings fallback |
 | `RESEND_API_KEY` | Email delivery |
-| `RAPIDAPI_KEY` | LinkedIn scraping |
+| `RAPIDAPI_KEY` | LinkedIn scraping (primary) |
+| `PHANTOMBUSTER_API_KEY` | LinkedIn scraping (fallback) |
+| `ADZUNA_APP_ID` / `ADZUNA_APP_KEY` | Recent Job Search |
+| `THEIRSTACK_API_KEY`, `APIFY_API_TOKEN`, `GOOGLE_CSE_API_KEY` | Startup Hunt sourcing |
+| `CRUNCHBASE_API_KEY` | Startup Scout sourcing |
 | `APP_URL` | Frontend origin for CORS (exact match required) |
-| `SENTRY_DSN` | Error monitoring |
+| `SENTRY_DSN` | Error monitoring (optional) |
+
+See `apps/api/app/core/config.py` for the complete, authoritative list — every setting there is documented inline.
 
 ## Database
 
-Core tables in Neon-hosted PostgreSQL, managed entirely via SQLAlchemy models + Alembic migrations (`apps/api/app/modules/<feature>/models.py`, `apps/api/alembic/`) — no RLS, no PostgREST. Data isolation is enforced purely at the application layer: explicit `user_id` filtering in every query (see `UserScopedRepository`):
+Core tables in Supabase-hosted PostgreSQL, managed entirely via SQLAlchemy models + Alembic migrations (`apps/api/app/modules/<feature>/models.py`, `apps/api/alembic/`) — no RLS, no PostgREST, no Supabase client. Data isolation is enforced purely at the application layer: explicit `user_id` filtering in every query (see `UserScopedRepository`):
 
 | Table | Purpose |
 |-------|---------|
 | `profiles` | User CV data, skills, photo — auto-created on signup |
 | `templates` | Saved message templates |
 | `job_applications` | Follow-up tracker entries |
-| `email_campaigns` | Bulk email campaign metadata |
-| `email_recipients` | Individual recipients per campaign, processed by the ARQ worker |
-| `job_search_applications` | Jobs found or applied to via job search |
-| `startup_hunt_companies` | Tracked startups |
-| `startup_hunt_opportunities` | Leads and roles within tracked companies |
-| `opportunity_artifacts` | AI-generated content linked to opportunities |
-| `linkedin_cache` | Shared LinkedIn profile cache, no RLS, service key only |
+| `email_campaigns` / `email_recipients` | Bulk email campaigns and per-recipient send status |
+| `jobs` | Shared, deduplicated external-listing cache (Recent Job Search + Startup Hunt's TheirStack bucket) |
+| `job_search_applications` | Jobs found or applied to via Recent Job Search |
+| `startup_hunt_companies` / `startup_hunt_opportunities` / `startup_hunt_contacts` | Tracked startups, leads/roles, and enriched contacts |
+| `startup_hunt_sources` | Curated + per-user source configs for Startup Hunt |
+| `opportunity_artifacts` | AI-generated content (resume analysis, cover letter, interview prep) linked to a Startup Hunt opportunity |
+| `startup_scout_companies` / `startup_scout_contacts` | Startup Scout discovery results and contacts |
+| `linkedin_cache` | Shared LinkedIn profile cache, no RLS |
 
 Every FastAPI endpoint re-checks `user_id` from the JWT explicitly — this is the primary enforcement layer, not RLS.
 
@@ -209,3 +227,4 @@ Every FastAPI endpoint re-checks `user_id` from the JWT explicitly — this is t
 - [Deployment](docs/deployment.md)
 - [Resume Tailoring Architecture](docs/resume_tailoring_architecture.md)
 
+Note: the docs above still reference the old Supabase-Auth/Neon/Vercel/Railway setup in places and haven't been fully updated yet — this README is the current source of truth until they're refreshed.
