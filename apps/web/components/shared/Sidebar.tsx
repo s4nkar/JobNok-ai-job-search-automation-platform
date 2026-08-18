@@ -17,19 +17,35 @@ import { queryKeys } from '@/lib/queryKeys'
 import { UserProfile } from '@/lib/types'
 import { useSidebar } from '@/components/providers/SidebarProvider'
 
-const navItems = [
-  { href: '/dashboard', label: 'Dashboard', icon: LayoutDashboard },
-  { href: '/recent-job-search', label: 'Recent Job Search', icon: Search },
-  { href: '/templates', label: 'Smart Templates', icon: FileText },
-  { href: '/linkedin-fill', label: 'LinkedIn Auto-Fill', icon: Linkedin },
-  { href: '/resume-tailor', label: 'Resume Tailor', icon: FileSearch },
-  { href: '/cover-letter', label: 'Cover Letter', icon: PenLine },
-  { href: '/interview-prep', label: 'Interview Prep', icon: MessageSquare },
-  { href: '/tracker', label: 'Follow-Up Tracker', icon: Briefcase },
-  { href: '/startup-scout', label: 'Startup Scout', icon: Radar },
-  { href: '/startup-hunt', label: 'Startup Hunt', icon: Compass },
-  { href: '/salary', label: 'Salary Research', icon: DollarSign },
-  { href: '/bulk-email', label: 'Bulk Email', icon: Mail },
+const topNavItem = { href: '/dashboard', label: 'Dashboard', icon: LayoutDashboard }
+
+const navGroups = [
+  {
+    section: 'Discover',
+    items: [
+      { href: '/recent-job-search', label: 'Recent Job Search', icon: Search },
+      { href: '/startup-scout', label: 'Startup Scout', icon: Radar },
+      { href: '/startup-hunt', label: 'Startup Hunt', icon: Compass },
+    ],
+  },
+  {
+    section: 'Prepare',
+    items: [
+      { href: '/resume-tailor', label: 'Resume Tailor', icon: FileSearch },
+      { href: '/cover-letter', label: 'Cover Letter', icon: PenLine },
+      { href: '/interview-prep', label: 'Interview Prep', icon: MessageSquare },
+      { href: '/linkedin-fill', label: 'LinkedIn Auto-Fill', icon: Linkedin },
+      { href: '/templates', label: 'Smart Templates', icon: FileText },
+    ],
+  },
+  {
+    section: 'Manage',
+    items: [
+      { href: '/tracker', label: 'Follow-Up Tracker', icon: Briefcase },
+      { href: '/bulk-email', label: 'Bulk Email', icon: Mail },
+      { href: '/salary', label: 'Salary Research', icon: DollarSign },
+    ],
+  },
 ]
 
 export function Sidebar() {
@@ -78,6 +94,41 @@ export function Sidebar() {
   const initials = userName
     ? userName.split(' ').map((n: string) => n[0]).join('').slice(0, 2).toUpperCase()
     : userEmail?.[0]?.toUpperCase() ?? '?'
+
+  function renderNavLink(item: { href: string; label: string; icon: typeof LayoutDashboard }) {
+    const Icon = item.icon
+    const active = pathname === item.href || pathname.startsWith(item.href + '/')
+    return (
+      <Link
+        key={item.href}
+        href={item.href}
+        onMouseEnter={collapsed ? (e) => showTip(e, item.label) : undefined}
+        onMouseLeave={collapsed ? hideTip : undefined}
+        className={cn(
+          'relative flex items-center rounded-lg text-[0.80rem] font-medium transition-all duration-150',
+          collapsed ? 'justify-center gap-0 px-0 py-2 w-full' : 'gap-2.5 px-3 py-1.5',
+          active
+            ? 'bg-accent text-accent-foreground'
+            : 'text-muted-foreground hover:bg-muted hover:text-foreground'
+        )}
+      >
+        {active && (
+          <span className="absolute left-0 top-1/2 -translate-y-1/2 w-0.5 h-4 bg-primary rounded-r-full" />
+        )}
+        <Icon className={cn(
+          'flex-shrink-0 transition-colors',
+          collapsed ? 'h-4 w-4' : 'h-[15px] w-[15px]',
+          active ? 'text-primary' : 'text-muted-foreground'
+        )} />
+        <span className={cn(
+          'transition-all duration-200 whitespace-nowrap overflow-hidden',
+          collapsed ? 'w-0 opacity-0' : 'flex-1 opacity-100'
+        )}>
+          {item.label}
+        </span>
+      </Link>
+    )
+  }
 
   return (
     <>
@@ -129,49 +180,26 @@ export function Sidebar() {
 
         {/* ── Nav ── */}
         <nav className="flex-1 overflow-y-auto py-4 px-2 scrollbar-hide">
-          <div className={cn(
-            'transition-all duration-200',
-            collapsed ? 'h-0 opacity-0 overflow-hidden mb-0' : 'opacity-100 mb-3'
-          )}>
-            <p className="text-[10px] font-semibold text-muted-foreground uppercase tracking-widest px-3 whitespace-nowrap">Tools</p>
+          <div className="space-y-0.5 mb-2">
+            {renderNavLink(topNavItem)}
           </div>
 
-          <div className="space-y-0.5">
-            {navItems.map((item) => {
-              const Icon = item.icon
-              const active = pathname === item.href || pathname.startsWith(item.href + '/')
-              return (
-                <Link
-                  key={item.href}
-                  href={item.href}
-                  onMouseEnter={collapsed ? (e) => showTip(e, item.label) : undefined}
-                  onMouseLeave={collapsed ? hideTip : undefined}
-                  className={cn(
-                    'relative flex items-center rounded-xl text-[13px] font-medium transition-all duration-150',
-                    collapsed ? 'justify-center gap-0 px-0 py-2.5 w-full' : 'gap-3 px-3 py-2.5',
-                    active
-                      ? 'bg-accent text-accent-foreground'
-                      : 'text-muted-foreground hover:bg-muted hover:text-foreground'
-                  )}
-                >
-                  {active && (
-                    <span className="absolute left-0 top-1/2 -translate-y-1/2 w-0.5 h-5 bg-primary rounded-r-full" />
-                  )}
-                  <Icon className={cn(
-                    'flex-shrink-0 transition-colors',
-                    collapsed ? 'h-[18px] w-[18px]' : 'h-4 w-4',
-                    active ? 'text-primary' : 'text-muted-foreground'
-                  )} />
-                  <span className={cn(
-                    'transition-all duration-200 whitespace-nowrap overflow-hidden',
-                    collapsed ? 'w-0 opacity-0' : 'flex-1 opacity-100'
-                  )}>
-                    {item.label}
-                  </span>
-                </Link>
-              )
-            })}
-          </div>
+          {navGroups.map((group, gi) => (
+            <div key={group.section} className={cn(gi > 0 && 'mt-2.5')}>
+              <div className={cn(
+                'transition-all duration-200',
+                collapsed ? 'h-0 opacity-0 overflow-hidden mb-0' : 'opacity-100 mb-1'
+              )}>
+                <p className="text-[10px] font-semibold text-muted-foreground uppercase tracking-widest px-3 whitespace-nowrap">
+                  {group.section}
+                </p>
+              </div>
+
+              <div className="space-y-0.5">
+                {group.items.map(renderNavLink)}
+              </div>
+            </div>
+          ))}
         </nav>
 
         {/* ── Bottom — profile + sign out ── */}
