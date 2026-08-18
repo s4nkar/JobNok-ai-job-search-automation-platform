@@ -72,42 +72,46 @@ const PAGE_SIZE = 10
 
 // ── Source styling ─────────────────────────────────────────────────────────
 
+// Source and funding stage are categorical labels, not status signals — the
+// text already names them, so one neutral treatment avoids an arbitrary
+// rainbow (was one hue per provider/stage with no semantic meaning behind
+// the color choice, e.g. red for "Series C" reads as an error state it isn't).
 const SOURCE_PILL: Record<string, string> = {
-  Crunchbase: 'bg-blue-50   text-blue-600   ring-blue-200',
-  Wellfound: 'bg-teal-50   text-teal-600   ring-teal-200',
-  Dealroom: 'bg-violet-50 text-violet-600 ring-violet-200',
-  'Germanyy.ai': 'bg-orange-50 text-orange-600 ring-orange-200',
-  Seedtable: 'bg-rose-50   text-rose-600   ring-rose-200',
-  'Y Combinator': 'bg-amber-50  text-amber-600  ring-amber-200',
-  Tracxn: 'bg-cyan-50   text-cyan-600   ring-cyan-200',
-  'Crunchbase API': 'bg-blue-50   text-blue-700   ring-blue-300',
-  TheirStack: 'bg-indigo-50 text-indigo-600 ring-indigo-200',
-  Startupdetector: 'bg-lime-50   text-lime-700   ring-lime-200',
-  F6S: 'bg-fuchsia-50 text-fuchsia-600 ring-fuchsia-200',
+  Crunchbase: 'bg-slate-50 text-slate-600 ring-slate-200',
+  Wellfound: 'bg-slate-50 text-slate-600 ring-slate-200',
+  Dealroom: 'bg-slate-50 text-slate-600 ring-slate-200',
+  'Germanyy.ai': 'bg-slate-50 text-slate-600 ring-slate-200',
+  Seedtable: 'bg-slate-50 text-slate-600 ring-slate-200',
+  'Y Combinator': 'bg-slate-50 text-slate-600 ring-slate-200',
+  Tracxn: 'bg-slate-50 text-slate-600 ring-slate-200',
+  'Crunchbase API': 'bg-slate-50 text-slate-600 ring-slate-200',
+  TheirStack: 'bg-slate-50 text-slate-600 ring-slate-200',
+  Startupdetector: 'bg-slate-50 text-slate-600 ring-slate-200',
+  F6S: 'bg-slate-50 text-slate-600 ring-slate-200',
 }
 
 const SOURCE_DOT: Record<string, string> = {
-  Crunchbase: 'bg-blue-500',
-  Wellfound: 'bg-teal-500',
-  Dealroom: 'bg-violet-500',
-  'Germanyy.ai': 'bg-orange-500',
-  Seedtable: 'bg-rose-500',
-  'Y Combinator': 'bg-amber-500',
-  Tracxn: 'bg-cyan-500',
-  'Crunchbase API': 'bg-blue-600',
-  TheirStack: 'bg-indigo-500',
-  Startupdetector: 'bg-lime-600',
-  F6S: 'bg-fuchsia-500',
+  Crunchbase: 'bg-slate-400',
+  Wellfound: 'bg-slate-400',
+  Dealroom: 'bg-slate-400',
+  'Germanyy.ai': 'bg-slate-400',
+  Seedtable: 'bg-slate-400',
+  'Y Combinator': 'bg-slate-400',
+  Tracxn: 'bg-slate-400',
+  'Crunchbase API': 'bg-slate-400',
+  TheirStack: 'bg-slate-400',
+  Startupdetector: 'bg-slate-400',
+  F6S: 'bg-slate-400',
 }
 
 const STAGE_PILL: Record<string, string> = {
-  'Pre-Seed': 'bg-purple-50 text-purple-600 ring-purple-200',
-  'Seed': 'bg-blue-50   text-blue-600   ring-blue-200',
-  'Series A': 'bg-emerald-50 text-emerald-600 ring-emerald-200',
-  'Series B': 'bg-amber-50  text-amber-600  ring-amber-200',
-  'Series C': 'bg-red-50    text-red-600    ring-red-200',
-  'Series C+': 'bg-red-50    text-red-600    ring-red-200',
-  'Angel': 'bg-pink-50   text-pink-600   ring-pink-200',
+  'Pre-Seed': 'bg-slate-50 text-slate-600 ring-slate-200',
+  'Seed': 'bg-slate-50 text-slate-600 ring-slate-200',
+  'Series A': 'bg-slate-50 text-slate-600 ring-slate-200',
+  'Series B': 'bg-slate-50 text-slate-600 ring-slate-200',
+  'Series C': 'bg-slate-50 text-slate-600 ring-slate-200',
+  'Series C+': 'bg-slate-50 text-slate-600 ring-slate-200',
+  'Angel': 'bg-slate-50 text-slate-600 ring-slate-200',
 }
 
 // ── Smart page range (shows at most 7 page numbers) ──────────────────────────
@@ -286,8 +290,8 @@ export default function StartupScoutPage() {
       {/* ── Page header ───────────────────────────────────────────────────── */}
       <div className="flex items-start justify-between mb-6">
         <div className="flex items-center gap-3">
-          <div className="page-header-icon bg-cyan-100">
-            <Radar className="h-5 w-5 text-cyan-600" />
+          <div className="page-header-icon bg-indigo-100">
+            <Radar className="h-5 w-5 text-indigo-600" />
           </div>
           <div>
             <h1 className="text-2xl font-bold text-slate-900 tracking-tight">Startup Scout</h1>
@@ -334,7 +338,7 @@ export default function StartupScoutPage() {
           {/* Location */}
           <div className="space-y-1.5">
             <Label className="text-xs font-medium text-slate-600">
-              Location <span className="text-rose-400">*</span>
+              Location <span className="text-red-500">*</span>
             </Label>
             <Input
               placeholder="e.g. Berlin, London, Remote"
@@ -348,7 +352,7 @@ export default function StartupScoutPage() {
           {/* Funding stages */}
           <div className="space-y-2">
             <Label className="text-xs font-medium text-slate-600">
-              Funding stage <span className="text-rose-400">*</span>
+              Funding stage <span className="text-red-500">*</span>
             </Label>
             <div className="flex flex-wrap gap-1.5">
               {FUNDING_STAGES.map(({ value, label }) => (
@@ -439,12 +443,12 @@ export default function StartupScoutPage() {
           {/* Empty / initial state */}
           {!hasSearched && (
             <div className="bg-white rounded-2xl border border-slate-100 shadow-sm flex flex-col items-center justify-center py-20 px-6 text-center">
-              <div className="w-14 h-14 rounded-2xl bg-cyan-50 flex items-center justify-center mb-4">
-                <Radar className="h-7 w-7 text-cyan-300" />
+              <div className="w-14 h-14 rounded-2xl bg-indigo-50 flex items-center justify-center mb-4">
+                <Radar className="h-7 w-7 text-indigo-300" />
               </div>
               <p className="font-semibold text-slate-700 text-base">Find your next startup</p>
               <p className="text-sm text-slate-400 mt-1 max-w-xs leading-relaxed">
-                Set a location and funding stage, then hit Discover. <span className="text-blue-500">Save interesting companies to your tracker to crawl for founder contacts.</span>
+                Set a location and funding stage, then hit Discover. <span className="text-indigo-600">Save interesting companies to your tracker to crawl for founder contacts.</span>
               </p>
             </div>
           )}
@@ -453,7 +457,7 @@ export default function StartupScoutPage() {
           {searching && (
             <>
               <div className="bg-white rounded-2xl border border-slate-100 shadow-sm p-4 flex items-center gap-3">
-                <Loader2 className="h-4 w-4 animate-spin text-cyan-400 flex-shrink-0" />
+                <Loader2 className="h-4 w-4 animate-spin text-indigo-400 flex-shrink-0" />
                 <div>
                   <p className="text-sm font-medium text-slate-600">Scanning startup directories…</p>
                   <p className="text-xs text-slate-400 mt-0.5">Running {limit === '200' ? '14+' : limit === '100' ? '10+' : '6'} queries across Crunchbase, Wellfound, Dealroom &amp; more</p>
@@ -562,8 +566,8 @@ export default function StartupScoutPage() {
                     className="bg-white rounded-2xl border border-slate-100 shadow-sm p-5 flex items-start gap-4 hover:border-slate-200 hover:shadow-md transition-all duration-150"
                   >
                     {/* Avatar */}
-                    <div className="w-10 h-10 rounded-xl bg-cyan-50 border border-cyan-100 flex items-center justify-center flex-shrink-0">
-                      <Building2 className="h-5 w-5 text-cyan-500" />
+                    <div className="w-10 h-10 rounded-xl bg-indigo-50 border border-indigo-100 flex items-center justify-center flex-shrink-0">
+                      <Building2 className="h-5 w-5 text-indigo-500" />
                     </div>
 
                     {/* Body */}

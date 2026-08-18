@@ -40,11 +40,11 @@ export default function AuthLayout({ children }: { children: React.ReactNode }) 
       </div>
 
       {/* Branded panel — light, with the same soft gradient-orb accents as
-          the homepage hero, and a ring of every tool's real icon/color
-          scattered around the wordmark instead of a plain stacked list. */}
+          the homepage hero, and a ring of every tool's real icon scattered
+          around the wordmark instead of a plain stacked list. */}
       <div className="hidden lg:flex flex-1 relative items-center justify-center p-12 border-l border-slate-100 bg-slate-50 overflow-hidden">
         <div className="absolute -top-32 -left-24 w-[420px] h-[420px] rounded-full gradient-brand opacity-[0.12] blur-[110px] pointer-events-none" aria-hidden />
-        <div className="absolute -bottom-32 -right-24 w-[380px] h-[380px] rounded-full bg-pink-400 opacity-[0.10] blur-[100px] pointer-events-none" aria-hidden />
+        <div className="absolute -bottom-32 -right-24 w-[380px] h-[380px] rounded-full gradient-brand opacity-[0.08] blur-[100px] pointer-events-none" aria-hidden />
 
         <div className="relative w-full max-w-[460px] aspect-square">
           {tools.map((tool) => {

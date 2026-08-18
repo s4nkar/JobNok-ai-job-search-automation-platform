@@ -174,7 +174,7 @@ export default function LinkedInFillPage() {
           {loading && (
             <div className="bg-white rounded-2xl border border-slate-100 shadow-card min-h-[400px] flex items-center justify-center p-8">
               <div className="text-center space-y-3">
-                <Loader2 className="h-10 w-10 animate-spin mx-auto text-blue-500" />
+                <Loader2 className="h-10 w-10 animate-spin mx-auto text-indigo-500" />
                 <div>
                   <p className="font-semibold text-slate-700">Scraping profile…</p>
                   <p className="text-slate-400 text-sm mt-1">This can take up to 8 seconds</p>
@@ -213,7 +213,7 @@ export default function LinkedInFillPage() {
                     <span className="text-xs font-semibold text-slate-400 uppercase tracking-wider pt-0.5">Skills</span>
                     <div className="col-span-2 flex flex-wrap gap-1.5">
                       {profile.skills.slice(0, 12).map((s) => (
-                        <span key={s} className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-blue-50 text-blue-700 border border-blue-100">
+                        <span key={s} className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-slate-100 text-slate-600 border border-slate-200">
                           {s}
                         </span>
                       ))}

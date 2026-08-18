@@ -60,7 +60,7 @@ const today = new Date().toISOString().split('T')[0]
 
 const STARTUP_STATUS_META: Record<StartupHuntOpportunityStatus, { label: string; classes: string }> = {
   saved: { label: 'Saved', classes: 'bg-slate-100 text-slate-700' },
-  contacted: { label: 'Contacted', classes: 'bg-pink-100 text-pink-700' },
+  contacted: { label: 'Contacted', classes: 'bg-indigo-100 text-indigo-700' },
   applied: { label: 'Applied', classes: 'bg-emerald-100 text-emerald-700' },
   skipped: { label: 'Skipped', classes: 'bg-gray-100 text-gray-500' },
 }
@@ -68,27 +68,30 @@ const STARTUP_STATUS_META: Record<StartupHuntOpportunityStatus, { label: string;
 const LEAD_STATUS_ORDER: StartupHuntOpportunityStatus[] = ['saved', 'contacted', 'applied', 'skipped']
 
 const ARTIFACT_META: Record<string, { label: string; icon: React.ElementType; color: string; tool: string }> = {
-  resume_analysis: { label: 'Resume Analysis', icon: FileSearch, color: 'text-violet-600', tool: 'resume-tailor' },
-  cover_letter: { label: 'Cover Letter', icon: PenLine, color: 'text-pink-600', tool: 'cover-letter' },
-  interview_prep: { label: 'Interview Prep', icon: MessageSquare, color: 'text-teal-600', tool: 'interview-prep' },
+  resume_analysis: { label: 'Resume Analysis', icon: FileSearch, color: 'text-slate-600', tool: 'resume-tailor' },
+  cover_letter: { label: 'Cover Letter', icon: PenLine, color: 'text-slate-600', tool: 'cover-letter' },
+  interview_prep: { label: 'Interview Prep', icon: MessageSquare, color: 'text-slate-600', tool: 'interview-prep' },
 }
 
 const SCOUT_STATUS_META: Record<ScoutCrawlStatus, { label: string; classes: string }> = {
   pending:  { label: 'Pending',   classes: 'bg-slate-100 text-slate-600' },
-  crawling: { label: 'Crawling…', classes: 'bg-yellow-100 text-yellow-700' },
+  crawling: { label: 'Crawling…', classes: 'bg-indigo-100 text-indigo-700' },
   enriched: { label: 'Enriched',  classes: 'bg-emerald-100 text-emerald-700' },
-  partial:  { label: 'Partial',   classes: 'bg-orange-100 text-orange-700' },
+  partial:  { label: 'Partial',   classes: 'bg-amber-100 text-amber-700' },
   failed:   { label: 'Failed',    classes: 'bg-red-100 text-red-600' },
 }
 
+// Funding stage is categorical, not a status signal — one neutral treatment
+// avoids borrowing red/emerald/amber's status meaning (e.g. "Series C" isn't
+// bad, "Series A" isn't good) for data that has no such semantic ordering.
 const SCOUT_STAGE_PILL: Record<string, string> = {
-  'Pre-Seed': 'bg-purple-50 text-purple-700 ring-purple-200',
-  'Seed':     'bg-blue-50   text-blue-700   ring-blue-200',
-  'Series A': 'bg-emerald-50 text-emerald-700 ring-emerald-200',
-  'Series B': 'bg-amber-50  text-amber-700  ring-amber-200',
-  'Series C': 'bg-red-50    text-red-700    ring-red-200',
-  'Series C+':'bg-red-50    text-red-700    ring-red-200',
-  'Angel':    'bg-pink-50   text-pink-700   ring-pink-200',
+  'Pre-Seed': 'bg-slate-50 text-slate-700 ring-slate-200',
+  'Seed':     'bg-slate-50 text-slate-700 ring-slate-200',
+  'Series A': 'bg-slate-50 text-slate-700 ring-slate-200',
+  'Series B': 'bg-slate-50 text-slate-700 ring-slate-200',
+  'Series C': 'bg-slate-50 text-slate-700 ring-slate-200',
+  'Series C+':'bg-slate-50 text-slate-700 ring-slate-200',
+  'Angel':    'bg-slate-50 text-slate-700 ring-slate-200',
 }
 
 export default function TrackerPage() {
@@ -365,8 +368,8 @@ export default function TrackerPage() {
       <div className="flex gap-1 bg-slate-100 rounded-xl p-1 w-fit mb-6">
         {([
           ['applications', Briefcase, 'Applications', applications.length, 'bg-indigo-100 text-indigo-700'],
-          ['leads', Compass, 'Startup Leads', leads.length, 'bg-orange-100 text-orange-700'],
-          ['scout', Radar, 'Startup Scout', scoutCompanies.length, 'bg-cyan-100 text-cyan-700'],
+          ['leads', Compass, 'Startup Leads', leads.length, 'bg-indigo-100 text-indigo-700'],
+          ['scout', Radar, 'Startup Scout', scoutCompanies.length, 'bg-indigo-100 text-indigo-700'],
         ] as const).map(([id, Icon, label, count, badgeClass]) => (
           <button
             key={id}
@@ -392,7 +395,7 @@ export default function TrackerPage() {
           <div className="grid grid-cols-4 gap-4 mb-6">
             {[
               { label: 'Total', value: applications.length, Icon: Briefcase, iconBg: 'bg-slate-100', iconColor: 'text-slate-600' },
-              { label: 'Active', value: active.length, Icon: TrendingUp, iconBg: 'bg-blue-100', iconColor: 'text-blue-600' },
+              { label: 'Active', value: active.length, Icon: TrendingUp, iconBg: 'bg-indigo-100', iconColor: 'text-indigo-600' },
               { label: 'Overdue', value: overdue.length, Icon: AlertCircle, iconBg: 'bg-red-100', iconColor: 'text-red-600' },
               { label: 'Offers', value: offers.length, Icon: CheckCircle, iconBg: 'bg-emerald-100', iconColor: 'text-emerald-600' },
             ].map(({ label, value, Icon, iconBg, iconColor }) => (
@@ -463,7 +466,7 @@ export default function TrackerPage() {
                             <button
                               onClick={() => router.push(`/cover-letter?company=${encodeURIComponent(app.company)}&role=${encodeURIComponent(app.role)}`)}
                               title="Generate Cover Letter"
-                              className="h-7 w-7 rounded-lg flex items-center justify-center text-slate-400 hover:text-pink-600 hover:bg-pink-50 transition-colors"
+                              className="h-7 w-7 rounded-lg flex items-center justify-center text-slate-400 hover:text-indigo-600 hover:bg-indigo-50 transition-colors"
                             >
                               <PenLine className="h-3.5 w-3.5" />
                             </button>
@@ -491,7 +494,7 @@ export default function TrackerPage() {
           <div className="grid grid-cols-4 gap-4 mb-6">
             {[
               { label: 'Saved', value: leadCounts.saved, classes: 'bg-slate-100 text-slate-600' },
-              { label: 'Contacted', value: leadCounts.contacted, classes: 'bg-pink-100 text-pink-600' },
+              { label: 'Contacted', value: leadCounts.contacted, classes: 'bg-indigo-100 text-indigo-600' },
               { label: 'Applied', value: leadCounts.applied, classes: 'bg-emerald-100 text-emerald-600' },
               { label: 'Skipped', value: leadCounts.skipped, classes: 'bg-gray-100 text-gray-500' },
             ].map(({ label, value, classes }) => (
@@ -528,14 +531,14 @@ export default function TrackerPage() {
             {leadsLoading ? (
               <div className="flex items-center justify-center h-48">
                 <div className="flex flex-col items-center gap-3">
-                  <Loader2 className="h-8 w-8 animate-spin text-orange-400" />
+                  <Loader2 className="h-8 w-8 animate-spin text-indigo-400" />
                   <p className="text-sm text-slate-400">Loading startup leads…</p>
                 </div>
               </div>
             ) : filteredLeads.length === 0 ? (
               <div className="flex flex-col items-center justify-center h-56">
-                <div className="w-14 h-14 rounded-2xl bg-orange-50 flex items-center justify-center mb-4">
-                  <Compass className="h-7 w-7 text-orange-200" />
+                <div className="w-14 h-14 rounded-2xl bg-indigo-50 flex items-center justify-center mb-4">
+                  <Compass className="h-7 w-7 text-indigo-200" />
                 </div>
                 <p className="font-medium text-slate-600">No leads here yet</p>
                 <p className="text-sm text-slate-400 mt-1">
@@ -576,7 +579,7 @@ export default function TrackerPage() {
                             </span>
                           </TableCell>
                           <TableCell>
-                            <span className="inline-flex items-center px-2 py-0.5 rounded-md text-[10px] font-semibold bg-orange-50 text-orange-700 border border-orange-100">
+                            <span className="inline-flex items-center px-2 py-0.5 rounded-md text-[10px] font-semibold bg-slate-100 text-slate-600 border border-slate-200">
                               {lead.source_name}
                             </span>
                           </TableCell>
@@ -601,7 +604,7 @@ export default function TrackerPage() {
                               className={cn(
                                 'flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-semibold border transition-colors',
                                 docCount > 0
-                                  ? 'bg-violet-50 text-violet-700 border-violet-200 hover:bg-violet-100'
+                                  ? 'bg-indigo-50 text-indigo-700 border-indigo-200 hover:bg-indigo-100'
                                   : 'bg-slate-50 text-slate-400 border-slate-200 hover:bg-slate-100'
                               )}
                             >
@@ -632,21 +635,21 @@ export default function TrackerPage() {
                                 <DropdownMenuContent align="end" className="w-48">
                                   <DropdownMenuLabel>Use with tools</DropdownMenuLabel>
                                   <DropdownMenuItem onClick={() => router.push(`/resume-tailor?opportunity_id=${lead.id}`)}>
-                                    <FileSearch className="h-3.5 w-3.5 text-violet-500" />
+                                    <FileSearch className="h-3.5 w-3.5 text-slate-500" />
                                     Resume Tailor
                                   </DropdownMenuItem>
                                   <DropdownMenuItem onClick={() => router.push(`/cover-letter?opportunity_id=${lead.id}`)}>
-                                    <PenLine className="h-3.5 w-3.5 text-pink-500" />
+                                    <PenLine className="h-3.5 w-3.5 text-slate-500" />
                                     Cover Letter
                                   </DropdownMenuItem>
                                   <DropdownMenuItem onClick={() => router.push(`/interview-prep?opportunity_id=${lead.id}`)}>
-                                    <MessageSquare className="h-3.5 w-3.5 text-teal-500" />
+                                    <MessageSquare className="h-3.5 w-3.5 text-slate-500" />
                                     Interview Prep
                                   </DropdownMenuItem>
                                   <DropdownMenuSeparator />
                                   {lead.opportunity_kind === 'outreach_lead' && (
                                     <DropdownMenuItem onClick={() => updateLeadStatus(lead, 'contacted')} disabled={lead.opportunity_status === 'contacted'}>
-                                      <Mail className="h-3.5 w-3.5 text-pink-400" />
+                                      <Mail className="h-3.5 w-3.5 text-indigo-500" />
                                       Mark Contacted
                                     </DropdownMenuItem>
                                   )}
@@ -762,8 +765,8 @@ export default function TrackerPage() {
                 label: 'Partial / Failed',
                 value: scoutCompanies.filter((c) => ['partial', 'failed'].includes(c.crawl_status)).length,
                 icon: AlertCircle,
-                iconBg: 'bg-orange-100',
-                iconColor: 'text-orange-500',
+                iconBg: 'bg-amber-100',
+                iconColor: 'text-amber-500',
               },
             ].map(({ label, value, icon: Icon, iconBg, iconColor }) => (
               <div key={label} className="bg-white rounded-2xl border border-slate-100 shadow-sm p-5 flex items-center gap-4">
@@ -785,7 +788,7 @@ export default function TrackerPage() {
             {scoutLoading ? (
               <div className="p-4 space-y-3">
                 <div className="flex items-center gap-3 p-3 rounded-xl bg-slate-50/60">
-                  <Loader2 className="h-4 w-4 animate-spin text-cyan-400 flex-shrink-0" />
+                  <Loader2 className="h-4 w-4 animate-spin text-indigo-400 flex-shrink-0" />
                   <p className="text-sm text-slate-500">Loading scout companies…</p>
                 </div>
                 {Array.from({ length: 3 }).map((_, i) => (
@@ -804,13 +807,13 @@ export default function TrackerPage() {
             ) : scoutCompanies.length === 0 ? (
               /* Empty state */
               <div className="flex flex-col items-center justify-center py-20 px-6 text-center">
-                <div className="w-14 h-14 rounded-2xl bg-cyan-50 flex items-center justify-center mb-4">
-                  <Radar className="h-7 w-7 text-cyan-300" />
+                <div className="w-14 h-14 rounded-2xl bg-indigo-50 flex items-center justify-center mb-4">
+                  <Radar className="h-7 w-7 text-indigo-300" />
                 </div>
                 <p className="font-semibold text-slate-700 text-base">No companies saved yet</p>
                 <p className="text-sm text-slate-400 mt-1 max-w-xs leading-relaxed">
                   Discover startups in{' '}
-                  <button onClick={() => router.push('/startup-scout')} className="text-cyan-600 hover:underline font-medium">
+                  <button onClick={() => router.push('/startup-scout')} className="text-indigo-600 hover:underline font-medium">
                     Startup Scout
                   </button>
                   , then save them here to crawl for founder contacts.
@@ -846,13 +849,13 @@ export default function TrackerPage() {
                           {/* Company cell — avatar + name + description */}
                           <TableCell className="py-3.5">
                             <div className="flex items-center gap-3">
-                              <div className="w-9 h-9 rounded-xl bg-cyan-50 border border-cyan-100 flex items-center justify-center flex-shrink-0">
-                                <Building2 className="h-4 w-4 text-cyan-500" />
+                              <div className="w-9 h-9 rounded-xl bg-indigo-50 border border-indigo-100 flex items-center justify-center flex-shrink-0">
+                                <Building2 className="h-4 w-4 text-indigo-500" />
                               </div>
                               <div className="min-w-0">
                                 {company.website ? (
                                   <Link href={company.website} target="_blank"
-                                    className="text-sm font-semibold text-slate-800 hover:text-cyan-600 hover:underline transition-colors leading-snug">
+                                    className="text-sm font-semibold text-slate-800 hover:text-indigo-600 hover:underline transition-colors leading-snug">
                                     {company.name}
                                   </Link>
                                 ) : (
@@ -894,9 +897,9 @@ export default function TrackerPage() {
                             <span className={cn('inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[11px] font-semibold ring-1 ring-inset',
                               statusMeta.classes,
                               company.crawl_status === 'pending'  && 'ring-slate-200',
-                              company.crawl_status === 'crawling' && 'ring-yellow-200',
+                              company.crawl_status === 'crawling' && 'ring-indigo-200',
                               company.crawl_status === 'enriched' && 'ring-emerald-200',
-                              company.crawl_status === 'partial'  && 'ring-orange-200',
+                              company.crawl_status === 'partial'  && 'ring-amber-200',
                               company.crawl_status === 'failed'   && 'ring-red-200',
                             )}>
                               {isCrawling && <Loader2 className="h-2.5 w-2.5 animate-spin" />}
@@ -912,7 +915,7 @@ export default function TrackerPage() {
                                 className={cn(
                                   'flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[11px] font-semibold border transition-colors',
                                   contactsOpen
-                                    ? 'bg-cyan-50 text-cyan-700 border-cyan-200 hover:bg-cyan-100'
+                                    ? 'bg-indigo-50 text-indigo-700 border-indigo-200 hover:bg-indigo-100'
                                     : 'bg-slate-50 text-slate-500 border-slate-200 hover:bg-slate-100 hover:text-slate-700',
                                 )}
                               >
@@ -946,7 +949,7 @@ export default function TrackerPage() {
                               {canCrawl && (
                                 <button
                                   onClick={() => startCrawl(company)}
-                                  className="h-7 px-2.5 rounded-lg flex items-center gap-1 text-xs font-semibold text-cyan-700 bg-cyan-50 hover:bg-cyan-100 border border-cyan-200 transition-colors"
+                                  className="h-7 px-2.5 rounded-lg flex items-center gap-1 text-xs font-semibold text-indigo-700 bg-indigo-50 hover:bg-indigo-100 border border-indigo-200 transition-colors"
                                 >
                                   <Radar className="h-3 w-3" />
                                   {company.crawl_status === 'pending' ? 'Start Crawl' : 'Re-crawl'}
@@ -1001,7 +1004,7 @@ export default function TrackerPage() {
                                   {canCrawl && (
                                     <button
                                       onClick={() => startCrawl(company)}
-                                      className="mt-3 h-7 px-3 rounded-lg flex items-center gap-1.5 text-xs font-semibold text-cyan-700 bg-cyan-50 hover:bg-cyan-100 border border-cyan-200 transition-colors"
+                                      className="mt-3 h-7 px-3 rounded-lg flex items-center gap-1.5 text-xs font-semibold text-indigo-700 bg-indigo-50 hover:bg-indigo-100 border border-indigo-200 transition-colors"
                                     >
                                       <Radar className="h-3 w-3" /> Re-crawl now
                                     </button>
@@ -1012,7 +1015,7 @@ export default function TrackerPage() {
                                   {contacts.map((contact) => (
                                     <div key={contact.id} className="bg-white rounded-xl border border-slate-200 p-3 flex items-start gap-3">
                                       {/* Avatar */}
-                                      <div className="w-8 h-8 rounded-full bg-cyan-100 flex items-center justify-center flex-shrink-0 text-xs font-bold text-cyan-700">
+                                      <div className="w-8 h-8 rounded-full bg-indigo-100 flex items-center justify-center flex-shrink-0 text-xs font-bold text-indigo-700">
                                         {(contact.name || '?')[0].toUpperCase()}
                                       </div>
 
@@ -1078,7 +1081,7 @@ export default function TrackerPage() {
                                           <span className={cn(
                                             'inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-semibold',
                                             contact.source === 'apollo'
-                                              ? 'bg-violet-50 text-violet-700'
+                                              ? 'bg-slate-100 text-slate-700'
                                               : 'bg-slate-100 text-slate-500',
                                           )}>
                                             {contact.source === 'apollo' ? 'Apollo' : 'Web'}

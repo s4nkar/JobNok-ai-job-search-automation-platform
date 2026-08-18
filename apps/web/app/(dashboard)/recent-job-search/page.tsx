@@ -179,8 +179,8 @@ export default function RecentJobSearchPage() {
     <div className="animate-fade-in">
       {/* Page Header */}
       <div className="flex items-center gap-4 mb-6">
-        <div className="page-header-icon bg-sky-100">
-          <Search className="h-5 w-5 text-sky-600" />
+        <div className="page-header-icon bg-indigo-100">
+          <Search className="h-5 w-5 text-indigo-600" />
         </div>
         <div>
           <h1 className="text-2xl font-bold text-slate-900 tracking-tight">Recent Job Search</h1>
@@ -318,7 +318,7 @@ export default function RecentJobSearchPage() {
                   <span key={keyword} className="inline-flex items-center px-2.5 py-1 rounded-full text-xs font-medium bg-slate-100 text-slate-700">{keyword}</span>
                 ))}
                 {parsedPreferences.languages.map((language) => (
-                  <span key={language} className="inline-flex items-center px-2.5 py-1 rounded-full text-xs font-medium bg-blue-50 text-blue-700 border border-blue-100">{language}</span>
+                  <span key={language} className="inline-flex items-center px-2.5 py-1 rounded-full text-xs font-medium bg-slate-50 text-slate-600 border border-slate-200">{language}</span>
                 ))}
                 {parsedPreferences.company_stage && (
                   <span className="inline-flex items-center px-2.5 py-1 rounded-full text-xs font-medium bg-amber-50 text-amber-800 border border-amber-100">{parsedPreferences.company_stage}</span>
@@ -333,8 +333,8 @@ export default function RecentJobSearchPage() {
           {!loading && results.length === 0 && !error && (
             <div className="bg-white rounded-2xl border border-slate-100 shadow-sm min-h-[420px] flex items-center justify-center p-8">
               <div className="text-center space-y-2">
-                <div className="w-14 h-14 rounded-2xl bg-sky-50 flex items-center justify-center mx-auto">
-                  <BriefcaseBusiness className="h-7 w-7 text-sky-200" />
+                <div className="w-14 h-14 rounded-2xl bg-indigo-50 flex items-center justify-center mx-auto">
+                  <BriefcaseBusiness className="h-7 w-7 text-indigo-200" />
                 </div>
                 <p className="font-semibold text-slate-500">Recent matches will appear here</p>
                 <p className="text-sm text-slate-400">Use the filters to search for fresh jobs and track what you apply to</p>

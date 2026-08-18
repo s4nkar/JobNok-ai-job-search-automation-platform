@@ -68,8 +68,8 @@ export default function SalaryPage() {
     <div className="animate-fade-in">
       {/* Page Header */}
       <div className="flex items-center gap-4 mb-6">
-        <div className="page-header-icon bg-emerald-100">
-          <DollarSign className="h-5 w-5 text-emerald-600" />
+        <div className="page-header-icon bg-indigo-100">
+          <DollarSign className="h-5 w-5 text-indigo-600" />
         </div>
         <div>
           <h1 className="text-2xl font-bold text-slate-900 tracking-tight">Salary Research</h1>
@@ -120,20 +120,20 @@ export default function SalaryPage() {
             <p className="text-xs font-semibold text-slate-500 uppercase tracking-widest mb-4">What you get</p>
             <ul className="space-y-3">
               <li className="flex items-center gap-3 text-sm text-slate-600">
-                <div className="w-7 h-7 rounded-lg bg-emerald-50 flex items-center justify-center flex-shrink-0">
-                  <DollarSign className="h-3.5 w-3.5 text-emerald-600" />
+                <div className="w-7 h-7 rounded-lg bg-indigo-50 flex items-center justify-center flex-shrink-0">
+                  <DollarSign className="h-3.5 w-3.5 text-indigo-600" />
                 </div>
                 Median salary + range
               </li>
               <li className="flex items-center gap-3 text-sm text-slate-600">
-                <div className="w-7 h-7 rounded-lg bg-blue-50 flex items-center justify-center flex-shrink-0">
-                  <TrendingUp className="h-3.5 w-3.5 text-blue-600" />
+                <div className="w-7 h-7 rounded-lg bg-indigo-50 flex items-center justify-center flex-shrink-0">
+                  <TrendingUp className="h-3.5 w-3.5 text-indigo-600" />
                 </div>
                 Factors affecting pay
               </li>
               <li className="flex items-center gap-3 text-sm text-slate-600">
-                <div className="w-7 h-7 rounded-lg bg-violet-50 flex items-center justify-center flex-shrink-0">
-                  <MessageSquare className="h-3.5 w-3.5 text-violet-600" />
+                <div className="w-7 h-7 rounded-lg bg-indigo-50 flex items-center justify-center flex-shrink-0">
+                  <MessageSquare className="h-3.5 w-3.5 text-indigo-600" />
                 </div>
                 Negotiation talking points
               </li>
@@ -152,8 +152,8 @@ export default function SalaryPage() {
           {!streamOutput && !loading && (
             <div className="bg-white rounded-2xl border border-slate-100 shadow-sm min-h-[400px] flex items-center justify-center p-8">
               <div className="text-center space-y-2">
-                <div className="w-14 h-14 rounded-2xl bg-emerald-50 flex items-center justify-center mx-auto">
-                  <DollarSign className="h-7 w-7 text-emerald-200" />
+                <div className="w-14 h-14 rounded-2xl bg-indigo-50 flex items-center justify-center mx-auto">
+                  <DollarSign className="h-7 w-7 text-indigo-200" />
                 </div>
                 <p className="font-semibold text-slate-500">Salary research will appear here</p>
                 <p className="text-sm text-slate-400">Results stream in real-time</p>

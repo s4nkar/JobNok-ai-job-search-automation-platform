@@ -11,7 +11,7 @@ export function Hero() {
     <section className="relative overflow-hidden -mt-16 pt-24 pb-16 sm:pb-24 min-h-[640px] lg:min-h-[820px]">
       {/* Background Orbs */}
       <div className="absolute -top-32 -left-40 w-[550px] h-[550px] rounded-full bg-indigo-500/10 blur-[130px] pointer-events-none" aria-hidden />
-      <div className="absolute -top-20 right-0 w-[500px] h-[500px] rounded-full bg-pink-500/10 blur-[120px] pointer-events-none" aria-hidden />
+      <div className="absolute -top-20 right-0 w-[500px] h-[500px] rounded-full bg-indigo-500/10 blur-[120px] pointer-events-none" aria-hidden />
 
       {/* Desktop Full-Bleed Flow Overlay (Large screens >= 1024px) */}
       <div className="hidden lg:block absolute inset-0 w-full h-full z-10 pointer-events-none">

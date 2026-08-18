@@ -25,7 +25,7 @@ type Node = {
   y: number
   kind: 'user' | 'tool'
   icon?: LucideIcon
-  color: 'amber' | 'cyan' | 'violet' | 'indigo' | 'emerald' | 'sky'
+  color: 'indigo'
   hub?: boolean
   subtitle?: string
 }
@@ -40,7 +40,7 @@ const nodes: Node[] = [
     x: 100,
     y: 40,
     kind: 'user',
-    color: 'amber',
+    color: 'indigo',
   },
   {
     id: 'userB',
@@ -50,7 +50,7 @@ const nodes: Node[] = [
     x: 1100,
     y: 40,
     kind: 'user',
-    color: 'cyan',
+    color: 'indigo',
   },
 
   // User A Branch — Left Margin Flow
@@ -62,7 +62,7 @@ const nodes: Node[] = [
     y: 135,
     kind: 'tool',
     icon: Radar,
-    color: 'amber',
+    color: 'indigo',
   },
   {
     id: 'leads',
@@ -72,7 +72,7 @@ const nodes: Node[] = [
     y: 235,
     kind: 'tool',
     icon: Users,
-    color: 'amber',
+    color: 'indigo',
   },
   {
     id: 'coldmsg',
@@ -82,7 +82,7 @@ const nodes: Node[] = [
     y: 335,
     kind: 'tool',
     icon: Sparkles,
-    color: 'amber',
+    color: 'indigo',
   },
 
   // User B Branch — Right Margin Flow
@@ -94,7 +94,7 @@ const nodes: Node[] = [
     y: 135,
     kind: 'tool',
     icon: Compass,
-    color: 'cyan',
+    color: 'indigo',
   },
   {
     id: 'bulk',
@@ -104,7 +104,7 @@ const nodes: Node[] = [
     y: 235,
     kind: 'tool',
     icon: Mail,
-    color: 'sky',
+    color: 'indigo',
   },
   {
     id: 'salary',
@@ -114,7 +114,7 @@ const nodes: Node[] = [
     y: 335,
     kind: 'tool',
     icon: DollarSign,
-    color: 'emerald',
+    color: 'indigo',
   },
 
   // Central Shared Core Hubs — Positioned Below CTAs (y = 425 to 590)
@@ -126,7 +126,7 @@ const nodes: Node[] = [
     y: 425,
     kind: 'tool',
     icon: FileText,
-    color: 'violet',
+    color: 'indigo',
     hub: true,
   },
   {
@@ -156,22 +156,22 @@ const nodeMap = Object.fromEntries(nodes.map((n) => [n.id, n]))
 
 const edges: { from: string; to: string; dot: string }[] = [
   // User A flows
-  { from: 'userA', to: 'scout', dot: '#f59e0b' },
-  { from: 'scout', to: 'leads', dot: '#f59e0b' },
-  { from: 'leads', to: 'coldmsg', dot: '#f59e0b' },
-  { from: 'coldmsg', to: 'tracker', dot: '#f59e0b' },
-  { from: 'scout', to: 'shared_resume', dot: '#8b5cf6' },
+  { from: 'userA', to: 'scout', dot: '#4f46e5' },
+  { from: 'scout', to: 'leads', dot: '#4f46e5' },
+  { from: 'leads', to: 'coldmsg', dot: '#4f46e5' },
+  { from: 'coldmsg', to: 'tracker', dot: '#4f46e5' },
+  { from: 'scout', to: 'shared_resume', dot: '#4f46e5' },
 
   // User B flows
-  { from: 'userB', to: 'jobhunt', dot: '#06b6d4' },
-  { from: 'userB', to: 'bulk', dot: '#0284c7' },
-  { from: 'jobhunt', to: 'shared_resume', dot: '#8b5cf6' },
-  { from: 'shared_resume', to: 'salary', dot: '#10b981' },
-  { from: 'salary', to: 'tracker', dot: '#10b981' },
-  { from: 'bulk', to: 'tracker', dot: '#0284c7' },
+  { from: 'userB', to: 'jobhunt', dot: '#4f46e5' },
+  { from: 'userB', to: 'bulk', dot: '#4f46e5' },
+  { from: 'jobhunt', to: 'shared_resume', dot: '#4f46e5' },
+  { from: 'shared_resume', to: 'salary', dot: '#4f46e5' },
+  { from: 'salary', to: 'tracker', dot: '#4f46e5' },
+  { from: 'bulk', to: 'tracker', dot: '#4f46e5' },
 
   // Central shared flows
-  { from: 'shared_resume', to: 'tracker', dot: '#8b5cf6' },
+  { from: 'shared_resume', to: 'tracker', dot: '#4f46e5' },
   { from: 'tracker', to: 'interview', dot: '#4f46e5' },
 ]
 
@@ -181,21 +181,11 @@ function curve(x1: number, y1: number, x2: number, y2: number) {
 }
 
 const iconBg: Record<string, string> = {
-  amber: 'bg-amber-500/10 text-amber-600',
-  cyan: 'bg-cyan-500/10 text-cyan-600',
-  violet: 'bg-violet-500/10 text-violet-600',
   indigo: 'bg-indigo-500/10 text-indigo-600',
-  emerald: 'bg-emerald-500/10 text-emerald-600',
-  sky: 'bg-sky-500/10 text-sky-600',
 }
 
 const accentDots: Record<string, string> = {
-  amber: 'bg-amber-500',
-  cyan: 'bg-cyan-500',
-  violet: 'bg-violet-600',
   indigo: 'bg-indigo-600',
-  emerald: 'bg-emerald-500',
-  sky: 'bg-sky-500',
 }
 
 export function FlowDiagram() {
@@ -265,7 +255,7 @@ export function FlowDiagram() {
                 /* Light Translucent Card matching Home Background */
                 <div
                   className={`relative pl-3.5 pr-4 py-2.5 rounded-2xl border backdrop-blur-md shadow-2xs flex items-center gap-3 overflow-hidden ${n.hub
-                    ? 'bg-white/70 border-violet-200/50 shadow-xs'
+                    ? 'bg-white/70 border-indigo-200/50 shadow-xs'
                     : 'bg-white/50 border-slate-200/40'
                     } ${n.hub ? 'w-[215px] sm:w-[230px]' : 'w-[185px] sm:w-[200px]'}`}
                 >

@@ -462,8 +462,8 @@ function EditorInner() {
           <ArrowLeft className="h-4 w-4" /> Back
         </button>
         <div className="flex items-center gap-2 mx-auto">
-          <div className="page-header-icon bg-violet-100">
-            <FileText className="h-5 w-5 text-violet-600" />
+          <div className="page-header-icon bg-indigo-100">
+            <FileText className="h-5 w-5 text-indigo-600" />
           </div>
           <div>
             <h1 className="text-xl font-bold text-slate-900 tracking-tight">Resume Editor</h1>

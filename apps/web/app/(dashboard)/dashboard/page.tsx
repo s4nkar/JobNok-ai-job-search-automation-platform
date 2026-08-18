@@ -96,11 +96,11 @@ export default function DashboardPage() {
 
   const statTiles = [
     { label: 'Applications Tracked', value: applications.length, Icon: Briefcase, iconBg: 'bg-indigo-100', iconColor: 'text-indigo-600' },
-    { label: 'Active', value: active.length, Icon: TrendingUp, iconBg: 'bg-blue-100', iconColor: 'text-blue-600' },
-    { label: 'Interviewing', value: interviewing.length, Icon: Users, iconBg: 'bg-violet-100', iconColor: 'text-violet-600' },
+    { label: 'Active', value: active.length, Icon: TrendingUp, iconBg: 'bg-indigo-100', iconColor: 'text-indigo-600' },
+    { label: 'Interviewing', value: interviewing.length, Icon: Users, iconBg: 'bg-indigo-100', iconColor: 'text-indigo-600' },
     { label: 'Offers', value: offers.length, Icon: Award, iconBg: 'bg-emerald-100', iconColor: 'text-emerald-600' },
     { label: 'Follow-ups Due', value: overdueCount, Icon: AlertCircle, iconBg: 'bg-red-100', iconColor: 'text-red-600' },
-    { label: 'Startup Leads', value: openLeads.length, Icon: Compass, iconBg: 'bg-orange-100', iconColor: 'text-orange-600' },
+    { label: 'Startup Leads', value: openLeads.length, Icon: Compass, iconBg: 'bg-indigo-100', iconColor: 'text-indigo-600' },
   ]
 
   if (loading) {

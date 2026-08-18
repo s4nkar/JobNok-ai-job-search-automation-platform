@@ -97,13 +97,16 @@ const DEFAULT_VALUES: FormData = {
   ats_limit: 15,
 }
 
+// Score labels are informational tags, not status — several can appear at
+// once on one card, so one neutral treatment reads as a coherent set instead
+// of a scattered rainbow (was a different hue per label with no shared logic).
 const labelClasses: Record<string, string> = {
-  Fresh: 'bg-green-100 text-green-900 hover:bg-green-100',
-  'Direct Apply': 'bg-blue-100 text-blue-900 hover:bg-blue-100',
-  'Hidden Gem': 'bg-amber-100 text-amber-900 hover:bg-amber-100',
-  'Outreach Friendly': 'bg-pink-100 text-pink-900 hover:bg-pink-100',
-  'Germany Match': 'bg-slate-100 text-slate-900 hover:bg-slate-100',
-  'AI/ML Fit': 'bg-violet-100 text-violet-900 hover:bg-violet-100',
+  Fresh: 'bg-slate-100 text-slate-700 hover:bg-slate-100',
+  'Direct Apply': 'bg-slate-100 text-slate-700 hover:bg-slate-100',
+  'Hidden Gem': 'bg-slate-100 text-slate-700 hover:bg-slate-100',
+  'Outreach Friendly': 'bg-slate-100 text-slate-700 hover:bg-slate-100',
+  'Germany Match': 'bg-slate-100 text-slate-700 hover:bg-slate-100',
+  'AI/ML Fit': 'bg-slate-100 text-slate-700 hover:bg-slate-100',
 }
 
 const SOURCE_DIAGNOSTIC_ORDER: ProviderBucket[] = ['ats', 'theirstack']
@@ -395,8 +398,8 @@ export default function StartupHuntPage() {
     <div className="animate-fade-in">
       <div className="flex items-start justify-between gap-4 mb-6">
         <div className="flex items-center gap-4">
-          <div className="page-header-icon bg-orange-100">
-            <Compass className="h-5 w-5 text-orange-600" />
+          <div className="page-header-icon bg-indigo-100">
+            <Compass className="h-5 w-5 text-indigo-600" />
           </div>
           <div>
             <h1 className="text-2xl font-bold text-slate-900 tracking-tight">Startup Hunt</h1>
@@ -646,7 +649,7 @@ export default function StartupHuntPage() {
                   <span key={keyword} className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-slate-100 text-slate-700">{keyword}</span>
                 ))}
                 {parsedStrategy.languages.map((language) => (
-                  <span key={language} className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-blue-50 text-blue-700 border border-blue-100">{language}</span>
+                  <span key={language} className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-slate-50 text-slate-600 border border-slate-200">{language}</span>
                 ))}
                 {parsedStrategy.preferred_cities.map((city) => (
                   <span key={city} className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-slate-50 text-slate-600 border border-slate-200">{city}</span>
@@ -752,8 +755,8 @@ export default function StartupHuntPage() {
           {!loading && results.length === 0 && !error && (
             <div className="bg-white rounded-2xl border border-slate-100 shadow-sm min-h-[480px] flex items-center justify-center p-8">
               <div className="text-center space-y-2">
-                <div className="w-14 h-14 rounded-2xl bg-orange-50 flex items-center justify-center mx-auto">
-                  <Compass className="h-7 w-7 text-orange-200" />
+                <div className="w-14 h-14 rounded-2xl bg-slate-50 flex items-center justify-center mx-auto">
+                  <Compass className="h-7 w-7 text-slate-300" />
                 </div>
                 <p className="font-semibold text-slate-500">Ranked startup opportunities will appear here</p>
                 <p className="text-sm text-slate-400">Use Startup Hunt when you want deeper discovery than the standard recent jobs tool</p>
@@ -778,7 +781,7 @@ export default function StartupHuntPage() {
                 return (
                   <div key={resultKey} className="space-y-3">
                     {showBand && (
-                      <div className="flex items-center justify-between gap-3 px-4 py-2 bg-violet-100 rounded-lg">
+                      <div className="flex items-center justify-between gap-3 px-4 py-2 bg-slate-100 rounded-lg">
                         <div>
                           <h2 className="text-sm font-semibold text-slate-800">{bucketLabel(bucket)}</h2>
                           <p className="text-xs text-slate-500">Provider band continues from global rank #{index + 1}</p>
@@ -796,7 +799,7 @@ export default function StartupHuntPage() {
                             <span className="inline-flex items-center px-2 py-0.5 rounded-md text-[10px] font-semibold bg-slate-100 text-slate-700 border border-slate-200">
                               Rank #{index + 1}
                             </span>
-                            <span className="inline-flex items-center px-2 py-0.5 rounded-md text-[10px] font-semibold bg-orange-50 text-orange-700 border border-orange-100">
+                            <span className="inline-flex items-center px-2 py-0.5 rounded-md text-[10px] font-semibold bg-slate-50 text-slate-600 border border-slate-200">
                               {bucketLabel(bucket)}
                             </span>
                             {job.cache_hit && (
@@ -832,8 +835,8 @@ export default function StartupHuntPage() {
                             {job.company.stage && <span className="inline-flex items-center px-2 py-0.5 rounded-md text-xs font-medium bg-slate-50 text-slate-700 border border-slate-200">{job.company.stage}</span>}
                             {job.company.company_size && <span className="inline-flex items-center px-2 py-0.5 rounded-md text-xs font-medium bg-slate-50 text-slate-700 border border-slate-200">{job.company.company_size}</span>}
                             {job.company.english_friendly && <span className="inline-flex items-center px-2 py-0.5 rounded-md text-xs font-semibold bg-emerald-50 text-emerald-700 border border-emerald-100">English-friendly</span>}
-                            {job.company.relocation_support && <span className="inline-flex items-center px-2 py-0.5 rounded-md text-xs font-semibold bg-sky-50 text-sky-700 border border-sky-100">{job.company.relocation_support}</span>}
-                            {job.contacts.length > 0 && <span className="inline-flex items-center px-2 py-0.5 rounded-md text-xs font-semibold bg-pink-50 text-pink-700 border border-pink-100">{job.contacts.length} contact{job.contacts.length === 1 ? '' : 's'}</span>}
+                            {job.company.relocation_support && <span className="inline-flex items-center px-2 py-0.5 rounded-md text-xs font-semibold bg-slate-50 text-slate-600 border border-slate-200">{job.company.relocation_support}</span>}
+                            {job.contacts.length > 0 && <span className="inline-flex items-center px-2 py-0.5 rounded-md text-xs font-semibold bg-slate-50 text-slate-600 border border-slate-200">{job.contacts.length} contact{job.contacts.length === 1 ? '' : 's'}</span>}
                           </div>
                         </div>
 
@@ -1026,7 +1029,7 @@ export default function StartupHuntPage() {
                             <span className="inline-flex items-center px-2 py-0.5 rounded-md text-[10px] font-semibold bg-slate-100 text-slate-700 border border-slate-200">
                               Extra #{index + 1}
                             </span>
-                            <span className="inline-flex items-center px-2 py-0.5 rounded-md text-[10px] font-semibold bg-orange-50 text-orange-700 border border-orange-100">
+                            <span className="inline-flex items-center px-2 py-0.5 rounded-md text-[10px] font-semibold bg-slate-50 text-slate-600 border border-slate-200">
                               {bucketLabel(job.source_bucket || 'crawler')}
                             </span>
                           </div>
@@ -1073,7 +1076,7 @@ export default function StartupHuntPage() {
                   <div key={`${item.company_name}-${item.role_title}-${item.source_name}-${index}`} className="rounded-xl border border-slate-100 bg-slate-50 p-4">
                     <div className="flex items-center gap-2 flex-wrap mb-1">
                       <p className="text-sm font-semibold text-slate-900">{item.role_title}</p>
-                      <span className="inline-flex items-center px-2 py-0.5 rounded-md text-[10px] font-semibold bg-orange-50 text-orange-700 border border-orange-100">
+                      <span className="inline-flex items-center px-2 py-0.5 rounded-md text-[10px] font-semibold bg-slate-50 text-slate-600 border border-slate-200">
                         {bucketLabel(item.source_bucket || 'crawler')}
                       </span>
                     </div>

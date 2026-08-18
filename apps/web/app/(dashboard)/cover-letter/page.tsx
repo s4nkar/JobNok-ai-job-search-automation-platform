@@ -124,8 +124,8 @@ function CoverLetterInner() {
   return (
     <div className="animate-fade-in">
       <div className="flex items-center gap-4 mb-6">
-        <div className="page-header-icon bg-pink-100">
-          <PenLine className="h-5 w-5 text-pink-600" />
+        <div className="page-header-icon bg-indigo-100">
+          <PenLine className="h-5 w-5 text-indigo-600" />
         </div>
         <div>
           <h1 className="text-2xl font-bold text-slate-900 tracking-tight">Cover Letter Generator</h1>
@@ -134,10 +134,10 @@ function CoverLetterInner() {
       </div>
 
       {lead && (
-        <div className="flex items-center gap-2.5 bg-orange-50 border border-orange-100 text-orange-800 rounded-xl px-4 py-3 mb-4 text-sm">
-          <Compass className="h-4 w-4 flex-shrink-0 text-orange-500" />
+        <div className="flex items-center gap-2.5 bg-indigo-50 border border-indigo-100 text-indigo-800 rounded-xl px-4 py-3 mb-4 text-sm">
+          <Compass className="h-4 w-4 flex-shrink-0 text-indigo-500" />
           <span>Pre-filled from <strong>{lead.company_name} — {lead.role_title}</strong>. Add your selling points below.</span>
-          <button onClick={() => setLead(null)} className="ml-auto text-orange-400 hover:text-orange-700">
+          <button onClick={() => setLead(null)} className="ml-auto text-indigo-400 hover:text-indigo-700">
             <X className="h-4 w-4" />
           </button>
         </div>
@@ -158,8 +158,8 @@ function CoverLetterInner() {
         <span><strong>{config.rateLimits.coverLetterPerDay} letters/day</strong> on the free tier.</span>
       </div>
 
-      <div className="grid grid-cols-2 gap-6">
-        <div>
+      <div className="grid grid-cols-2 gap-6 items-start">
+        <div className="sticky top-6">
           <form onSubmit={handleSubmit(onSubmit)} className="space-y-4">
             <div className="bg-white rounded-2xl border border-slate-100 shadow-card p-5 space-y-4">
               <div className="grid grid-cols-2 gap-4">
@@ -221,8 +221,8 @@ function CoverLetterInner() {
           {!output && !loading && (
             <div className="bg-white rounded-2xl border border-slate-100 shadow-card min-h-[400px] flex items-center justify-center p-8">
               <div className="text-center space-y-2">
-                <div className="w-14 h-14 rounded-2xl bg-pink-50 flex items-center justify-center mx-auto">
-                  <PenLine className="h-7 w-7 text-pink-200" />
+                <div className="w-14 h-14 rounded-2xl bg-indigo-50 flex items-center justify-center mx-auto">
+                  <PenLine className="h-7 w-7 text-indigo-200" />
                 </div>
                 <p className="font-semibold text-slate-500">Your cover letter will appear here</p>
                 <p className="text-sm text-slate-400">Streams in real-time as it&apos;s generated</p>

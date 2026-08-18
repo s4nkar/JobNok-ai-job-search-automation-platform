@@ -146,8 +146,8 @@ export default function BulkEmailPage() {
     <div className="animate-fade-in">
       {/* Page Header */}
       <div className="flex items-center gap-4 mb-6">
-        <div className="page-header-icon bg-violet-100">
-          <Mail className="h-5 w-5 text-violet-600" />
+        <div className="page-header-icon bg-indigo-100">
+          <Mail className="h-5 w-5 text-indigo-600" />
         </div>
         <div>
           <h1 className="text-2xl font-bold text-slate-900 tracking-tight">Bulk Email Sender</h1>
@@ -323,8 +323,8 @@ export default function BulkEmailPage() {
               {!activeCampaign ? (
                 <div className="bg-white rounded-2xl border border-slate-100 shadow-sm min-h-[300px] flex items-center justify-center p-8">
                   <div className="text-center space-y-2">
-                    <div className="w-12 h-12 rounded-2xl bg-violet-50 flex items-center justify-center mx-auto">
-                      <Mail className="h-6 w-6 text-violet-200" />
+                    <div className="w-12 h-12 rounded-2xl bg-indigo-50 flex items-center justify-center mx-auto">
+                      <Mail className="h-6 w-6 text-indigo-200" />
                     </div>
                     <p className="font-semibold text-slate-500">Select a campaign to see details</p>
                   </div>

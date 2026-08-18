@@ -44,11 +44,14 @@ export const APPLICATION_STATUSES: ApplicationStatus[] = [
   'Withdrawn',
 ]
 
+// Applied/Phone Screen/Interview all share one "in progress" accent (matches
+// the dashboard's Active/Interviewing tiles) — only the terminal states carry
+// distinct semantic color: Offer (success), Rejected (error), Withdrawn (neutral).
 export const STATUS_COLORS: Record<ApplicationStatus, string> = {
-  Applied:       'bg-blue-100 text-blue-800',
-  'Phone Screen': 'bg-yellow-100 text-yellow-800',
-  Interview:     'bg-purple-100 text-purple-800',
-  Offer:         'bg-green-100 text-green-800',
+  Applied:       'bg-indigo-100 text-indigo-800',
+  'Phone Screen': 'bg-indigo-100 text-indigo-800',
+  Interview:     'bg-indigo-100 text-indigo-800',
+  Offer:         'bg-emerald-100 text-emerald-800',
   Rejected:      'bg-red-100 text-red-800',
   Withdrawn:     'bg-gray-100 text-gray-800',
 }

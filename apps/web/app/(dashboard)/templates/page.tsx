@@ -30,10 +30,13 @@ const templateSchema = z.object({
 type TemplateFormData = z.infer<typeof templateSchema>
 
 const categoryColors: Record<string, string> = {
+  // LinkedIn keeps its real brand blue — a recognizable third-party mark,
+  // not an arbitrary category color. Everything else is a neutral category
+  // label with no status meaning, so it stays on one shared treatment.
   'LinkedIn': 'bg-blue-50 text-blue-700 border-blue-100',
-  'Email': 'bg-violet-50 text-violet-700 border-violet-100',
-  'Follow-up': 'bg-amber-50 text-amber-700 border-amber-100',
-  'Thank You': 'bg-emerald-50 text-emerald-700 border-emerald-100',
+  'Email': 'bg-slate-50 text-slate-600 border-slate-200',
+  'Follow-up': 'bg-slate-50 text-slate-600 border-slate-200',
+  'Thank You': 'bg-slate-50 text-slate-600 border-slate-200',
   'Custom': 'bg-slate-50 text-slate-600 border-slate-200',
 }
 
@@ -140,8 +143,8 @@ export default function TemplatesPage() {
       {/* Page Header */}
       <div className="flex items-start justify-between mb-8">
         <div className="flex items-center gap-4">
-          <div className="page-header-icon bg-blue-100">
-            <FileText className="h-5 w-5 text-blue-600" />
+          <div className="page-header-icon bg-indigo-100">
+            <FileText className="h-5 w-5 text-indigo-600" />
           </div>
           <div>
             <h1 className="text-2xl font-bold text-slate-900 tracking-tight">Smart Templates</h1>
@@ -212,8 +215,8 @@ export default function TemplatesPage() {
           {!selected ? (
             <div className="bg-white rounded-2xl border border-slate-100 shadow-sm min-h-[400px] flex items-center justify-center p-8">
               <div className="text-center space-y-2">
-                <div className="w-14 h-14 rounded-2xl bg-blue-50 flex items-center justify-center mx-auto">
-                  <FileText className="h-7 w-7 text-blue-200" />
+                <div className="w-14 h-14 rounded-2xl bg-indigo-50 flex items-center justify-center mx-auto">
+                  <FileText className="h-7 w-7 text-indigo-200" />
                 </div>
                 <p className="font-semibold text-slate-500">Select a template to get started</p>
                 <p className="text-sm text-slate-400">Or create a new one with the button above</p>
