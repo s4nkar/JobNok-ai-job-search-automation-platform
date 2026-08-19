@@ -16,7 +16,7 @@ export function fillTemplate(template: string, values: Record<string, string>): 
 }
 
 export function formatDate(dateStr: string | null | undefined): string {
-  if (!dateStr) return '—'
+  if (!dateStr) return 'None'
   return new Date(dateStr).toLocaleDateString('en-US', {
     year: 'numeric',
     month: 'short',
@@ -30,7 +30,7 @@ export function isOverdue(dateStr: string | null | undefined): boolean {
 }
 
 export function formatCurrency(amount: number | null | undefined): string {
-  if (amount == null) return '—'
+  if (amount == null) return 'None'
   return new Intl.NumberFormat('en-US', {
     style: 'currency',
     currency: 'USD',
