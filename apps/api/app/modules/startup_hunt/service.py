@@ -1,8 +1,10 @@
-"""Startup Hunt business logic — SQLAlchemy-backed.
+"""Startup Hunt business logic, SQLAlchemy-backed.
 
-Cross-module note: writes to tracker's job_applications table (via a direct
-query using JobApplication, not an ORM relationship()) when an opportunity is
-marked "applied" — mirrors the pre-migration supabase-py behavior exactly.
+This module intentionally does not write into tracker's job_applications
+table - startup_hunt_opportunities is its own tracked list, surfaced in the
+Tracker's dedicated "Startup Leads" tab, so a lead marked "applied" here shows
+up exactly once instead of also duplicating into the Tracker's manual
+Applications tab.
 """
 
 import uuid
@@ -42,7 +44,6 @@ from app.modules.startup_hunt.schemas import (
     StartupHuntOpportunityUpdateRequest,
     StartupHuntSourceIn,
 )
-from app.modules.tracker.models import JobApplication
 
 
 def _parse_dt(s: str | None) -> datetime | None:
@@ -321,35 +322,6 @@ async def delete_opportunity_artifact(db: AsyncSession, user_id: str, opportunit
     await db.flush()
 
 
-async def _upsert_tracker_application(
-    db: AsyncSession, *, user_id: str, tracker_id: str | None, company: str, role: str, location: str
-) -> str:
-    applied_date = datetime.now(timezone.utc).date()
-    notes = f"Synced from Startup Hunt for {location}"
-
-    if tracker_id:
-        tracker_row = (
-            await db.execute(
-                select(JobApplication).where(JobApplication.id == tracker_id, JobApplication.user_id == user_id)
-            )
-        ).scalar_one_or_none()
-        if tracker_row is not None:
-            tracker_row.company = company
-            tracker_row.role = role
-            tracker_row.applied_at = applied_date
-            tracker_row.status = "Applied"
-            tracker_row.notes = notes
-            await db.flush()
-            return str(tracker_row.id)
-
-    new_row = JobApplication(
-        user_id=user_id, company=company, role=role, applied_at=applied_date, status="Applied", notes=notes
-    )
-    db.add(new_row)
-    await db.flush()
-    return str(new_row.id)
-
-
 async def _upsert_company(db: AsyncSession, user_id: str, payload: dict) -> str:
     company_payload = payload.get("company_payload") or {}
     existing = (
@@ -471,12 +443,11 @@ async def create_startup_hunt_opportunity(
         )
     ).scalar_one_or_none()
 
+    # Preserves whatever tracker_application_id an already-migrated row happened
+    # to carry, but never sets one on new writes - startup_hunt_opportunities is
+    # its own tracked list now (the Tracker's "Startup Leads" tab), not synced
+    # into the Tracker's manual job_applications table.
     tracker_id = str(existing.tracker_application_id) if (existing and existing.tracker_application_id) else None
-    if payload["opportunity_status"] == "applied":
-        tracker_id = await _upsert_tracker_application(
-            db, user_id=user_id, tracker_id=tracker_id,
-            company=payload["company_name"], role=payload["role_title"], location=payload["location"],
-        )
 
     company_id = await _upsert_company(db, user_id, payload)
     job_id = await _find_job_id(
@@ -543,14 +514,6 @@ async def update_startup_hunt_opportunity(
 
     direct_apply_url = str(body.direct_apply_url) if body.direct_apply_url else existing.direct_apply_url
     canonical_job_url = str(body.canonical_job_url) if body.canonical_job_url else existing.canonical_job_url
-
-    if body.opportunity_status == "applied":
-        tracker_id = await _upsert_tracker_application(
-            db, user_id=user_id,
-            tracker_id=str(existing.tracker_application_id) if existing.tracker_application_id else None,
-            company=existing.company_name, role=existing.role_title, location=existing.location,
-        )
-        existing.tracker_application_id = tracker_id
 
     existing.opportunity_status = body.opportunity_status
     existing.direct_apply_url = direct_apply_url

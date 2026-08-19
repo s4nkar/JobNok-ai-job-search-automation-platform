@@ -38,6 +38,8 @@ function buildJdFromOpportunity(lead: StartupHuntSavedOpportunity): string {
 function InterviewPrepInner() {
   const searchParams = useSearchParams()
   const opportunityId = searchParams.get('opportunity_id')
+  const trackerCompany = searchParams.get('company')
+  const trackerRole = searchParams.get('role')
 
   const [lead, setLead] = useState<StartupHuntSavedOpportunity | null>(null)
   const [jd, setJd] = useState('')
@@ -62,6 +64,11 @@ function InterviewPrepInner() {
       setJd(buildJdFromOpportunity(found))
     }
   }, [opportunityId, opportunities])
+
+  useEffect(() => {
+    if (opportunityId || !trackerCompany || !trackerRole) return
+    setJd(`${trackerRole} at ${trackerCompany}\n\n[Paste or add the full job description below this line for best results]`)
+  }, [opportunityId, trackerCompany, trackerRole])
 
   async function generateQuestions() {
     if (!jd.trim()) return

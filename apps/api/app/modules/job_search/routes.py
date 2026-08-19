@@ -49,3 +49,9 @@ async def update_job_search_application(
 ):
     user_id = await get_current_user_id(request, db)
     return await service.update_job_search_application(db, user_id, application_id, body)
+
+
+@router.delete("/applications/{application_id}", status_code=204)
+async def delete_job_search_application(request: Request, application_id: str, db: AsyncSession = Depends(get_db)):
+    user_id = await get_current_user_id(request, db)
+    await service.delete_job_search_application(db, user_id, application_id)

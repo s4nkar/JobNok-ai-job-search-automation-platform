@@ -74,6 +74,8 @@ function ResumeTailorInner() {
   const searchParams = useSearchParams()
   const router = useRouter()
   const opportunityId = searchParams.get('opportunity_id')
+  const trackerCompany = searchParams.get('company')
+  const trackerRole = searchParams.get('role')
 
   const [lead, setLead] = useState<StartupHuntSavedOpportunity | null>(null)
   const [file, setFile] = useState<File | null>(null)
@@ -102,6 +104,11 @@ function ResumeTailorInner() {
       })
       .finally(() => setPrefilling(false))
   }, [opportunityId])
+
+  useEffect(() => {
+    if (opportunityId || !trackerCompany || !trackerRole) return
+    setJd(`${trackerRole} at ${trackerCompany}`)
+  }, [opportunityId, trackerCompany, trackerRole])
 
   function handleFileChange(e: React.ChangeEvent<HTMLInputElement>) {
     const f = e.target.files?.[0]

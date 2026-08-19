@@ -77,6 +77,33 @@ const JOB_SEARCH_STATUS_META: Record<JobSearchApplicationStatus, { label: string
 
 const JOB_SEARCH_STATUS_ORDER: JobSearchApplicationStatus[] = ['saved', 'applied', 'skipped']
 
+type TrackerTab = 'applications' | 'leads' | 'scout' | 'job-search'
+
+const TRACKER_TAB_META: Record<TrackerTab, { label: string; description: string; icon: React.ElementType }> = {
+  applications: {
+    label: 'Applications',
+    description: 'Applications you add and update yourself - not synced from any other tool.',
+    icon: Briefcase,
+  },
+  leads: {
+    label: 'Startup Leads',
+    description: 'Opportunities you saved from Startup Hunt.',
+    icon: Compass,
+  },
+  scout: {
+    label: 'Startup Scout',
+    description: 'Companies you saved from Startup Scout to crawl for founder contacts.',
+    icon: Radar,
+  },
+  'job-search': {
+    label: 'Job Search',
+    description: 'Jobs you saved or marked applied from Recent Job Search.',
+    icon: Search,
+  },
+}
+
+const TRACKER_TAB_ORDER: TrackerTab[] = ['applications', 'leads', 'scout', 'job-search']
+
 const ARTIFACT_META: Record<string, { label: string; icon: React.ElementType; color: string; tool: string }> = {
   resume_analysis: { label: 'Resume Analysis', icon: FileSearch, color: 'text-slate-600', tool: 'resume-tailor' },
   cover_letter: { label: 'Cover Letter', icon: PenLine, color: 'text-slate-600', tool: 'cover-letter' },
@@ -84,11 +111,11 @@ const ARTIFACT_META: Record<string, { label: string; icon: React.ElementType; co
 }
 
 const SCOUT_STATUS_META: Record<ScoutCrawlStatus, { label: string; classes: string }> = {
-  pending:  { label: 'Pending',   classes: 'bg-slate-100 text-slate-600' },
+  pending: { label: 'Pending', classes: 'bg-slate-100 text-slate-600' },
   crawling: { label: 'Crawling…', classes: 'bg-indigo-100 text-indigo-700' },
-  enriched: { label: 'Enriched',  classes: 'bg-emerald-100 text-emerald-700' },
-  partial:  { label: 'Partial',   classes: 'bg-amber-100 text-amber-700' },
-  failed:   { label: 'Failed',    classes: 'bg-red-100 text-red-600' },
+  enriched: { label: 'Enriched', classes: 'bg-emerald-100 text-emerald-700' },
+  partial: { label: 'Partial', classes: 'bg-amber-100 text-amber-700' },
+  failed: { label: 'Failed', classes: 'bg-red-100 text-red-600' },
 }
 
 // Funding stage is categorical, not a status signal — one neutral treatment
@@ -96,15 +123,13 @@ const SCOUT_STATUS_META: Record<ScoutCrawlStatus, { label: string; classes: stri
 // bad, "Series A" isn't good) for data that has no such semantic ordering.
 const SCOUT_STAGE_PILL: Record<string, string> = {
   'Pre-Seed': 'bg-slate-50 text-slate-700 ring-slate-200',
-  'Seed':     'bg-slate-50 text-slate-700 ring-slate-200',
+  'Seed': 'bg-slate-50 text-slate-700 ring-slate-200',
   'Series A': 'bg-slate-50 text-slate-700 ring-slate-200',
   'Series B': 'bg-slate-50 text-slate-700 ring-slate-200',
   'Series C': 'bg-slate-50 text-slate-700 ring-slate-200',
-  'Series C+':'bg-slate-50 text-slate-700 ring-slate-200',
-  'Angel':    'bg-slate-50 text-slate-700 ring-slate-200',
+  'Series C+': 'bg-slate-50 text-slate-700 ring-slate-200',
+  'Angel': 'bg-slate-50 text-slate-700 ring-slate-200',
 }
-
-type TrackerTab = 'applications' | 'leads' | 'scout' | 'job-search'
 
 function initialTrackerTab(searchParams: URLSearchParams): TrackerTab {
   const requested = searchParams.get('tab')
@@ -136,7 +161,6 @@ function TrackerPageInner() {
   const { data: scoutCompanies = [], isLoading: scoutLoading } = useQuery({
     queryKey: queryKeys.startupScoutCompanies,
     queryFn: () => apiGet<ScoutCompany[]>('/api/startup-scout/companies'),
-    enabled: tab === 'scout',
   })
 
   const [crawlingIds, setCrawlingIds] = useState<Set<string>>(new Set())
@@ -152,6 +176,7 @@ function TrackerPageInner() {
   const [leadStatusFilter, setLeadStatusFilter] = useState<StartupHuntOpportunityStatus | 'all'>('all')
   const [updatingJobSearchId, setUpdatingJobSearchId] = useState<string | null>(null)
   const [jobSearchStatusFilter, setJobSearchStatusFilter] = useState<JobSearchApplicationStatus | 'all'>('all')
+  const [updatingAppId, setUpdatingAppId] = useState<string | null>(null)
   const [expandedDocs, setExpandedDocs] = useState<Record<string, boolean>>({})
   const [docsCache, setDocsCache] = useState<Record<string, OpportunityArtifact[]>>({})
   const [docsLoading, setDocsLoading] = useState<Record<string, boolean>>({})
@@ -299,6 +324,33 @@ function TrackerPageInner() {
     setSaving(false)
   }
 
+  async function updateApplicationStatus(app: JobApplication, status: ApplicationStatus) {
+    setUpdatingAppId(app.id)
+    const res = await apiFetch(`/api/tracker/${app.id}`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        company: app.company,
+        role: app.role,
+        applied_at: app.applied_at,
+        status,
+        follow_up_date: app.follow_up_date,
+        salary_min: app.salary_min,
+        salary_max: app.salary_max,
+        notes: app.notes,
+      }),
+    })
+    if (res.ok) {
+      const updated: JobApplication = await res.json()
+      setApplications((prev) => prev.map((a) => a.id === updated.id ? updated : a))
+      toast({ title: 'Status updated' })
+    } else {
+      const err = await res.json().catch(() => ({}))
+      toast({ title: 'Could not update status', description: err.detail || 'Try again.', variant: 'destructive' })
+    }
+    setUpdatingAppId(null)
+  }
+
   async function deleteApp(id: string) {
     if (!confirm('Remove this application? This cannot be undone.')) return
     const res = await apiFetch(`/api/tracker/${id}`, { method: 'DELETE' })
@@ -344,7 +396,20 @@ function TrackerPageInner() {
     setUpdatingJobSearchId(null)
   }
 
+  async function deleteJobSearchApplication(id: string) {
+    if (!confirm('Remove this tracked job? This cannot be undone.')) return
+    const res = await apiFetch(`/api/job-search/applications/${id}`, { method: 'DELETE' })
+    if (res.ok) {
+      setJobSearchApplications((prev) => prev.filter((a) => a.id !== id))
+      toast({ title: 'Removed from tracker' })
+    } else {
+      const err = await res.json().catch(() => ({}))
+      toast({ title: 'Could not remove', description: err.detail || 'Try again.', variant: 'destructive' })
+    }
+  }
+
   async function deleteLead(id: string) {
+    if (!confirm('Remove this lead? This cannot be undone.')) return
     const res = await apiFetch(`/api/startup-hunt/opportunities/${id}`, { method: 'DELETE' })
     if (res.ok) {
       setLeads((prev) => prev.filter((l) => l.id !== id))
@@ -399,6 +464,13 @@ function TrackerPageInner() {
     return acc
   }, {} as Record<JobSearchApplicationStatus, number>)
 
+  const TAB_COUNTS: Record<TrackerTab, number> = {
+    applications: applications.length,
+    leads: leads.length,
+    scout: scoutCompanies.length,
+    'job-search': jobSearchApplications.length,
+  }
+
   return (
     <div className="animate-fade-in">
       <div className="flex items-start justify-between mb-6">
@@ -408,7 +480,7 @@ function TrackerPageInner() {
           </div>
           <div>
             <h1 className="text-2xl font-bold text-slate-900 tracking-tight">Follow-Up Tracker</h1>
-            <p className="text-slate-500 text-sm mt-0.5">All your tracked applications and saved startup leads in one place</p>
+            <p className="text-slate-500 text-sm mt-0.5">Everything tracked here, added by hand or synced from other tools, in one place</p>
           </div>
         </div>
         {tab === 'applications' && (
@@ -419,42 +491,43 @@ function TrackerPageInner() {
       </div>
 
       {/* Tabs */}
-      <div className="flex gap-1 bg-slate-100 rounded-xl p-1 w-fit mb-6">
-        {([
-          ['applications', Briefcase, 'Applications', applications.length, 'bg-indigo-100 text-indigo-700'],
-          ['leads', Compass, 'Startup Leads', leads.length, 'bg-indigo-100 text-indigo-700'],
-          ['scout', Radar, 'Startup Scout', scoutCompanies.length, 'bg-indigo-100 text-indigo-700'],
-          ['job-search', Search, 'Job Search', jobSearchApplications.length, 'bg-indigo-100 text-indigo-700'],
-        ] as const).map(([id, Icon, label, count, badgeClass]) => (
-          <button
-            key={id}
-            onClick={() => setTab(id as TrackerTab)}
-            className={cn(
-              'flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-semibold transition-colors',
-              tab === id ? 'bg-white text-slate-900 shadow-sm' : 'text-slate-500 hover:text-slate-700'
-            )}
-          >
-            <Icon className="h-4 w-4" />
-            {label}
-            <span className={cn('inline-flex items-center justify-center min-w-[20px] h-5 px-1.5 rounded-full text-xs font-bold',
-              tab === id ? badgeClass : 'bg-slate-200 text-slate-600')}>
-              {count}
-            </span>
-          </button>
-        ))}
+      <div className="flex gap-1 bg-slate-100 rounded-xl p-1 w-fit mb-2.5">
+        {TRACKER_TAB_ORDER.map((id) => {
+          const meta = TRACKER_TAB_META[id]
+          const count = TAB_COUNTS[id]
+          return (
+            <button
+              key={id}
+              onClick={() => setTab(id)}
+              title={meta.description}
+              className={cn(
+                'flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-semibold transition-colors',
+                tab === id ? 'bg-white text-slate-900 shadow-sm' : 'text-slate-500 hover:text-slate-700'
+              )}
+            >
+              <meta.icon className="h-4 w-4" />
+              {meta.label}
+              <span className={cn('inline-flex items-center justify-center min-w-[20px] h-5 px-1.5 rounded-full text-xs font-bold',
+                tab === id ? 'bg-indigo-100 text-indigo-700' : 'bg-slate-200 text-slate-600')}>
+                {count}
+              </span>
+            </button>
+          )
+        })}
       </div>
+      <p className="text-xs text-slate-400 mb-6">{TRACKER_TAB_META[tab].description}</p>
 
       {/* ─── APPLICATIONS TAB ─── */}
       {tab === 'applications' && (
         <>
           <div className="grid grid-cols-4 gap-4 mb-6">
             {[
-              { label: 'Total', value: applications.length, Icon: Briefcase, iconBg: 'bg-slate-100', iconColor: 'text-slate-600' },
-              { label: 'Active', value: active.length, Icon: TrendingUp, iconBg: 'bg-indigo-100', iconColor: 'text-indigo-600' },
-              { label: 'Overdue', value: overdue.length, Icon: AlertCircle, iconBg: 'bg-red-100', iconColor: 'text-red-600' },
-              { label: 'Offers', value: offers.length, Icon: CheckCircle, iconBg: 'bg-emerald-100', iconColor: 'text-emerald-600' },
-            ].map(({ label, value, Icon, iconBg, iconColor }) => (
-              <div key={label} className="bg-white rounded-2xl border border-slate-100 shadow-sm p-5 flex items-center gap-4">
+              { label: 'Total', value: applications.length, Icon: Briefcase, iconBg: 'bg-slate-100', iconColor: 'text-slate-600', description: 'All applications you have added.' },
+              { label: 'Active', value: active.length, Icon: TrendingUp, iconBg: 'bg-indigo-100', iconColor: 'text-indigo-600', description: 'Not yet Rejected or Withdrawn.' },
+              { label: 'Overdue', value: overdue.length, Icon: AlertCircle, iconBg: 'bg-red-100', iconColor: 'text-red-600', description: "Not a status you pick - it's automatic. An active application becomes overdue once its Follow-up date (set in the Add/Edit form) has passed." },
+              { label: 'Offers', value: offers.length, Icon: CheckCircle, iconBg: 'bg-emerald-100', iconColor: 'text-emerald-600', description: 'Status is Offer.' },
+            ].map(({ label, value, Icon, iconBg, iconColor, description }) => (
+              <div key={label} title={description} className="bg-white rounded-2xl border border-slate-100 shadow-sm p-5 flex items-center gap-4">
                 <div className={cn('w-10 h-10 rounded-xl flex items-center justify-center flex-shrink-0', iconBg)}>
                   <Icon className={cn('h-5 w-5', iconColor)} />
                 </div>
@@ -489,48 +562,83 @@ function TrackerPageInner() {
                     {['Company', 'Role', 'Status', 'Applied', 'Follow-up', 'Salary'].map((h) => (
                       <TableHead key={h} className="text-xs font-semibold text-slate-500 uppercase tracking-wider">{h}</TableHead>
                     ))}
-                    <TableHead className="w-20" />
+                    <TableHead className="w-28" />
                   </TableRow>
                 </TableHeader>
                 <TableBody>
                   {applications.map((app) => {
                     const overdueRow = isOverdue(app.follow_up_date) && !['Rejected', 'Withdrawn'].includes(app.status)
+                    const isUpdatingStatus = updatingAppId === app.id
                     return (
                       <TableRow key={app.id} className={cn('border-b border-slate-50 hover:bg-slate-50/50 transition-colors', overdueRow && 'bg-red-50/40 hover:bg-red-50/60')}>
                         <TableCell className="font-semibold text-slate-800">{app.company}</TableCell>
                         <TableCell className="text-slate-600">{app.role}</TableCell>
                         <TableCell>
-                          <span className={cn('inline-flex items-center rounded-full px-2.5 py-0.5 text-xs font-medium', STATUS_COLORS[app.status])}>{app.status}</span>
+                          <Select
+                            value={app.status}
+                            onValueChange={(v) => updateApplicationStatus(app, v as ApplicationStatus)}
+                            disabled={isUpdatingStatus}
+                          >
+                            <SelectTrigger className={cn('h-7 text-xs rounded-full border-0 px-2.5 py-0.5 font-semibold w-auto gap-1', STATUS_COLORS[app.status])}>
+                              <SelectValue />
+                            </SelectTrigger>
+                            <SelectContent>
+                              {APPLICATION_STATUSES.map((s) => (
+                                <SelectItem key={s} value={s} className="text-xs">{s}</SelectItem>
+                              ))}
+                            </SelectContent>
+                          </Select>
                         </TableCell>
-                        <TableCell className="text-sm text-slate-500">{formatDate(app.applied_at)}</TableCell>
+                        <TableCell className="text-xs text-slate-500">{formatDate(app.applied_at)}</TableCell>
                         <TableCell>
                           {app.follow_up_date ? (
-                            <span className={cn('flex items-center gap-1.5 text-sm', overdueRow ? 'text-red-600 font-medium' : 'text-slate-500')}>
+                            <span className={cn('flex items-center gap-1.5 text-xs', overdueRow ? 'text-red-600 font-medium' : 'text-slate-500')}>
                               {overdueRow && <Clock className="h-3 w-3" />}
                               {formatDate(app.follow_up_date)}
                             </span>
                           ) : <span className="text-slate-300 text-xs">None</span>}
                         </TableCell>
-                        <TableCell className="text-sm text-slate-500">
+                        <TableCell className="text-xs text-slate-500">
                           {app.salary_min && app.salary_max
                             ? `${formatCurrency(app.salary_min)} – ${formatCurrency(app.salary_max)}`
                             : <span className="text-slate-300 text-xs">None</span>}
                         </TableCell>
                         <TableCell>
-                          <div className="flex gap-1">
+                          <div className="flex gap-1 justify-end">
                             <button
-                              onClick={() => router.push(`/cover-letter?company=${encodeURIComponent(app.company)}&role=${encodeURIComponent(app.role)}`)}
-                              title="Generate Cover Letter"
-                              className="h-7 w-7 rounded-lg flex items-center justify-center text-slate-400 hover:text-indigo-600 hover:bg-indigo-50 transition-colors"
+                              onClick={() => openEdit(app)}
+                              className="h-7 px-2 rounded-lg flex items-center gap-1 text-xs text-slate-500 hover:text-indigo-600 hover:bg-indigo-50 transition-colors font-medium border border-slate-200 hover:border-indigo-200"
                             >
-                              <PenLine className="h-3.5 w-3.5" />
+                              <Pencil className="h-3 w-3" />
+                              Edit
                             </button>
-                            <button onClick={() => openEdit(app)} className="h-7 w-7 rounded-lg flex items-center justify-center text-slate-400 hover:text-indigo-600 hover:bg-indigo-50 transition-colors">
-                              <Pencil className="h-3.5 w-3.5" />
-                            </button>
-                            <button onClick={() => deleteApp(app.id)} className="h-7 w-7 rounded-lg flex items-center justify-center text-slate-400 hover:text-red-500 hover:bg-red-50 transition-colors">
-                              <Trash2 className="h-3.5 w-3.5" />
-                            </button>
+                            <DropdownMenu>
+                              <DropdownMenuTrigger asChild>
+                                <button className="h-7 w-7 rounded-lg flex items-center justify-center text-slate-400 hover:text-slate-700 hover:bg-slate-100 transition-colors border border-slate-200">
+                                  <MoreHorizontal className="h-3.5 w-3.5" />
+                                </button>
+                              </DropdownMenuTrigger>
+                              <DropdownMenuContent align="end" className="w-48">
+                                <DropdownMenuLabel>Use with tools</DropdownMenuLabel>
+                                <DropdownMenuItem onClick={() => router.push(`/resume-tailor?company=${encodeURIComponent(app.company)}&role=${encodeURIComponent(app.role)}`)}>
+                                  <FileSearch className="h-3.5 w-3.5 text-slate-500" />
+                                  Resume Tailor
+                                </DropdownMenuItem>
+                                <DropdownMenuItem onClick={() => router.push(`/cover-letter?company=${encodeURIComponent(app.company)}&role=${encodeURIComponent(app.role)}`)}>
+                                  <PenLine className="h-3.5 w-3.5 text-slate-500" />
+                                  Cover Letter
+                                </DropdownMenuItem>
+                                <DropdownMenuItem onClick={() => router.push(`/interview-prep?company=${encodeURIComponent(app.company)}&role=${encodeURIComponent(app.role)}`)}>
+                                  <MessageSquare className="h-3.5 w-3.5 text-slate-500" />
+                                  Interview Prep
+                                </DropdownMenuItem>
+                                <DropdownMenuSeparator />
+                                <DropdownMenuItem onClick={() => deleteApp(app.id)} className="text-red-600 focus:text-red-600 focus:bg-red-50">
+                                  <Trash2 className="h-3.5 w-3.5" />
+                                  Remove Application
+                                </DropdownMenuItem>
+                              </DropdownMenuContent>
+                            </DropdownMenu>
                           </div>
                         </TableCell>
                       </TableRow>
@@ -627,7 +735,7 @@ function TrackerPageInner() {
                               <Link href={lead.company_website_url} target="_blank" className="hover:text-indigo-600 hover:underline transition-colors">{lead.company_name}</Link>
                             ) : lead.company_name}
                           </TableCell>
-                          <TableCell className="text-slate-600 text-sm max-w-[180px] truncate">{lead.role_title}</TableCell>
+                          <TableCell className="text-slate-600 text-xs max-w-[180px] truncate">{lead.role_title}</TableCell>
                           <TableCell>
                             <span className="flex items-center gap-1 text-xs text-slate-500">
                               <MapPin className="h-3 w-3 flex-shrink-0" />{lead.location}
@@ -888,14 +996,14 @@ function TrackerPageInner() {
                 <TableBody>
                   {scoutCompanies.map((company) => {
                     const statusMeta = SCOUT_STATUS_META[company.crawl_status]
-                    const stagePill  = SCOUT_STAGE_PILL[company.funding_stage ?? ''] ?? ''
+                    const stagePill = SCOUT_STAGE_PILL[company.funding_stage ?? ''] ?? ''
                     const isCrawling = company.crawl_status === 'crawling' || crawlingIds.has(company.id)
                     const isStopping = stoppingIds.has(company.id)
-                    const canCrawl   = ['pending', 'partial', 'failed'].includes(company.crawl_status) && !crawlingIds.has(company.id)
-                    const contactsOpen     = Boolean(expandedContacts[company.id])
-                    const contacts         = contactsCache[company.id] || []
+                    const canCrawl = ['pending', 'partial', 'failed'].includes(company.crawl_status) && !crawlingIds.has(company.id)
+                    const contactsOpen = Boolean(expandedContacts[company.id])
+                    const contacts = contactsCache[company.id] || []
                     const contactsAreLoading = contactsLoading[company.id]
-                    const hasContacts      = company.crawl_status === 'enriched' || company.crawl_status === 'partial'
+                    const hasContacts = company.crawl_status === 'enriched' || company.crawl_status === 'partial'
 
                     return (
                       <React.Fragment key={company.id}>
@@ -910,11 +1018,11 @@ function TrackerPageInner() {
                               <div className="min-w-0">
                                 {company.website ? (
                                   <Link href={company.website} target="_blank"
-                                    className="text-sm font-semibold text-slate-800 hover:text-indigo-600 hover:underline transition-colors leading-snug">
+                                    className="text-xs font-semibold text-slate-800 hover:text-indigo-600 hover:underline transition-colors leading-snug">
                                     {company.name}
                                   </Link>
                                 ) : (
-                                  <p className="text-sm font-semibold text-slate-800 leading-snug">{company.name}</p>
+                                  <p className="text-xs font-semibold text-slate-800 leading-snug">{company.name}</p>
                                 )}
                                 {company.description && (
                                   <p className="text-[11px] text-slate-400 font-normal mt-0.5 max-w-[240px] line-clamp-1 leading-relaxed">
@@ -951,11 +1059,11 @@ function TrackerPageInner() {
                           <TableCell className="py-3.5">
                             <span className={cn('inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[11px] font-semibold ring-1 ring-inset',
                               statusMeta.classes,
-                              company.crawl_status === 'pending'  && 'ring-slate-200',
+                              company.crawl_status === 'pending' && 'ring-slate-200',
                               company.crawl_status === 'crawling' && 'ring-indigo-200',
                               company.crawl_status === 'enriched' && 'ring-emerald-200',
-                              company.crawl_status === 'partial'  && 'ring-amber-200',
-                              company.crawl_status === 'failed'   && 'ring-red-200',
+                              company.crawl_status === 'partial' && 'ring-amber-200',
+                              company.crawl_status === 'failed' && 'ring-red-200',
                             )}>
                               {isCrawling && <Loader2 className="h-2.5 w-2.5 animate-spin" />}
                               {statusMeta.label}
@@ -1242,7 +1350,7 @@ function TrackerPageInner() {
                     {['Role', 'Company', 'Location', 'Source', 'Status', 'Tracked'].map((h) => (
                       <TableHead key={h} className="text-xs font-semibold text-slate-500 uppercase tracking-wider">{h}</TableHead>
                     ))}
-                    <TableHead className="w-16" />
+                    <TableHead className="w-28" />
                   </TableRow>
                 </TableHeader>
                 <TableBody>
@@ -1276,11 +1384,41 @@ function TrackerPageInner() {
                         </TableCell>
                         <TableCell className="text-xs text-slate-400">{formatDate(app.discovered_at)}</TableCell>
                         <TableCell>
-                          <Link href={app.job_url} target="_blank">
-                            <button className="h-7 w-7 rounded-lg flex items-center justify-center text-slate-400 hover:text-indigo-600 hover:bg-indigo-50 transition-colors">
-                              <ExternalLink className="h-3.5 w-3.5" />
-                            </button>
-                          </Link>
+                          <div className="flex gap-1 justify-end">
+                            <Link href={app.job_url} target="_blank">
+                              <button className="h-7 px-2 rounded-lg flex items-center gap-1 text-xs text-slate-500 hover:text-indigo-600 hover:bg-indigo-50 transition-colors font-medium border border-slate-200 hover:border-indigo-200">
+                                <ExternalLink className="h-3 w-3" />
+                                Open
+                              </button>
+                            </Link>
+                            <DropdownMenu>
+                              <DropdownMenuTrigger asChild>
+                                <button className="h-7 w-7 rounded-lg flex items-center justify-center text-slate-400 hover:text-slate-700 hover:bg-slate-100 transition-colors border border-slate-200">
+                                  <MoreHorizontal className="h-3.5 w-3.5" />
+                                </button>
+                              </DropdownMenuTrigger>
+                              <DropdownMenuContent align="end" className="w-48">
+                                <DropdownMenuLabel>Use with tools</DropdownMenuLabel>
+                                <DropdownMenuItem onClick={() => router.push(`/resume-tailor?company=${encodeURIComponent(app.company)}&role=${encodeURIComponent(app.role)}`)}>
+                                  <FileSearch className="h-3.5 w-3.5 text-slate-500" />
+                                  Resume Tailor
+                                </DropdownMenuItem>
+                                <DropdownMenuItem onClick={() => router.push(`/cover-letter?company=${encodeURIComponent(app.company)}&role=${encodeURIComponent(app.role)}`)}>
+                                  <PenLine className="h-3.5 w-3.5 text-slate-500" />
+                                  Cover Letter
+                                </DropdownMenuItem>
+                                <DropdownMenuItem onClick={() => router.push(`/interview-prep?company=${encodeURIComponent(app.company)}&role=${encodeURIComponent(app.role)}`)}>
+                                  <MessageSquare className="h-3.5 w-3.5 text-slate-500" />
+                                  Interview Prep
+                                </DropdownMenuItem>
+                                <DropdownMenuSeparator />
+                                <DropdownMenuItem onClick={() => deleteJobSearchApplication(app.id)} className="text-red-600 focus:text-red-600 focus:bg-red-50">
+                                  <Trash2 className="h-3.5 w-3.5" />
+                                  Remove from Tracker
+                                </DropdownMenuItem>
+                              </DropdownMenuContent>
+                            </DropdownMenu>
+                          </div>
                         </TableCell>
                       </TableRow>
                     )
@@ -1327,6 +1465,7 @@ function TrackerPageInner() {
             <div className="space-y-1.5">
               <Label>Follow-up date</Label>
               <Input type="date" {...register('follow_up_date')} />
+              <p className="text-xs text-slate-400">Once this date passes, the application shows as Overdue - unless its status is Rejected or Withdrawn.</p>
             </div>
             <div className="grid grid-cols-2 gap-4">
               <div className="space-y-1.5">
