@@ -179,6 +179,11 @@ async def fetch_adzuna_raw(payload: dict[str, Any]) -> list[dict[str, Any]]:
         "what": payload["query"],
         "max_days_old": max_days_old,
         "content-type": "application/json",
+        # There is no parameter to get more than this - `/search` always caps
+        # `description` at ~500 chars (Adzuna appends its own "…"), regardless
+        # of what's requested here. Confirmed by testing: adding an invalid
+        # "full_description" param made Adzuna reject the request outright
+        # with a 400 for every query, not just fetch more text.
     }
 
     # Adzuna's `where` expects a city/region, not a country - the country is
@@ -219,7 +224,13 @@ async def fetch_adzuna_raw(payload: dict[str, Any]) -> list[dict[str, Any]]:
         company_name = ((item.get("company") or {}).get("display_name") or "Unknown company").strip()
         location_name = ((item.get("location") or {}).get("display_name") or "Unspecified").strip()
         category_label = (item.get("category") or {}).get("label")
-        description = re.sub(r"\s+", " ", (item.get("description") or "")).strip()
+        # Collapses runs of spaces/tabs within a line and excessive blank
+        # lines, but keeps real paragraph breaks intact - a prior version
+        # flattened everything (including newlines) into one run-on line,
+        # which read as "stripped" once shown in full.
+        raw_description = (item.get("description") or "").replace("\r\n", "\n").replace("\r", "\n")
+        description = re.sub(r"[ \t]+", " ", raw_description)
+        description = re.sub(r"\n{3,}", "\n\n", description).strip()
 
         jobs.append(
             {
@@ -380,6 +391,12 @@ def _score_job(
         "tracked_application_id": application.get("id") if application else None,
         "citation": citation,
         "ranking": {"score": round(score, 3), "age_hours": age_hours},
+        # Already fetched for scoring above, surfaced here too so the frontend
+        # can show it and carry it into resume/cover-letter tools on apply,
+        # instead of discarding it after the match decision.
+        "description_text": job.get("description_text") or None,
+        "salary_min": metadata.get("salary_min"),
+        "salary_max": metadata.get("salary_max"),
     }
 
 

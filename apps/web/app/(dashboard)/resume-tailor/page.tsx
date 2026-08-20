@@ -14,7 +14,7 @@ import {
 } from 'lucide-react'
 import { apiFetch } from '@/lib/api'
 import { cn } from '@jobnok/ui'
-import { StartupHuntSavedOpportunity } from '@/lib/types'
+import { StartupHuntSavedOpportunity, JobSearchApplication } from '@/lib/types'
 
 interface TailorResult {
   match_score: number
@@ -74,6 +74,7 @@ function ResumeTailorInner() {
   const searchParams = useSearchParams()
   const router = useRouter()
   const opportunityId = searchParams.get('opportunity_id')
+  const jobSearchApplicationId = searchParams.get('job_search_application_id')
   const trackerCompany = searchParams.get('company')
   const trackerRole = searchParams.get('role')
 
@@ -106,9 +107,22 @@ function ResumeTailorInner() {
   }, [opportunityId])
 
   useEffect(() => {
-    if (opportunityId || !trackerCompany || !trackerRole) return
+    if (!jobSearchApplicationId) return
+    setPrefilling(true)
+    apiFetch(`/api/job-search/applications/${jobSearchApplicationId}`)
+      .then((r) => r.ok ? r.json() : null)
+      .then((found: JobSearchApplication | null) => {
+        if (found) {
+          setJd(found.job_description || `${found.role} at ${found.company}`)
+        }
+      })
+      .finally(() => setPrefilling(false))
+  }, [jobSearchApplicationId])
+
+  useEffect(() => {
+    if (opportunityId || jobSearchApplicationId || !trackerCompany || !trackerRole) return
     setJd(`${trackerRole} at ${trackerCompany}`)
-  }, [opportunityId, trackerCompany, trackerRole])
+  }, [opportunityId, jobSearchApplicationId, trackerCompany, trackerRole])
 
   function handleFileChange(e: React.ChangeEvent<HTMLInputElement>) {
     const f = e.target.files?.[0]

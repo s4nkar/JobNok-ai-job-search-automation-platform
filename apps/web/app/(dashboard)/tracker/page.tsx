@@ -1399,7 +1399,7 @@ function TrackerPageInner() {
                               </DropdownMenuTrigger>
                               <DropdownMenuContent align="end" className="w-48">
                                 <DropdownMenuLabel>Use with tools</DropdownMenuLabel>
-                                <DropdownMenuItem onClick={() => router.push(`/resume-tailor?company=${encodeURIComponent(app.company)}&role=${encodeURIComponent(app.role)}`)}>
+                                <DropdownMenuItem onClick={() => router.push(`/resume-tailor?job_search_application_id=${app.id}&company=${encodeURIComponent(app.company)}&role=${encodeURIComponent(app.role)}`)}>
                                   <FileSearch className="h-3.5 w-3.5 text-slate-500" />
                                   Resume Tailor
                                 </DropdownMenuItem>
@@ -1407,7 +1407,7 @@ function TrackerPageInner() {
                                   <PenLine className="h-3.5 w-3.5 text-slate-500" />
                                   Cover Letter
                                 </DropdownMenuItem>
-                                <DropdownMenuItem onClick={() => router.push(`/interview-prep?company=${encodeURIComponent(app.company)}&role=${encodeURIComponent(app.role)}`)}>
+                                <DropdownMenuItem onClick={() => router.push(`/interview-prep?job_search_application_id=${app.id}&company=${encodeURIComponent(app.company)}&role=${encodeURIComponent(app.role)}`)}>
                                   <MessageSquare className="h-3.5 w-3.5 text-slate-500" />
                                   Interview Prep
                                 </DropdownMenuItem>

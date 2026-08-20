@@ -85,6 +85,12 @@ class JobSearchApplication(Base, UUIDPKMixin, CreatedAtMixin):
     company: Mapped[str] = mapped_column(Text, nullable=False)
     role: Mapped[str] = mapped_column(Text, nullable=False)
     location: Mapped[str] = mapped_column(Text, nullable=False)
+    # Snapshotted from the search result at apply-time. Adzuna's own text, not
+    # AI-generated, but capped at ~500 chars by their /search endpoint (no
+    # param lifts this) - a preview, not the full posting. Still lets
+    # resume-tailor/interview-prep prefill with something real instead of
+    # just "{role} at {company}".
+    job_description: Mapped[str | None] = mapped_column(Text, nullable=True)
     posted_at: Mapped[datetime | None] = mapped_column(TIMESTAMP(timezone=True), nullable=True)
     discovered_at: Mapped[datetime] = mapped_column(
         TIMESTAMP(timezone=True), server_default=func.now(), nullable=False

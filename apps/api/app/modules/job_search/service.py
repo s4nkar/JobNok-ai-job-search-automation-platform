@@ -43,16 +43,20 @@ def _parse_dt(s: str | None) -> datetime | None:
     return datetime.fromisoformat(s.replace("Z", "+00:00"))
 
 
-async def _check_rate_limit_fail_open(user_id: str) -> None:
+async def _check_rate_limit_fail_open(user_id: str) -> int | None:
+    """Returns remaining searches for today, or None if Redis is unreachable
+    (fail-open, the request still proceeds, the frontend just can't show a
+    live count)."""
     try:
-        allowed, _ = await check_rate_limit(user_id, "job_search", settings.rate_limit_job_search_per_day)
+        allowed, remaining = await check_rate_limit(user_id, "job_search", settings.rate_limit_job_search_per_day)
     except Exception:
-        return
+        return None
     if not allowed:
         raise HTTPException(
             status_code=429,
             detail=f"Daily limit of {settings.rate_limit_job_search_per_day} Recent Job Search uses reached. Resets at midnight UTC.",
         )
+    return remaining
 
 
 async def _check_applications_rate_limit_fail_open(user_id: str) -> None:
@@ -215,7 +219,7 @@ async def _fetch_db_candidates(db: AsyncSession, payload: dict) -> list[dict]:
 
 
 async def search_recent_jobs(db: AsyncSession, user_id: str, body: JobSearchRequest) -> dict:
-    await _check_rate_limit_fail_open(user_id)
+    searches_remaining = await _check_rate_limit_fail_open(user_id)
 
     user_applications = await _load_user_applications_map(db, user_id)
     payload = body.model_dump()
@@ -231,7 +235,7 @@ async def search_recent_jobs(db: AsyncSession, user_id: str, body: JobSearchRequ
         try:
             raw_jobs = json.loads(cached)
             scored = dedupe_and_rank(score_all(raw_jobs, payload, preferences, user_applications))
-            return {"results": scored[:limit], "parsed_preferences": preferences}
+            return {"results": scored[:limit], "parsed_preferences": preferences, "searches_remaining": searches_remaining}
         except json.JSONDecodeError:
             pass
 
@@ -272,7 +276,21 @@ async def search_recent_jobs(db: AsyncSession, user_id: str, body: JobSearchRequ
     return {
         "results": scored[:limit],
         "parsed_preferences": preferences,
+        "searches_remaining": searches_remaining,
     }
+
+
+async def get_job_search_application(db: AsyncSession, user_id: str, application_id: str) -> dict:
+    row = (
+        await db.execute(
+            select(JobSearchApplication).where(
+                JobSearchApplication.id == application_id, JobSearchApplication.user_id == user_id
+            )
+        )
+    ).scalar_one_or_none()
+    if row is None:
+        raise HTTPException(status_code=404, detail="Not found")
+    return row_to_dict(row)
 
 
 async def list_job_search_applications(
@@ -353,6 +371,7 @@ async def create_job_search_application(
         company=body.company,
         role=body.role,
         location=body.location,
+        job_description=body.job_description,
         posted_at=_parse_dt(body.posted_at),
         applied_at=_parse_dt(applied_at_str),
         application_status=body.application_status,

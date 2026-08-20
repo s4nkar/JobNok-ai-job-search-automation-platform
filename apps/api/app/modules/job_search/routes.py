@@ -32,6 +32,12 @@ async def list_job_search_applications(
     return await service.list_job_search_applications(db, user_id, limit=limit, offset=offset)
 
 
+@router.get("/applications/{application_id}")
+async def get_job_search_application(application_id: str, request: Request, db: AsyncSession = Depends(get_db)):
+    user_id = await get_current_user_id(request, db)
+    return await service.get_job_search_application(db, user_id, application_id)
+
+
 @router.post("/applications", status_code=201)
 async def create_job_search_application(
     request: Request, body: JobSearchApplicationCreateRequest, db: AsyncSession = Depends(get_db)

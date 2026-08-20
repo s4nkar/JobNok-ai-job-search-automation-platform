@@ -21,13 +21,13 @@ import {
   Bookmark,
   BriefcaseBusiness,
   CheckCircle2,
+  ChevronDown,
+  ChevronUp,
   ExternalLink,
-  Info,
   Loader2,
   MapPin,
   Search,
   SlidersHorizontal,
-  Sparkles,
 } from 'lucide-react'
 
 // Adzuna's supported country path segments - https://developer.adzuna.com/
@@ -51,6 +51,41 @@ const ADZUNA_COUNTRIES: { value: string; label: string }[] = [
   { value: 'us', label: 'United States' },
   { value: 'za', label: 'South Africa' },
 ]
+
+// Adzuna returns salary_min/salary_max in the searched country's own
+// currency with no currency code attached - inferred here from the country
+// filter so we don't slap a "$" on a EUR or GBP figure.
+const ADZUNA_CURRENCY: Record<string, string> = {
+  de: 'EUR', at: 'EUR', fr: 'EUR', it: 'EUR', nl: 'EUR',
+  gb: 'GBP', au: 'AUD', br: 'BRL', ca: 'CAD', in: 'INR',
+  mx: 'MXN', nz: 'NZD', pl: 'PLN', ru: 'RUB', sg: 'SGD',
+  us: 'USD', za: 'ZAR',
+}
+
+function formatSalaryRange(min: number | null, max: number | null, countryCode: string): string | null {
+  if (min == null && max == null) return null
+  const currency = ADZUNA_CURRENCY[countryCode] || 'USD'
+  const fmt = (n: number) => new Intl.NumberFormat('en-US', { style: 'currency', currency, maximumFractionDigits: 0 }).format(n)
+  if (min != null && max != null && min !== max) return `${fmt(min)} - ${fmt(max)}`
+  return fmt((min ?? max) as number)
+}
+
+// LinkedIn-style relative freshness ("2h", "3d") shown alongside the absolute
+// date - computed client-side from posted_at, no backend change needed.
+function formatRelativeTime(dateStr: string): string | null {
+  const diffMs = Date.now() - new Date(dateStr).getTime()
+  if (diffMs < 0) return null
+  const minutes = Math.floor(diffMs / 60000)
+  if (minutes < 1) return 'just now'
+  if (minutes < 60) return `${minutes}m`
+  const hours = Math.floor(minutes / 60)
+  if (hours < 24) return `${hours}h`
+  const days = Math.floor(hours / 24)
+  if (days < 7) return `${days}d`
+  const weeks = Math.floor(days / 7)
+  if (weeks < 5) return `${weeks}w`
+  return `${Math.floor(days / 30)}mo`
+}
 
 const schema = z.object({
   query: z.string().min(2, 'Enter a role or keyword').max(200, 'Keep it under 200 characters'),
@@ -81,7 +116,22 @@ export default function RecentJobSearchPage() {
   const [results, setResults] = useState<JobSearchResult[]>([])
   const [parsedPreferences, setParsedPreferences] = useState<JobSearchResponse['parsed_preferences'] | null>(null)
   const [error, setError] = useState<string | null>(null)
+  const [searchesRemaining, setSearchesRemaining] = useState<number | null>(null)
+  const [lastSearchedCountry, setLastSearchedCountry] = useState('de')
+  // Mobile-only: filters start collapsed so results are reachable without
+  // scrolling past 7 fields first. Ignored at md+ (always expanded there).
+  const [filtersOpen, setFiltersOpen] = useState(false)
+  const [expandedDescriptions, setExpandedDescriptions] = useState<Set<string>>(new Set())
   const { toast } = useToast()
+
+  function toggleDescription(key: string) {
+    setExpandedDescriptions((prev) => {
+      const next = new Set(prev)
+      if (next.has(key)) next.delete(key)
+      else next.add(key)
+      return next
+    })
+  }
 
   // Shares its cache key with the Tracker page's "Job Search" tab, which owns
   // the actual list UI and status editing - this page only needs the count.
@@ -109,10 +159,16 @@ export default function RecentJobSearchPage() {
   const postedHours = watch('posted_within_hours')
   const remoteOnly = watch('remote_only')
   const country = watch('country')
+  const watchedQuery = watch('query')
+  const watchedLocation = watch('location')
+  const filterSummary = [watchedQuery, watchedLocation, postedHours ? `${postedHours}h` : null]
+    .filter(Boolean)
+    .join(' · ')
 
   async function onSubmit(data: FormData) {
     setLoading(true)
     setError(null)
+    setLastSearchedCountry(data.country)
 
     try {
       const res = await apiFetch('/api/job-search/search', {
@@ -136,6 +192,7 @@ export default function RecentJobSearchPage() {
       const payload = json as JobSearchResponse
       setResults(payload.results)
       setParsedPreferences(payload.parsed_preferences)
+      setSearchesRemaining(payload.searches_remaining)
     } catch {
       setError('Network error. Please try again.')
       setResults([])
@@ -163,6 +220,7 @@ export default function RecentJobSearchPage() {
           applied_at: new Date().toISOString(),
           application_status: 'applied',
           citation_payload: job.citation,
+          job_description: job.description_text,
           search_context: {
             query: watch('query'),
             location: watch('location'),
@@ -203,136 +261,169 @@ export default function RecentJobSearchPage() {
     <div className="animate-fade-in">
       {/* Page Header */}
       <div className="flex items-center gap-4 mb-6">
-        <div className="page-header-icon bg-indigo-100">
+        <div className="hidden sm:flex page-header-icon bg-indigo-100">
           <Search className="h-5 w-5 text-indigo-600" />
         </div>
-        <div>
-          <h1 className="text-2xl font-bold text-slate-900 tracking-tight">Recent Job Search</h1>
+        <div className="min-w-0 flex-1">
+          <div className="flex items-center justify-between gap-3">
+            <h1 className="text-2xl font-bold text-slate-900 tracking-tight">Recent Job Search</h1>
+            <Link
+              href="/tracker?tab=job-search"
+              className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-semibold bg-indigo-50 text-indigo-700 border border-indigo-100 hover:bg-indigo-100 transition-colors flex-shrink-0"
+            >
+              <Bookmark className="h-3.5 w-3.5" />
+              {tracked.length} tracked
+            </Link>
+          </div>
           <p className="text-slate-500 text-sm mt-0.5">
-            Search live postings across Germany, the UK, and more. Any company, any role, powered by Jobnok.
+            Search live postings across India, Germany, the UK, and more. Any company, any role, powered by Jobnok.
           </p>
         </div>
       </div>
 
-      {/* Rate limit notice */}
-      <div className="flex items-start gap-2.5 bg-indigo-50 border border-indigo-100 text-indigo-700 rounded-xl px-4 py-3 mb-6 text-sm">
-        <Info className="h-4 w-4 flex-shrink-0 text-indigo-500 mt-0.5" />
-        <span>
-          <strong>{config.rateLimits.jobSearchPerDay} searches/day</strong> on the free tier. General-market search, not limited to startups or curated ATS boards. Each result keeps a citation trail.
-        </span>
-      </div>
-
-      {/* Tracked count - the actual list and status editing live in the Follow-Up
-          Tracker's "Job Search" tab, not duplicated here. */}
-      <Link
-        href="/tracker?tab=job-search"
-        className="inline-flex items-center gap-2 mb-6 px-3.5 py-2 rounded-xl border border-slate-100 bg-white shadow-sm text-sm text-slate-600 hover:border-indigo-200 hover:text-indigo-700 transition-colors"
-      >
-        <Bookmark className="h-3.5 w-3.5 text-indigo-500" />
-        <span className="font-semibold">{tracked.length}</span> tracked from this tool
-        <span className="text-indigo-600">- view in Tracker</span>
-      </Link>
-
-      <div className="grid grid-cols-[320px_1fr] gap-5 items-start">
+      {/* lg:, not md: - at md (768px, iPad portrait) a fixed 320px sidebar
+          would leave the results column only ~420px wide while its cards'
+          internal sm: breakpoints (640px) still key off full viewport width,
+          not that column's actual space, so they'd assume room they don't
+          have. Staying stacked through lg: keeps the column = viewport width
+          the whole time those sm: breakpoints are active. */}
+      <div className="grid grid-cols-1 lg:grid-cols-[320px_1fr] gap-5 items-start">
         <form
           onSubmit={handleSubmit(onSubmit)}
-          className="bg-white rounded-2xl border border-slate-100 shadow-sm p-5 space-y-5 sticky top-6"
+          className="bg-white rounded-2xl border border-slate-100 shadow-sm lg:sticky lg:top-6 lg:max-h-[calc(100vh-2rem)] lg:flex lg:flex-col overflow-hidden"
         >
-          <div className="flex items-center gap-2 pb-1 border-b border-slate-100">
-            <SlidersHorizontal className="h-3.5 w-3.5 text-slate-400" />
-            <span className="text-xs font-semibold text-slate-500 uppercase tracking-wider">Filters</span>
-          </div>
+          {/* Mobile/tablet-only collapsible header - filters start closed so
+              results are reachable without scrolling past every field first. */}
+          <button
+            type="button"
+            onClick={() => setFiltersOpen((prev) => !prev)}
+            className="w-full lg:hidden flex items-center justify-between gap-3 px-5 py-3.5"
+          >
+            <span className="flex items-center gap-2 text-xs font-semibold text-slate-500 uppercase tracking-wider flex-shrink-0">
+              <SlidersHorizontal className="h-3.5 w-3.5 text-slate-400" />
+              Filters
+            </span>
+            <span className="flex items-center gap-1.5 text-xs text-slate-500 font-normal normal-case min-w-0">
+              <span className="truncate">{filterSummary}</span>
+              {filtersOpen ? <ChevronUp className="h-3.5 w-3.5 flex-shrink-0" /> : <ChevronDown className="h-3.5 w-3.5 flex-shrink-0" />}
+            </span>
+          </button>
 
-          <div className="space-y-1.5">
-            <Label className="text-xs font-medium text-slate-600">Role or keywords</Label>
-            <Input
-              placeholder="Founding Engineer"
-              className="rounded-xl h-9 text-sm border-slate-200 focus:border-indigo-300 focus:ring-1 focus:ring-indigo-200"
-              {...register('query')}
-            />
-            {errors.query && <p className="text-xs text-destructive">{errors.query.message}</p>}
-          </div>
+          <div className={`${filtersOpen ? 'block' : 'hidden'} lg:block lg:flex-1 lg:min-h-0 lg:overflow-y-auto scrollbar-hide p-5 lg:pt-5 space-y-5 ${filtersOpen ? 'border-t border-slate-100 lg:border-t-0' : ''}`}>
+            <div className="hidden lg:flex items-center gap-2 pb-1 border-b border-slate-100">
+              <SlidersHorizontal className="h-3.5 w-3.5 text-slate-400" />
+              <span className="text-xs font-semibold text-slate-500 uppercase tracking-wider">Filters</span>
+            </div>
 
-          <div className="space-y-1.5">
-            <Label className="text-xs font-medium text-slate-600">Location</Label>
-            <Input
-              placeholder="Berlin or Germany"
-              className="rounded-xl h-9 text-sm border-slate-200 focus:border-indigo-300 focus:ring-1 focus:ring-indigo-200"
-              {...register('location')}
-            />
-            {errors.location && <p className="text-xs text-destructive">{errors.location.message}</p>}
-          </div>
-
-          <div className="space-y-1.5">
-            <Label className="text-xs font-medium text-slate-600">Country</Label>
-            <Select value={country} onValueChange={(v) => setValue('country', v)}>
-              <SelectTrigger className="rounded-xl h-9 text-sm border-slate-200"><SelectValue /></SelectTrigger>
-              <SelectContent>
-                {ADZUNA_COUNTRIES.map(({ value, label }) => (
-                  <SelectItem key={value} value={value} className="text-sm">{label}</SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-            {errors.country && <p className="text-xs text-destructive">{errors.country.message}</p>}
-          </div>
-
-          <div className="grid grid-cols-2 gap-3">
             <div className="space-y-1.5">
-              <Label className="text-xs font-medium text-slate-600">Posted within</Label>
-              <Select value={String(postedHours)} onValueChange={(v) => setValue('posted_within_hours', parseInt(v, 10))}>
+              <Label className="text-xs font-medium text-slate-600">Role or keywords</Label>
+              <Input
+                placeholder="Founding Engineer"
+                className="rounded-xl h-9 text-sm border-slate-200 focus:border-indigo-300 focus:ring-1 focus:ring-indigo-200"
+                {...register('query')}
+              />
+              {errors.query && <p className="text-xs text-destructive">{errors.query.message}</p>}
+            </div>
+
+            <div className="space-y-1.5">
+              <Label className="text-xs font-medium text-slate-600">Location</Label>
+              <Input
+                placeholder="Berlin or Germany"
+                className="rounded-xl h-9 text-sm border-slate-200 focus:border-indigo-300 focus:ring-1 focus:ring-indigo-200"
+                {...register('location')}
+              />
+              {errors.location && <p className="text-xs text-destructive">{errors.location.message}</p>}
+            </div>
+
+            <div className="space-y-1.5">
+              <Label className="text-xs font-medium text-slate-600">Country</Label>
+              <Select value={country} onValueChange={(v) => setValue('country', v)}>
                 <SelectTrigger className="rounded-xl h-9 text-sm border-slate-200"><SelectValue /></SelectTrigger>
                 <SelectContent>
-                  <SelectItem value="24" className="text-sm">24 hours</SelectItem>
-                  <SelectItem value="72" className="text-sm">72 hours</SelectItem>
-                  <SelectItem value="168" className="text-sm">7 days</SelectItem>
+                  {ADZUNA_COUNTRIES.map(({ value, label }) => (
+                    <SelectItem key={value} value={value} className="text-sm">{label}</SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+              {errors.country && <p className="text-xs text-destructive">{errors.country.message}</p>}
+            </div>
+
+            <div className="grid grid-cols-2 gap-3">
+              <div className="space-y-1.5">
+                <Label className="text-xs font-medium text-slate-600">Posted within</Label>
+                <Select value={String(postedHours)} onValueChange={(v) => setValue('posted_within_hours', parseInt(v, 10))}>
+                  <SelectTrigger className="rounded-xl h-9 text-sm border-slate-200"><SelectValue /></SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="24" className="text-sm">24 hours</SelectItem>
+                    <SelectItem value="72" className="text-sm">72 hours</SelectItem>
+                    <SelectItem value="168" className="text-sm">7 days</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+
+              <div className="space-y-1.5">
+                <Label className="text-xs font-medium text-slate-600">Result limit</Label>
+                <Input
+                  type="number"
+                  min={1}
+                  max={50}
+                  className="rounded-xl h-9 text-sm border-slate-200 focus:border-indigo-300 focus:ring-1 focus:ring-indigo-200"
+                  {...register('result_limit')}
+                />
+              </div>
+            </div>
+
+            <div className="space-y-1.5">
+              <Label className="text-xs font-medium text-slate-600">Remote only</Label>
+              <Select value={remoteOnly} onValueChange={(v) => setValue('remote_only', v as 'false' | 'true')}>
+                <SelectTrigger className="rounded-xl h-9 text-sm border-slate-200"><SelectValue /></SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="false" className="text-sm">Include onsite and hybrid</SelectItem>
+                  <SelectItem value="true" className="text-sm">Remote only</SelectItem>
                 </SelectContent>
               </Select>
             </div>
 
             <div className="space-y-1.5">
-              <Label className="text-xs font-medium text-slate-600">Result limit</Label>
-              <Input
-                type="number"
-                min={1}
-                max={50}
-                className="rounded-xl h-9 text-sm border-slate-200 focus:border-indigo-300 focus:ring-1 focus:ring-indigo-200"
-                {...register('result_limit')}
+              <Label className="text-xs font-medium text-slate-600">Preference prompt</Label>
+              <Textarea
+                rows={4}
+                placeholder="small pre seed startups, english preferred, product-minded teams"
+                className="rounded-xl text-sm border-slate-200 focus:border-indigo-300 focus:ring-1 focus:ring-indigo-200 resize-none"
+                {...register('preferences_prompt')}
               />
+              {errors.preferences_prompt && <p className="text-xs text-destructive">{errors.preferences_prompt.message}</p>}
+              {parsedPreferences && (parsedPreferences.keywords.length > 0 || parsedPreferences.languages.length > 0 || parsedPreferences.company_stage) && (
+                <div className="flex flex-wrap gap-1.5 pt-1">
+                  {parsedPreferences.keywords.map((keyword) => (
+                    <span key={keyword} className="inline-flex items-center px-2 py-0.5 rounded-full text-[11px] font-medium bg-slate-100 text-slate-700">{keyword}</span>
+                  ))}
+                  {parsedPreferences.languages.map((language) => (
+                    <span key={language} className="inline-flex items-center px-2 py-0.5 rounded-full text-[11px] font-medium bg-slate-50 text-slate-600 border border-slate-200">{language}</span>
+                  ))}
+                  {parsedPreferences.company_stage && (
+                    <span className="inline-flex items-center px-2 py-0.5 rounded-full text-[11px] font-medium bg-amber-50 text-amber-800 border border-amber-100">{parsedPreferences.company_stage}</span>
+                  )}
+                </div>
+              )}
             </div>
-          </div>
 
-          <div className="space-y-1.5">
-            <Label className="text-xs font-medium text-slate-600">Remote only</Label>
-            <Select value={remoteOnly} onValueChange={(v) => setValue('remote_only', v as 'false' | 'true')}>
-              <SelectTrigger className="rounded-xl h-9 text-sm border-slate-200"><SelectValue /></SelectTrigger>
-              <SelectContent>
-                <SelectItem value="false" className="text-sm">Include onsite and hybrid</SelectItem>
-                <SelectItem value="true" className="text-sm">Remote only</SelectItem>
-              </SelectContent>
-            </Select>
+            <Button
+              type="submit"
+              disabled={loading}
+              className="w-full gradient-brand text-white border-0 shadow-sm hover:opacity-90 transition-opacity rounded-xl h-9 text-sm font-semibold"
+            >
+              {loading
+                ? <><Loader2 className="h-3.5 w-3.5 mr-2 animate-spin" />Searching…</>
+                : <><Search className="h-3.5 w-3.5 mr-2" />Find Recent Jobs</>
+              }
+            </Button>
+            <p className="text-center text-[11px] text-slate-400">
+              {searchesRemaining !== null
+                ? `${searchesRemaining} of ${config.rateLimits.jobSearchPerDay} searches left today`
+                : `Up to ${config.rateLimits.jobSearchPerDay} searches/day on the free tier`}
+            </p>
           </div>
-
-          <div className="space-y-1.5">
-            <Label className="text-xs font-medium text-slate-600">Preference prompt</Label>
-            <Textarea
-              rows={4}
-              placeholder="small pre seed startups, english preferred, product-minded teams"
-              className="rounded-xl text-sm border-slate-200 focus:border-indigo-300 focus:ring-1 focus:ring-indigo-200 resize-none"
-              {...register('preferences_prompt')}
-            />
-            {errors.preferences_prompt && <p className="text-xs text-destructive">{errors.preferences_prompt.message}</p>}
-          </div>
-
-          <Button
-            type="submit"
-            disabled={loading}
-            className="w-full gradient-brand text-white border-0 shadow-sm hover:opacity-90 transition-opacity rounded-xl h-9 text-sm font-semibold"
-          >
-            {loading
-              ? <><Loader2 className="h-3.5 w-3.5 mr-2 animate-spin" />Searching…</>
-              : <><Search className="h-3.5 w-3.5 mr-2" />Find Recent Jobs</>
-            }
-          </Button>
         </form>
 
         <div className="min-w-0 space-y-4">
@@ -342,26 +433,24 @@ export default function RecentJobSearchPage() {
             </div>
           )}
 
-          {parsedPreferences && (
-            <div className="bg-white rounded-2xl border border-slate-100 shadow-sm p-4">
-              <div className="flex items-center gap-2 mb-3">
-                <Sparkles className="h-4 w-4 text-amber-500" />
-                <p className="text-sm font-semibold text-slate-700">Parsed Preferences</p>
-              </div>
-              <div className="flex flex-wrap gap-2">
-                {parsedPreferences.keywords.map((keyword) => (
-                  <span key={keyword} className="inline-flex items-center px-2.5 py-1 rounded-full text-xs font-medium bg-slate-100 text-slate-700">{keyword}</span>
-                ))}
-                {parsedPreferences.languages.map((language) => (
-                  <span key={language} className="inline-flex items-center px-2.5 py-1 rounded-full text-xs font-medium bg-slate-50 text-slate-600 border border-slate-200">{language}</span>
-                ))}
-                {parsedPreferences.company_stage && (
-                  <span className="inline-flex items-center px-2.5 py-1 rounded-full text-xs font-medium bg-amber-50 text-amber-800 border border-amber-100">{parsedPreferences.company_stage}</span>
-                )}
-                {parsedPreferences.keywords.length === 0 && parsedPreferences.languages.length === 0 && !parsedPreferences.company_stage && (
-                  <p className="text-sm text-slate-500">No extra preferences detected beyond the structured filters.</p>
-                )}
-              </div>
+          {loading && (
+            <div className="space-y-4">
+              {Array.from({ length: 3 }).map((_, i) => (
+                <div key={i} className="bg-white rounded-2xl border border-slate-100 shadow-sm p-5 space-y-4 animate-pulse">
+                  <div className="flex items-start justify-between gap-4">
+                    <div className="flex-1 space-y-2">
+                      <div className="h-4 w-48 bg-slate-100 rounded-full" />
+                      <div className="h-3.5 w-32 bg-slate-100 rounded-full" />
+                      <div className="h-3 w-56 bg-slate-100 rounded-full" />
+                    </div>
+                    <div className="flex gap-2 flex-shrink-0">
+                      <div className="h-9 w-24 bg-slate-100 rounded-xl" />
+                      <div className="h-9 w-28 bg-slate-100 rounded-xl" />
+                    </div>
+                  </div>
+                  <div className="h-16 bg-slate-50 rounded-xl border border-slate-100" />
+                </div>
+              ))}
             </div>
           )}
 
@@ -377,12 +466,12 @@ export default function RecentJobSearchPage() {
             </div>
           )}
 
-          {results.length > 0 && (
+          {!loading && results.length > 0 && (
             <div className="space-y-4">
               {results.map((job) => (
                 <div key={job.job_url_canonical} className="bg-white rounded-2xl border border-slate-100 shadow-sm p-5 space-y-4">
-                  <div className="flex items-start justify-between gap-4">
-                    <div>
+                  <div className="flex flex-col sm:flex-row sm:items-start sm:justify-between gap-4">
+                    <div className="min-w-0">
                       <div className="flex items-center gap-2 flex-wrap mb-1">
                         <h2 className="text-sm font-semibold text-slate-900">{job.role}</h2>
                         {job.applied && (
@@ -393,17 +482,30 @@ export default function RecentJobSearchPage() {
                         )}
                       </div>
                       <p className="text-slate-700 font-semibold text-sm">{job.company}</p>
-                      <div className="flex items-center gap-2 text-xs text-slate-500 mt-1.5">
-                        <MapPin className="h-3 w-3" />
-                        <span>{job.location}</span>
-                        <span>·</span>
-                        <span>{job.source_name}</span>
-                        <span>·</span>
+                      <div className="flex items-center gap-x-2 gap-y-1 text-xs text-slate-500 mt-1.5 flex-wrap">
+                        <span className="flex items-center gap-1"><MapPin className="h-3 w-3" />{job.location}</span>
+                        {/* <span className="hidden sm:inline">·</span> */}
+                        {/* <span>{job.source_name}</span> */}
+                        <span className="hidden sm:inline">·</span>
                         <span>{job.posted_at ? formatDate(job.posted_at) : 'Recent'}</span>
+                        {job.posted_at && formatRelativeTime(job.posted_at) && (
+                          <>
+                            <span className="hidden sm:inline">·</span>
+                            <span>{formatRelativeTime(job.posted_at)}</span>
+                          </>
+                        )}
+                        {formatSalaryRange(job.salary_min, job.salary_max, lastSearchedCountry) && (
+                          <>
+                            <span className="hidden sm:inline">·</span>
+                            <span className="font-medium text-emerald-600">
+                              {formatSalaryRange(job.salary_min, job.salary_max, lastSearchedCountry)}
+                            </span>
+                          </>
+                        )}
                       </div>
                     </div>
 
-                    <div className="flex gap-2 flex-shrink-0">
+                    <div className="flex gap-2 flex-wrap sm:flex-nowrap sm:flex-shrink-0">
                       <Button variant="outline" asChild className="rounded-xl h-9 text-xs">
                         <Link href={job.job_url} target="_blank">
                           <ExternalLink className="h-3.5 w-3.5 mr-1.5" />
@@ -423,13 +525,7 @@ export default function RecentJobSearchPage() {
 
                   <div className="rounded-xl border border-slate-100 bg-slate-50 p-3.5">
                     <p className="text-[10px] font-bold text-slate-500 uppercase tracking-widest mb-2">Citation</p>
-                    <p className="text-sm text-slate-700">
-                      <span className="font-medium">Canonical URL:</span>{' '}
-                      <Link href={job.citation.canonical_url} target="_blank" className="text-indigo-600 hover:underline break-all text-xs">
-                        {job.citation.canonical_url}
-                      </Link>
-                    </p>
-                    <p className="text-sm text-slate-600 mt-1.5">{job.citation.extraction_note}</p>
+                    <p className="text-xs text-slate-600">{job.citation.extraction_note}</p>
                     <div className="flex flex-wrap gap-1.5 mt-2.5">
                       {job.citation.evidence.map((line) => (
                         <span key={line} className="inline-flex items-center px-2 py-0.5 rounded-md text-[10px] font-medium bg-white text-slate-600 border border-slate-200">
@@ -438,6 +534,35 @@ export default function RecentJobSearchPage() {
                       ))}
                     </div>
                   </div>
+
+                  {job.description_text && (
+                    <div className="rounded-xl border-slate-100 overflow-hidden">
+                      <button
+                        type="button"
+                        onClick={() => toggleDescription(job.job_url_canonical)}
+                        className="w-full flex items-center justify-between gap-2 px-3.5 py-2.5 text-xs font-semibold text-slate-600 hover:bg-slate-40 transition-colors"
+                      >
+                        Job Description Preview
+                        {expandedDescriptions.has(job.job_url_canonical)
+                          ? <ChevronUp className="h-3.5 w-3.5 text-slate-400" />
+                          : <ChevronDown className="h-3.5 w-3.5 text-slate-400" />
+                        }
+                      </button>
+                      {expandedDescriptions.has(job.job_url_canonical) && (
+                        <div className="px-3.5 pb-3.5 max-h-[28rem] overflow-y-auto">
+                          <p className="text-sm text-slate-700 whitespace-pre-wrap leading-relaxed">
+                            {job.description_text}
+                          </p>
+                          <p className="text-xs text-slate-400 mt-2">
+                            Open the job to read the full posting.
+                          </p>
+                        </div>
+                      )}
+                    </div>
+                  )}
+
+
+
                 </div>
               ))}
             </div>

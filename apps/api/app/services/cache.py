@@ -9,6 +9,19 @@ from datetime import datetime, timezone
 from app.core.config import settings
 
 
+class UpstashRedisError(Exception):
+    """Raised on an Upstash REST API command-level error (e.g. quota exceeded).
+
+    Upstash returns these as a 200 OK with an {"error": ...} body, not an HTTP
+    error status, so httpx never raises on its own. Without this, every
+    UpstashRedis method below silently returned its default (0, None, -1) on
+    ANY command failure, indistinguishable from a legitimately empty result -
+    which is exactly how a quota-exhausted Redis account made rate limiting
+    silently report "unlimited" instead of failing loudly or failing open via
+    the callers' own except-Exception handling.
+    """
+
+
 class UpstashRedis:
     def __init__(self, url: str, token: str):
         self.url = url.rstrip("/")
@@ -21,7 +34,11 @@ class UpstashRedis:
                 headers=self.headers,
                 json=list(args),
             )
-            return res.json()
+            res.raise_for_status()
+            body = res.json()
+            if "error" in body:
+                raise UpstashRedisError(body["error"])
+            return body
 
     async def get(self, key: str) -> str | None:
         result = await self._cmd("GET", key)

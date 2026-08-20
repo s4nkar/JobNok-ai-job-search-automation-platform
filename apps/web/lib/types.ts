@@ -244,6 +244,9 @@ export interface JobSearchResult {
   application_status: JobSearchApplicationStatus | null
   tracked_application_id: string | null
   citation: JobCitation
+  description_text: string | null
+  salary_min: number | null
+  salary_max: number | null
 }
 
 export interface JobSearchResponse {
@@ -254,6 +257,7 @@ export interface JobSearchResponse {
     company_stage: string | null
     notes: string[]
   }
+  searches_remaining: number | null
 }
 
 export interface JobSearchApplication {
@@ -266,6 +270,7 @@ export interface JobSearchApplication {
   company: string
   role: string
   location: string
+  job_description: string | null
   posted_at: string | null
   discovered_at: string
   applied_at: string | null

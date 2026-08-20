@@ -79,6 +79,7 @@ class JobSearchApplicationCreateRequest(BaseModel):
     application_status: str = "applied"
     citation_payload: dict[str, Any]
     search_context: dict[str, Any] = {}
+    job_description: str | None = None
 
     @field_validator("source_name", "company", "role", "location")
     @classmethod
@@ -89,6 +90,16 @@ class JobSearchApplicationCreateRequest(BaseModel):
         if len(value) > 300:
             raise ValueError("Must be at most 300 characters")
         return value
+
+    @field_validator("job_description")
+    @classmethod
+    def validate_job_description(cls, v: str | None) -> str | None:
+        if v is None:
+            return None
+        value = v.strip()
+        if len(value) > 20_000:
+            raise ValueError("job_description must be at most 20000 characters")
+        return value or None
 
     @field_validator("external_job_id")
     @classmethod
