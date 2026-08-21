@@ -53,6 +53,34 @@ const ADZUNA_COUNTRIES: { value: string; label: string }[] = [
   { value: 'za', label: 'South Africa' },
 ]
 
+// Major cities per country for the location field's <datalist> autocomplete
+// - not exhaustive, just enough to let someone pick a real place instead of
+// free-typing (and mistyping) it. "Bangloore" vs "Bangalore" is a real bug
+// report: Adzuna's own location resolver silently returns zero results for
+// an unrecognized place name, with nothing to tell the user why - this
+// doesn't eliminate that (still free text, still possible to mistype
+// something not in the list), but picking from suggestions avoids it for
+// the common case.
+const CITY_SUGGESTIONS: Record<string, string[]> = {
+  de: ['Berlin', 'Munich', 'Hamburg', 'Frankfurt', 'Cologne', 'Stuttgart', 'Düsseldorf', 'Remote'],
+  gb: ['London', 'Manchester', 'Birmingham', 'Edinburgh', 'Bristol', 'Leeds', 'Remote'],
+  at: ['Vienna', 'Graz', 'Linz', 'Salzburg', 'Remote'],
+  au: ['Sydney', 'Melbourne', 'Brisbane', 'Perth', 'Adelaide', 'Remote'],
+  br: ['São Paulo', 'Rio de Janeiro', 'Belo Horizonte', 'Brasília', 'Curitiba', 'Remote'],
+  ca: ['Toronto', 'Vancouver', 'Montreal', 'Calgary', 'Ottawa', 'Remote'],
+  fr: ['Paris', 'Lyon', 'Marseille', 'Toulouse', 'Nice', 'Remote'],
+  in: ['Bangalore', 'Mumbai', 'Delhi', 'Hyderabad', 'Pune', 'Chennai', 'Kolkata', 'Gurgaon', 'Noida', 'Kochi', 'Remote'],
+  it: ['Milan', 'Rome', 'Turin', 'Bologna', 'Florence', 'Remote'],
+  mx: ['Mexico City', 'Guadalajara', 'Monterrey', 'Puebla', 'Remote'],
+  nl: ['Amsterdam', 'Rotterdam', 'The Hague', 'Utrecht', 'Eindhoven', 'Remote'],
+  nz: ['Auckland', 'Wellington', 'Christchurch', 'Remote'],
+  pl: ['Warsaw', 'Kraków', 'Wrocław', 'Poznań', 'Gdańsk', 'Remote'],
+  ru: ['Moscow', 'Saint Petersburg', 'Novosibirsk', 'Remote'],
+  sg: ['Singapore', 'Remote'],
+  us: ['New York', 'San Francisco', 'Los Angeles', 'Chicago', 'Austin', 'Seattle', 'Boston', 'Remote'],
+  za: ['Johannesburg', 'Cape Town', 'Pretoria', 'Durban', 'Remote'],
+}
+
 // Adzuna returns salary_min/salary_max in the searched country's own
 // currency with no currency code attached - inferred here from the country
 // filter so we don't slap a "$" on a EUR or GBP figure.
@@ -339,10 +367,16 @@ export default function RecentJobSearchPage() {
             <div className="space-y-1.5">
               <Label className="text-xs font-medium text-slate-600">Location</Label>
               <Input
-                placeholder="Berlin or Germany"
+                placeholder="e.g. Berlin, or Remote"
+                list="location-suggestions"
                 className="rounded-xl h-9 text-sm border-slate-200 focus:border-indigo-300 focus:ring-1 focus:ring-indigo-200"
                 {...register('location')}
               />
+              <datalist id="location-suggestions">
+                {(CITY_SUGGESTIONS[country] || []).map((city) => (
+                  <option key={city} value={city} />
+                ))}
+              </datalist>
               {errors.location && <p className="text-xs text-destructive">{errors.location.message}</p>}
             </div>
 
@@ -471,7 +505,7 @@ export default function RecentJobSearchPage() {
                 {hasSearched ? (
                   <>
                     <p className="font-semibold text-slate-500">No matches for this search</p>
-                    <p className="text-sm text-slate-400">Try a broader location, a different role, or fewer filters</p>
+                    <p className="text-sm text-slate-400">Double-check the location spelling, or try a broader location, a different role, or fewer filters</p>
                   </>
                 ) : (
                   <>

@@ -24,6 +24,7 @@ from app.services.cache import acquire_lock, check_burst_limit, check_rate_limit
 from app.shared.utils import row_to_dict
 from app.modules.job_search import dedup, scoring
 from app.modules.job_search.providers import (
+    PROVIDERS,
     ProviderError,
     ProviderSpec,
     applicable_providers,
@@ -255,11 +256,18 @@ async def _fetch_db_candidates(db: AsyncSession, payload: dict) -> list[dict]:
         return []
 
     result_limit = int(payload.get("result_limit") or 10)
+    # A provider's kill switch (e.g. job_search_adzuna_enabled=False) must
+    # exclude its already-cached DB rows too, not just skip its live fetch -
+    # otherwise disabling it doesn't "pull it out of search immediately"
+    # like the kill switch is documented to do, it just stops adding *new*
+    # rows while old ones keep surfacing for up to their 14-day TTL.
+    allowed_sources = {p.name for p in PROVIDERS if p.is_available()}
     rows = await query_job_cache_candidates(
         db,
         country_code=country_code,
         query_tokens=scoring.tokenize(str(payload.get("query") or "")),
         posted_within_hours=payload.get("posted_within_hours"),
+        allowed_sources=allowed_sources,
         limit=max(300, result_limit * 20),
     )
     return [_job_row_to_raw_dict(row) for row in rows]
