@@ -22,6 +22,7 @@ found by testing against real external APIs and the real DB/Redis instances.
 - [ ] Every DB query pattern has a matching index — check `EXPLAIN`, not just "there's an index somewhere"
 - [ ] Rate limiting fails in the correct direction for the operation's cost (see "Rate limiting" below)
 - [ ] A cold cache under concurrent identical requests doesn't fan out N times (single-flight)
+- [ ] Fixed-TTL cache entries have jitter so correlated writes don't all expire in the same instant
 - [ ] If a data source has a metered/paid quota, cheaper sources are tried first
 - [ ] AI calls use the right model tier for the task — a reasoning model on a tight token budget silently returns empty output instead of failing loudly (see "AI provider layer")
 - [ ] Mobile viewport tested at 375px, not just resized from desktop
@@ -165,7 +166,28 @@ own fetch rather than hanging forever on a stuck leader.
 **Verified**: 5 concurrent identical searches → exactly 1 live provider call,
 all 5 got correct results.
 
-## 9. DB indexing for the actual query pattern
+## 9. TTL jitter on the response cache
+
+Single-flight (above) handles a stampede gracefully *if one forms* — this is
+the complementary fix that makes one less likely to form in the first place.
+Every response-cache entry was written with the exact same fixed TTL
+(`job_search_response_cache_ttl_seconds`, 900s), so entries created around
+the same time (e.g. a burst of traffic on a popular query) would all expire
+at the same instant, all N requests after that instant would miss together.
+
+Fix: `_jittered_ttl()` randomizes the TTL by ±15% on every write
+(`service.py`), so popular cached entries expire spread across a window
+(e.g. ~765s-1035s for a 900s base) instead of a single synchronized moment.
+
+**Verified**: 10 samples of `_jittered_ttl(900)` landed between 808-1032,
+all within the ±15% bound, no two runs producing an identical timeline.
+
+**Apply elsewhere**: any tool with a fixed-TTL cache that could see bursty,
+correlated traffic on the same key benefits from this - cheap to add,
+meaningful for exactly the "everyone hits the same query" scenario this
+tool is most exposed to.
+
+## 10. DB indexing for the actual query pattern
 
 `query_job_cache_candidates` filters with `title.ilike('%token%')` —
 a **leading-wildcard** ILIKE can't use a plain B-tree index at all (a B-tree
@@ -182,7 +204,7 @@ would propose dropping an index it doesn't know about.
 needs this same check. A B-tree "index exists" is not the same as "this
 query pattern can use it."
 
-## 10. AI provider layer (shared, not job-search-specific — but found here)
+## 11. AI provider layer (shared, not job-search-specific — but found here)
 
 - **`generate_text`/`stream_text` gained a `tier` parameter** (`"heavy"` /
   `"light"`). A reasoning model (Groq's `openai/gpt-oss-20b`) spends its
@@ -213,7 +235,7 @@ query pattern can use it."
 small `max_tokens` on the default (heavy) tier should pass `tier="light"` if
 the task is extraction/classification, not prose generation.
 
-## 11. Rate limiting — a design question, not fully resolved
+## 12. Rate limiting — a design question, not fully resolved
 
 `_check_rate_limit_fail_open()` runs **before** the cache-key check, so a
 search fully served by cache (near-zero cost) counts against the user's
@@ -222,7 +244,7 @@ could be intentional (quota as a UX promise, not a cost-tracking mechanism)
 or an oversight. **Flagging for whoever hardens the next tool**: decide this
 deliberately, don't just copy the pattern without thinking about it.
 
-## 12. Input validation
+## 13. Input validation
 
 Every field in `schemas.py` has both a length bound and a value-range check
 (`result_limit` 1-50, `posted_within_hours` 1-720, `preferences_prompt`
@@ -230,7 +252,7 @@ Every field in `schemas.py` has both a length bound and a value-range check
 "input length limits" rule. This was already solid when audited — nothing to
 fix, but worth using as the reference shape for other tools' schemas.
 
-## 13. UI/UX production polish
+## 14. UI/UX production polish
 
 - **Mobile sidebar**: converted from always-visible to a responsive
   drawer — hamburger + small logo bar under `md:`, sticky/normal-flow
