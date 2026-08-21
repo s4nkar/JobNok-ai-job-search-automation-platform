@@ -106,7 +106,16 @@ class Settings(BaseSettings):
     # (e.g. an unofficial API breaking) without touching code or removing keys.
     job_search_adzuna_enabled: bool = True
     job_search_bundesagentur_enabled: bool = True
+    # Arbeitnow has no country field, so it can never reliably participate in
+    # the main location-filtered/ranked results - it's shown separately as
+    # "bonus" finds instead (title-matched only, location unverified). This
+    # toggle still fully disables that section.
     job_search_arbeitnow_enabled: bool = True
+    # How many bonus finds to surface per search - deliberately small and
+    # randomly sampled from everything that passes the title match (not the
+    # top-N by score), since there's no reliable ranking signal without
+    # location data to weight against.
+    job_search_bonus_jobs_limit: int = 12
     adzuna_app_id: str = ""
     adzuna_app_key: str = ""
     adzuna_base_url: str = "https://api.adzuna.com/v1/api"
@@ -124,22 +133,17 @@ class Settings(BaseSettings):
     # (no developer program, no published rate limit) - conservative estimate
     # until either confirmed live or an actual block/429 pattern is observed.
     bundesagentur_daily_call_budget: int = 300
-    # PLACEHOLDER - Arbeitnow has no published hard limit, only a soft "please
-    # don't abuse this" ask. Largely redundant with its own 30-minute shared
-    # page cache (providers/arbeitnow.py), which already bounds real fetches
-    # to ~48/day regardless of search volume - this is a defense-in-depth
-    # ceiling for if that cache is ever bypassed or misconfigured, not the
-    # primary protection.
-    arbeitnow_daily_call_budget: int = 100
     # Combined external-provider call budget for the whole Job Search tool,
     # across every provider - a cost-governance ceiling distinct from any
     # single provider's own quota. Catches aggregate cost growth that no
     # per-provider budget would (e.g. a provider with no hard external quota
     # of its own still costs real bandwidth/DB writes/compute at volume).
+    # Arbeitnow isn't counted here - its own 30-min page cache already bounds
+    # it far tighter (~48 real fetches/day) than any budget number would add.
     # PLACEHOLDER - tune from real usage/cost data once available; currently
-    # set below the sum of the three per-provider budgets above (600) as a
+    # set below the sum of the two per-provider budgets above (500) as a
     # deliberately stricter overall ceiling.
-    job_search_tool_daily_budget: int = 500
+    job_search_tool_daily_budget: int = 400
     job_search_timeout_seconds: int = 12
     # Postgres `jobs` cache row TTL, how long a cached listing is considered fresh.
     job_search_cache_ttl_days: int = 14

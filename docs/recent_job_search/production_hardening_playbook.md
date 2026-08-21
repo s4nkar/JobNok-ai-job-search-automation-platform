@@ -42,16 +42,72 @@ job_search/providers/
   base.py           # shared RawJobListing contract, ProviderError, canonicalize_job_url
   adzuna.py         # fetch(), is_available(), supports_country()
   bundesagentur.py  # same shape
-  arbeitnow.py      # same shape
+  arbeitnow.py      # same shape, but NOT in PROVIDERS - see §2
   __init__.py       # ProviderSpec dataclass, PROVIDERS list, applicable_providers()
 ```
 
-Adding a 4th provider means writing one file matching the same three-function
+Adding a provider means writing one file matching the same three-function
 contract and adding one `ProviderSpec` entry — nothing in `service.py`,
 `scoring.py`, or `dedup.py` changes. This paid off directly: Arbeitnow was
-added without touching the scoring/caching/dedup layers at all.
+added without touching the scoring/caching/dedup layers at all - though it
+later turned out not to belong in this pipeline at all, see §2.
 
-## 2. Failure isolation
+## 2. Provider data quality varies — don't force a uniform pipeline
+
+Arbeitnow was originally registered in `PROVIDERS` alongside Adzuna/
+Bundesagentur, scored by the same location/country-aware logic as everyone
+else. That didn't work: Arbeitnow has no country field and no server-side
+search at all (it's a firehose of ~175 recent postings, matched purely by
+our own client-side filtering). Retrofitting country-precision onto it hit
+two failure modes depending on how strict the filter was tuned - too strict
+rejected real local matches, too loose let wrong-country results leak into
+the ranked list. Several incremental fixes were tried and each closed part
+of the gap without closing all of it (word-boundary keyword matching fixed
+substring false-positives like "ml" matching inside company name "VML";
+scanning location text for an explicit country mention fixed cases like
+"Contract UK" showing up in a Germany search) - the underlying problem was
+architectural, not one more filtering bug to patch.
+
+**Fix**: pulled Arbeitnow out of `PROVIDERS` entirely (see
+`providers/__init__.py`'s module docstring). It's fetched separately by
+`service.py`'s bonus-jobs path (`_fetch_bonus_jobs_raw`/`_fetch_bonus_jobs`)
+- title-matched only (`scoring.score_bonus_job`, reusing the same
+word-boundary keyword logic as the main gate), deliberately NO location/
+country filtering, shown in a visually distinct "Bonus finds" section on
+the frontend explicitly labeled "location not verified," randomly sampled
+(not ranked by score) since there's no reliable signal to rank by without
+location data. No new table or cache needed - reuses Arbeitnow's own
+existing 30-min page cache and the same shared `jobs` table (tagged
+`origin_tool="recent_job_search_bonus"`).
+
+**A real gap this surfaced**: since bonus jobs still upsert into the same
+shared `jobs` table, the main pipeline's DB-cache lookup could pull them
+back in - caught live during testing, not by inspection. A stale Arbeitnow
+row (written *before* this fix, with a resolved country code from the
+now-removed inference) matched the main query's *strict* country filter and
+leaked straight into "main" results, sidestepping the null-country
+exclusion entirely. Fixed two ways: `_fetch_db_candidates` no longer opts
+into `include_null_country=True` (that flag existed specifically for
+Arbeitnow's old null-country rows and is unnecessary now), and
+`arbeitnow.py::fetch()` was reverted to always write `country: None` rather
+than inferring one from location text - a *resolved* country was the
+second, easy-to-miss leak path, since it satisfies a strict match directly.
+
+**Verified**: live end-to-end with a cache-busting unique query (to rule out
+stale Redis/DB test pollution as a false signal, which it initially was -
+first two verification attempts showed a false "still leaking" result
+traced to leftover data from earlier in the same testing session, not the
+code). Main results contain zero Arbeitnow entries across repeated searches;
+bonus jobs return genuinely title-relevant results with honest cross-country
+location diversity instead of pretending to be filtered.
+
+**Apply elsewhere**: before building filtering logic to force a low-quality
+or unstructured data source into a pipeline designed around structured
+sources, ask whether it belongs in a separate, honestly-labeled section
+instead. Patching precision onto a source that structurally can't support
+it is a trap - each fix closes one gap and reveals the next.
+
+## 3. Failure isolation
 
 `asyncio.gather()` **propagates the first exception from any task and
 cancels the others** — so without a wrapper, one provider returning
@@ -64,7 +120,7 @@ unexpected field shape in `response.json()`.
 **Verified**: simulated a provider raising a bare `KeyError` mid-fan-out —
 confirmed the other providers' results still came back.
 
-## 3. Circuit breaker per provider
+## 4. Circuit breaker per provider
 
 If a provider starts hard-failing (an unofficial API changing shape, like
 Bundesagentur's `/pc/v4` → `/pc/v6` move mid-session), every affected search
@@ -83,7 +139,7 @@ called from `service.py::_fetch_provider_safe()`.
 
 **Verified**: forced 3 failures, confirmed the 4th call never touched the network.
 
-## 4. Cross-provider deduplication
+## 5. Cross-provider deduplication
 
 A single fingerprint (canonical URL) works with one provider; breaks with
 more than one, since each provider hands out its own redirect/tracking URL
@@ -97,11 +153,15 @@ feeding the semantic key, which would otherwise merge unrelated postings.
 This mirrors `startup_hunt/engine.py`'s already-proven `_dedupe_opportunities`
 — don't re-invent this pattern per tool, reuse the shape.
 
-## 5. Cost-aware fetch ordering
+## 6. Cost-aware fetch ordering
 
 Metered providers (Adzuna, in this case) were being called on *every*
 shortfall regardless of whether a free provider alone would have covered it
-— real, unnecessary cost with no protection against quota exhaustion.
+— real, unnecessary cost with no protection against quota exhaustion. (At
+the time this was written, "free providers" meant Bundesagentur and
+Arbeitnow; Arbeitnow was later pulled out of this pipeline entirely - see
+§2 - so today it's just Bundesagentur, but the mechanism is unchanged and
+still applies to whatever's in `PROVIDERS`.)
 
 Fix: `ProviderSpec.is_metered: bool`. On a shortfall, free providers are
 fetched and scored first; metered providers are only called for whatever
@@ -114,7 +174,7 @@ metered provider was never invoked.
 APIs for this same blind spot — it's easy to miss because it doesn't fail
 loudly, it just quietly burns quota.
 
-## 6. Two-layer caching
+## 7. Two-layer caching
 
 1. **Redis response cache** — exact-match on the full search signature
    (`query|location|country|posted_within_hours|remote_only|result_limit`,
@@ -131,7 +191,7 @@ the response-cache key — it only affects post-fetch scoring/ranking, not
 which raw jobs exist, so including it would have fragmented the cache for no
 benefit.
 
-## 7. Prompt-parse caching (shared across tools)
+## 8. Prompt-parse caching (shared across tools)
 
 Separate from the job cache: `preferences_prompt`/`strategy_prompt` free-text
 fields get parsed into structured JSON via an LLM call on every request, with
@@ -150,7 +210,7 @@ sites that parse a free-text field into structured JSON before this doc gets
 out of date — this exact pattern is easy to copy-paste into a new tool
 without the caching.
 
-## 8. Single-flight lock (thundering herd protection)
+## 9. Single-flight lock (thundering herd protection)
 
 Without this, N concurrent identical searches on a cold cache each
 independently fan out to every provider — wasteful, and worse under a
@@ -168,7 +228,7 @@ own fetch rather than hanging forever on a stuck leader.
 **Verified**: 5 concurrent identical searches → exactly 1 live provider call,
 all 5 got correct results.
 
-## 9. TTL jitter on the response cache
+## 10. TTL jitter on the response cache
 
 Single-flight (above) handles a stampede gracefully *if one forms* — this is
 the complementary fix that makes one less likely to form in the first place.
@@ -189,7 +249,7 @@ correlated traffic on the same key benefits from this - cheap to add,
 meaningful for exactly the "everyone hits the same query" scenario this
 tool is most exposed to.
 
-## 10. DB indexing for the actual query pattern
+## 11. DB indexing for the actual query pattern
 
 `query_job_cache_candidates` filters with `title.ilike('%token%')` —
 a **leading-wildcard** ILIKE can't use a plain B-tree index at all (a B-tree
@@ -206,7 +266,7 @@ would propose dropping an index it doesn't know about.
 needs this same check. A B-tree "index exists" is not the same as "this
 query pattern can use it."
 
-## 11. AI provider layer (shared, not job-search-specific — but found here)
+## 12. AI provider layer (shared, not job-search-specific — but found here)
 
 - **`generate_text`/`stream_text` gained a `tier` parameter** (`"heavy"` /
   `"light"`). A reasoning model (Groq's `openai/gpt-oss-20b`) spends its
@@ -237,7 +297,7 @@ query pattern can use it."
 small `max_tokens` on the default (heavy) tier should pass `tier="light"` if
 the task is extraction/classification, not prose generation.
 
-## 12. Rate limiting — four layers, one open design question
+## 13. Rate limiting — four layers, one open design question
 
 Four separate rate-limiting layers exist now, each answering a different
 question - don't collapse them into "we have rate limiting" as if one
@@ -264,14 +324,14 @@ mechanism covers all of it:
    resource exhausted by aggregate *legitimate* use, not abuse). Added
    `ProviderSpec.daily_budget: int | None`, checked in
    `_fetch_provider_safe()` alongside the circuit breaker, resets at
-   midnight UTC. **All three providers now have one** - Adzuna (200),
-   Bundesagentur (300), Arbeitnow (100, largely redundant with its own
-   30-min page cache but a defense-in-depth ceiling regardless). Every
-   value is a **placeholder** flagged explicitly in `config.py` - none are
-   confirmed against real published quotas (Adzuna's needs checking against
-   the actual account plan; Bundesagentur/Arbeitnow have no published
-   number at all, these are conservative estimates until a real
-   block/429 pattern is observed).
+   midnight UTC. Both providers in `PROVIDERS` have one - Adzuna (200),
+   Bundesagentur (300). Arbeitnow isn't in `PROVIDERS` at all anymore (§2)
+   so it doesn't need one here - it's bounded by its own 30-min page cache
+   instead, tighter than any budget number would add on top. Both values
+   are **placeholders** flagged explicitly in `config.py` - Adzuna's needs
+   checking against the actual account plan; Bundesagentur has no published
+   number at all, a conservative estimate until a real block/429 pattern is
+   observed.
 4. **Whole-tool daily budget** (`check_tool_budget`, new) - "how much can
    the *whole tool* spend today, combined across every provider", a
    cost-governance ceiling distinct from any single provider's own quota.
@@ -281,16 +341,16 @@ mechanism covers all of it:
    nothing capped that in total before this. Checked in
    `_fetch_provider_safe()` alongside the per-provider budget - a call only
    proceeds if it clears its own provider's gates *and* this shared one.
-   `job_search_tool_daily_budget = 500`, deliberately set below the sum of
-   the three per-provider budgets (600) as a stricter overall ceiling -
-   also a placeholder, tune from real usage data once available.
+   `job_search_tool_daily_budget = 400`, deliberately set below the sum of
+   the two per-provider budgets in `PROVIDERS` (500) as a stricter overall
+   ceiling - also a placeholder, tune from real usage data once available.
 
 **Verified**: burst limiter - 5 rapid calls against a limit of 3 returned
 `[True, True, True, False, False]`. Provider budget and tool budget - same
 pattern, both independently confirmed. An unmetered provider (`daily_budget
-= None`) always returns `True` without touching Redis at all - not
-currently true for any of the three real providers anymore, all have a
-real (if placeholder) number.
+= None`) always returns `True` without touching Redis at all - both
+providers currently in `PROVIDERS` (Adzuna, Bundesagentur) have a real
+budget number now, not `None`.
 
 **Still an open design question, not resolved**: `_check_rate_limit_fail_open()`
 runs **before** the cache-key check, so a search fully served by cache
@@ -305,7 +365,7 @@ have a `daily_budget` the same way; any tool with a rapid-repeat-click risk
 (most search/generate buttons) should have a burst limit the same way. Both
 are now generic, reusable primitives - not job-search-specific plumbing.
 
-## 13. Input validation
+## 14. Input validation
 
 Every field in `schemas.py` has both a length bound and a value-range check
 (`result_limit` 1-50, `posted_within_hours` 1-720, `preferences_prompt`
@@ -313,7 +373,7 @@ Every field in `schemas.py` has both a length bound and a value-range check
 "input length limits" rule. This was already solid when audited — nothing to
 fix, but worth using as the reference shape for other tools' schemas.
 
-## 14. UI/UX production polish
+## 15. UI/UX production polish
 
 - **Mobile sidebar**: converted from always-visible to a responsive
   drawer — hamburger + small logo bar under `md:`, sticky/normal-flow
@@ -348,20 +408,23 @@ actual cascade/containing-block mechanics before assuming the JSX is wrong.
 
 ## What's explicitly *not* done (accepted tradeoffs)
 
-- The per-provider and whole-tool budgets (§12) now prevent exhaustion
+- The per-provider and whole-tool budgets (§13) now prevent exhaustion
   proactively, but there's still no dashboard/alerting — nobody gets
   notified when a budget trips, it just silently skips the provider (or the
   whole fan-out) for the rest of the day. Worth adding a log-based alert at
-  minimum before this matters at scale.
-- All four budget values (`adzuna_daily_call_budget`, `bundesagentur_daily_call_budget`,
-  `arbeitnow_daily_call_budget`, `job_search_tool_daily_budget`) are
+  minimum before this matters at scale. Arbeitnow isn't part of this system
+  at all anymore (§2) - it's bounded by its own 30-min page cache instead.
+- All three remaining budget values (`adzuna_daily_call_budget`,
+  `bundesagentur_daily_call_budget`, `job_search_tool_daily_budget`) are
   **placeholders**, not confirmed against real quotas — Adzuna's needs
-  checking against the actual account plan; Bundesagentur/Arbeitnow have no
-  published number to check against at all (conservative estimates until a
-  real block/429 pattern is observed); the tool-wide one needs tuning from
-  real usage/cost data once there is any.
+  checking against the actual account plan; Bundesagentur has no published
+  number to check against at all (a conservative estimate until a real
+  block/429 pattern is observed); the tool-wide one needs tuning from real
+  usage/cost data once there is any.
 - OpenRouter's free-tier model has no uptime/SLA guarantee (documented gap
   in OpenRouter's own docs) — acceptable for a rarely-invoked fallback, not
   acceptable if traffic patterns change and it becomes load-bearing.
-- Rate-limit-counts-cache-hits (see §12) — deliberately left as an open
+- Rate-limit-counts-cache-hits (see §13) — deliberately left as an open
   question, not a resolved decision.
+- Bonus finds (§2) have no save/apply integration yet, unlike main results -
+  a "view job" link only. Worth adding if users actually want to track them.

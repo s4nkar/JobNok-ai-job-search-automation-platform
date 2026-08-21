@@ -124,6 +124,15 @@ async def fetch(payload: dict[str, Any]) -> list[dict[str, Any]]:
                 "posted_at": posted_at,
                 "description_text": _html_to_text(item.get("description") or ""),
                 "metadata": {
+                    # Always None - Arbeitnow has no country field, and this
+                    # provider isn't part of the main location-filtered
+                    # pipeline (see providers/__init__.py's module docstring).
+                    # Deliberately not inferring one from location_name here:
+                    # a resolved country would get written into the shared
+                    # `jobs` table via _upsert_jobs_cache and could then leak
+                    # back into the main results' DB-cache lookup, which
+                    # filters strictly by country - defeating the separation
+                    # between main results and unverified-location bonus finds.
                     "country": None,
                     "salary_min": None,
                     "salary_max": None,

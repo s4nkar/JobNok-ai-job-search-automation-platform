@@ -32,6 +32,7 @@ from app.modules.job_search.providers import (
     circuit_is_open,
     record_provider_result,
 )
+from app.modules.job_search.providers import arbeitnow
 from app.modules.job_search.providers.adzuna import adzuna_country_code
 from app.modules.job_search.providers.base import canonicalize_job_url
 from app.modules.job_search.models import Job, JobSearchApplication, query_job_cache_candidates
@@ -239,12 +240,15 @@ async def _fetch_db_candidates(db: AsyncSession, payload: dict) -> list[dict]:
     seeded under that code space. Revisit if a future provider needs a
     country code Adzuna's table doesn't cover.
 
-    include_null_country=True: providers with no country field at all (e.g.
-    Arbeitnow) cache their rows with country=None - without this, those rows
-    could never be retrieved by any country-scoped search, only ever written.
-    scoring._score_job already treats a missing country signal as "can't
-    verify, don't reject" rather than a mismatch, so it's safe to hand these
-    candidates to every search regardless of country.
+    include_null_country stays False (the default) here deliberately: the
+    only rows with country=None in the shared `jobs` table are Arbeitnow's
+    (tagged origin_tool="recent_job_search_bonus"), and Arbeitnow is
+    intentionally NOT part of the main results pipeline (see
+    providers/__init__.py's module docstring - no reliable country data, so
+    it's shown separately as unverified-location bonus finds instead).
+    Including null-country rows here would let those same
+    location-unverified rows leak back into the main ranked results through
+    the DB cache, defeating that separation.
     """
     country_code = adzuna_country_code(payload.get("country")) or adzuna_country_code(payload.get("location"))
     if not country_code:
@@ -257,7 +261,6 @@ async def _fetch_db_candidates(db: AsyncSession, payload: dict) -> list[dict]:
         query_tokens=scoring.tokenize(str(payload.get("query") or "")),
         posted_within_hours=payload.get("posted_within_hours"),
         limit=max(300, result_limit * 20),
-        include_null_country=True,
     )
     return [_job_row_to_raw_dict(row) for row in rows]
 
@@ -322,9 +325,64 @@ _SINGLE_FLIGHT_POLL_INTERVAL_SECONDS = 0.5
 _SINGLE_FLIGHT_MAX_WAIT_SECONDS = 10
 
 
-def _score_and_finish(raw_jobs: list[dict], payload: dict, preferences: dict, user_applications: dict, limit: int, searches_remaining: int | None) -> dict:
+async def _fetch_bonus_jobs_raw(payload: dict) -> list[dict]:
+    """Bonus jobs come from Arbeitnow only, fetched outside the main
+    provider pipeline entirely (see providers/__init__.py's module
+    docstring for why). Reuses the same circuit breaker as any other
+    provider (protects against Arbeitnow itself being down) but no daily
+    budget check - its own 30-min page cache in providers/arbeitnow.py
+    already bounds real external calls far tighter (~48/day max) than a
+    budget counter would add on top."""
+    if not arbeitnow.is_available():
+        return []
+    if await circuit_is_open("arbeitnow"):
+        return []
+    try:
+        jobs = await arbeitnow.fetch(payload)
+        await record_provider_result("arbeitnow", ok=True)
+        return jobs
+    except Exception:
+        logger.exception("Arbeitnow bonus-jobs fetch raised an unexpected error")
+        await record_provider_result("arbeitnow", ok=False)
+        return []
+
+
+async def _fetch_bonus_jobs(db: AsyncSession, payload: dict, user_applications: dict) -> list[dict]:
+    """Title-matched, location-unverified finds shown separately from the
+    main ranked results - see scoring.score_bonus_job for why location
+    filtering is deliberately skipped here. Randomly sampled (not top-N by
+    score) since there's no reliable ranking signal without location data
+    to weight against."""
+    raw = await _fetch_bonus_jobs_raw(payload)
+    if not raw:
+        return []
+
+    eligible: list[tuple[dict, dict]] = []
+    for job in raw:
+        scored = scoring.score_bonus_job(job, payload, user_applications)
+        if scored is not None:
+            eligible.append((job, scored))
+    if not eligible:
+        return []
+
+    sample_size = min(len(eligible), settings.job_search_bonus_jobs_limit)
+    sampled = random.sample(eligible, sample_size)
+    await _upsert_jobs_cache(db, [raw_job for raw_job, _ in sampled], origin_tool="recent_job_search_bonus")
+    return [scored for _, scored in sampled]
+
+
+async def _score_and_finish(
+    db: AsyncSession, raw_jobs: list[dict], payload: dict, preferences: dict,
+    user_applications: dict, limit: int, searches_remaining: int | None,
+) -> dict:
     scored = dedup.dedupe_and_rank(scoring.score_all(raw_jobs, payload, preferences, user_applications))
-    return {"results": scored[:limit], "parsed_preferences": preferences, "searches_remaining": searches_remaining}
+    bonus_jobs = await _fetch_bonus_jobs(db, payload, user_applications)
+    return {
+        "results": scored[:limit],
+        "bonus_jobs": bonus_jobs,
+        "parsed_preferences": preferences,
+        "searches_remaining": searches_remaining,
+    }
 
 
 async def search_recent_jobs(db: AsyncSession, user_id: str, body: JobSearchRequest) -> dict:
@@ -343,7 +401,7 @@ async def search_recent_jobs(db: AsyncSession, user_id: str, body: JobSearchRequ
     if cached:
         try:
             raw_jobs = json.loads(cached)
-            return _score_and_finish(raw_jobs, payload, preferences, user_applications, limit, searches_remaining)
+            return await _score_and_finish(db, raw_jobs, payload, preferences, user_applications, limit, searches_remaining)
         except json.JSONDecodeError:
             pass
 
@@ -370,7 +428,7 @@ async def search_recent_jobs(db: AsyncSession, user_id: str, body: JobSearchRequ
                 cached = None
             if cached:
                 try:
-                    return _score_and_finish(json.loads(cached), payload, preferences, user_applications, limit, searches_remaining)
+                    return await _score_and_finish(db, json.loads(cached), payload, preferences, user_applications, limit, searches_remaining)
                 except json.JSONDecodeError:
                     break
 
@@ -415,9 +473,15 @@ async def search_recent_jobs(db: AsyncSession, user_id: str, body: JobSearchRequ
 
         if fresh_raw_jobs:
             await _upsert_jobs_cache(db, fresh_raw_jobs)
-        elif not db_scored:
-            # Every applicable provider failed and the cache has nothing either.
-            raise HTTPException(status_code=400, detail=provider_errors[0] if provider_errors else "Job search is temporarily unavailable.")
+        elif not db_scored and provider_errors:
+            # Every applicable provider actually FAILED (a real error was
+            # recorded) and the cache has nothing either - a genuine outage.
+            # Deliberately checks provider_errors, not just "fresh_raw_jobs
+            # is empty" - a provider can succeed and legitimately find zero
+            # matching jobs (e.g. a narrow query in a smaller city), which
+            # is a normal empty result, not a failure, and must not show the
+            # same "service unavailable" error as a real outage would.
+            raise HTTPException(status_code=400, detail=provider_errors[0])
     elif shortfall > 0 and not db_scored:
         raise HTTPException(status_code=400, detail="No job search provider covers that location yet.")
 
@@ -435,8 +499,10 @@ async def search_recent_jobs(db: AsyncSession, user_id: str, body: JobSearchRequ
 
     fresh_scored = scoring.score_all(fresh_raw_jobs, payload, preferences, user_applications) if fresh_raw_jobs else []
     scored = dedup.dedupe_and_rank(db_scored + fresh_scored)
+    bonus_jobs = await _fetch_bonus_jobs(db, payload, user_applications)
     return {
         "results": scored[:limit],
+        "bonus_jobs": bonus_jobs,
         "parsed_preferences": preferences,
         "searches_remaining": searches_remaining,
     }

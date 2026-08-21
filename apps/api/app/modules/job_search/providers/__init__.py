@@ -3,6 +3,11 @@
 Adding a provider = write providers/<name>.py exposing fetch/is_available/
 supports_country, then add one ProviderSpec entry to PROVIDERS below.
 Nothing in service.py, scoring.py, or dedup.py needs to change.
+
+Arbeitnow is deliberately NOT in PROVIDERS - it has no country field, so it
+can never reliably participate in this location-filtered/ranked pipeline.
+It's fetched separately by service.py's bonus-jobs path instead (title match
+only, no location filtering), which calls providers.arbeitnow directly.
 """
 
 from __future__ import annotations
@@ -12,7 +17,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Any, Awaitable, Callable
 
 from app.core.config import settings
-from app.modules.job_search.providers import adzuna, arbeitnow, bundesagentur
+from app.modules.job_search.providers import adzuna, bundesagentur
 from app.modules.job_search.providers.base import ProviderError, RawJobListing, canonicalize_job_url
 from app.services.cache import delete_cached, get_cached, increment_with_ttl, set_cached
 
@@ -40,8 +45,7 @@ class ProviderSpec:
     # Global daily call cap shared across every user, distinct from any
     # per-user limit - protects the provider's own account-level quota from
     # aggregate exhaustion even when each individual user is well under their
-    # own per-day cap. None = no global budget enforced (unmetered/no fixed
-    # external quota, e.g. Bundesagentur, Arbeitnow).
+    # own per-day cap. None = no global budget enforced.
     daily_budget: int | None = None
 
 
@@ -60,13 +64,6 @@ PROVIDERS: list[ProviderSpec] = [
         is_available=bundesagentur.is_available,
         supports_country=bundesagentur.supports_country,
         daily_budget=settings.bundesagentur_daily_call_budget,
-    ),
-    ProviderSpec(
-        name="arbeitnow",
-        fetch=arbeitnow.fetch,
-        is_available=arbeitnow.is_available,
-        supports_country=arbeitnow.supports_country,
-        daily_budget=settings.arbeitnow_daily_call_budget,
     ),
 ]
 

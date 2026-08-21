@@ -15,7 +15,7 @@ import { useToast } from '@jobnok/ui'
 import { apiFetch, apiGet } from '@/lib/api'
 import { config } from '@/lib/config'
 import { formatDate } from '@jobnok/ui'
-import { JobSearchApplication, JobSearchResponse, JobSearchResult } from '@/lib/types'
+import { BonusJob, JobSearchApplication, JobSearchResponse, JobSearchResult } from '@/lib/types'
 import { queryKeys } from '@/lib/queryKeys'
 import {
   Bookmark,
@@ -28,6 +28,7 @@ import {
   MapPin,
   Search,
   SlidersHorizontal,
+  Sparkles,
 } from 'lucide-react'
 
 // Adzuna's supported country path segments - https://developer.adzuna.com/
@@ -101,12 +102,12 @@ type FormData = z.infer<typeof schema>
 
 const DEFAULT_VALUES: FormData = {
   query: 'Software Engineer',
-  location: 'Germany',
+  location: 'Berlin',
   country: 'de',
   posted_within_hours: 24,
   result_limit: 10,
   remote_only: 'false',
-  preferences_prompt: 'small pre seed startups, english preferred',
+  preferences_prompt: 'Mid level roles, english preferred, product-minded teams',
 }
 
 export default function RecentJobSearchPage() {
@@ -114,6 +115,12 @@ export default function RecentJobSearchPage() {
   const [loading, setLoading] = useState(false)
   const [applyingId, setApplyingId] = useState<string | null>(null)
   const [results, setResults] = useState<JobSearchResult[]>([])
+  const [bonusJobs, setBonusJobs] = useState<BonusJob[]>([])
+  // Distinguishes "haven't searched yet" from "searched, found nothing" -
+  // those need different empty-state copy, and before the backend fix that
+  // let a genuine zero-match search return successfully instead of erroring,
+  // this distinction didn't matter because a real search never landed here.
+  const [hasSearched, setHasSearched] = useState(false)
   const [parsedPreferences, setParsedPreferences] = useState<JobSearchResponse['parsed_preferences'] | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [searchesRemaining, setSearchesRemaining] = useState<number | null>(null)
@@ -168,6 +175,7 @@ export default function RecentJobSearchPage() {
   async function onSubmit(data: FormData) {
     setLoading(true)
     setError(null)
+    setHasSearched(true)
     setLastSearchedCountry(data.country)
 
     try {
@@ -185,17 +193,20 @@ export default function RecentJobSearchPage() {
       if (!res.ok) {
         setError(json.detail || 'Search failed. Please try again.')
         setResults([])
+        setBonusJobs([])
         setParsedPreferences(null)
         return
       }
 
       const payload = json as JobSearchResponse
       setResults(payload.results)
+      setBonusJobs(payload.bonus_jobs)
       setParsedPreferences(payload.parsed_preferences)
       setSearchesRemaining(payload.searches_remaining)
     } catch {
       setError('Network error. Please try again.')
       setResults([])
+      setBonusJobs([])
       setParsedPreferences(null)
     } finally {
       setLoading(false)
@@ -309,7 +320,7 @@ export default function RecentJobSearchPage() {
             </span>
           </button>
 
-          <div className={`${filtersOpen ? 'block' : 'hidden'} lg:block lg:flex-1 lg:min-h-0 lg:overflow-y-auto scrollbar-hide p-5 lg:pt-5 space-y-5 ${filtersOpen ? 'border-t border-slate-100 lg:border-t-0' : ''}`}>
+          <div className={`${filtersOpen ? 'block' : 'hidden'} lg:block lg:flex-1 lg:min-h-0 lg:overflow-y-auto scrollbar-hide lg:scroll-fade-y p-5 lg:pt-5 space-y-5 ${filtersOpen ? 'border-t border-slate-100 lg:border-t-0' : ''}`}>
             <div className="hidden lg:flex items-center gap-2 pb-1 border-b border-slate-100">
               <SlidersHorizontal className="h-3.5 w-3.5 text-slate-400" />
               <span className="text-xs font-semibold text-slate-500 uppercase tracking-wider">Filters</span>
@@ -388,7 +399,7 @@ export default function RecentJobSearchPage() {
               <Label className="text-xs font-medium text-slate-600">Preference prompt</Label>
               <Textarea
                 rows={4}
-                placeholder="small pre seed startups, english preferred, product-minded teams"
+                placeholder="Mid level roles, english preferred, product-minded teams"
                 className="rounded-xl text-sm border-slate-200 focus:border-indigo-300 focus:ring-1 focus:ring-indigo-200 resize-none"
                 {...register('preferences_prompt')}
               />
@@ -455,13 +466,19 @@ export default function RecentJobSearchPage() {
           )}
 
           {!loading && results.length === 0 && !error && (
-            <div className="bg-white rounded-2xl border border-slate-100 shadow-sm min-h-[420px] flex items-center justify-center p-8">
-              <div className="text-center space-y-2">
-                <div className="w-14 h-14 rounded-2xl bg-indigo-50 flex items-center justify-center mx-auto">
-                  <BriefcaseBusiness className="h-7 w-7 text-indigo-200" />
-                </div>
-                <p className="font-semibold text-slate-500">Recent matches will appear here</p>
-                <p className="text-sm text-slate-400">Use the filters to search for fresh jobs and track what you apply to</p>
+            <div className="bg-white rounded-2xl border border-slate-100 shadow-sm min-h-[18rem] flex items-center justify-center p-6">
+              <div className="text-center space-y-1">
+                {hasSearched ? (
+                  <>
+                    <p className="font-semibold text-slate-500">No matches for this search</p>
+                    <p className="text-sm text-slate-400">Try a broader location, a different role, or fewer filters</p>
+                  </>
+                ) : (
+                  <>
+                    <p className="font-semibold text-slate-500">Recent matches will appear here</p>
+                    <p className="text-sm text-slate-400">Use the filters to search for fresh jobs and track what you apply to</p>
+                  </>
+                )}
               </div>
             </div>
           )}
@@ -549,7 +566,7 @@ export default function RecentJobSearchPage() {
                         }
                       </button>
                       {expandedDescriptions.has(job.job_url_canonical) && (
-                        <div className="px-3.5 pb-3.5 max-h-[28rem] overflow-y-auto">
+                        <div className="px-3.5 pb-3.5 max-h-[28rem] overflow-y-auto scrollbar-hide">
                           <p className="text-sm text-slate-700 whitespace-pre-wrap leading-relaxed">
                             {job.description_text}
                           </p>
@@ -567,8 +584,54 @@ export default function RecentJobSearchPage() {
               ))}
             </div>
           )}
+
+          {!loading && bonusJobs.length > 0 && (
+            <div className="space-y-3">
+              <div className="flex items-center gap-3 rounded-2xl border border-l-4 border-slate-100 border-l-indigo-400 bg-white px-4 py-3 shadow-sm">
+                <div className="w-9 h-9 rounded-xl bg-indigo-50 flex items-center justify-center flex-shrink-0">
+                  <Sparkles className="h-4 w-4 text-indigo-500" />
+                </div>
+                <div className="min-w-0 flex-1">
+                  <p className="text-sm font-semibold text-slate-800">
+                    {results.length === 0 ? "Don't worry! We've got you covered" : 'Bonus finds'}
+                  </p>
+                  <p className="text-xs text-slate-500 mt-0.5">
+                    {results.length === 0
+                      ? "Worth thinking outside the box! Here are some roles that match your search title, pulled from multiple locations."
+                      : 'Extra roles matching your search title, pulled from a wider net with multiple locations.'}
+                  </p>
+                </div>
+                {/* <span className="inline-flex items-center px-2.5 py-1 rounded-full text-xs font-semibold bg-indigo-50 text-indigo-600 flex-shrink-0">
+                  Top {bonusJobs.length} found
+                </span> */}
+              </div>
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                {bonusJobs.map((job) => (
+                  <Link
+                    key={job.job_url_canonical}
+                    href={job.job_url}
+                    target="_blank"
+                    className="block bg-white rounded-xl border border-slate-100 p-3.5 hover:border-indigo-200 transition-colors"
+                  >
+                    <p className="text-sm font-semibold text-slate-800 truncate">{job.role}</p>
+                    <p className="text-xs text-slate-600 mt-0.5 truncate">{job.company}</p>
+                    <div className="flex items-center justify-between gap-2 mt-1.5">
+                      <span className="flex items-center gap-1 text-xs text-slate-400 min-w-0">
+                        <MapPin className="h-3 w-3 flex-shrink-0" />
+                        <span className="truncate">{job.location}</span>
+                        {job.posted_at && formatRelativeTime(job.posted_at) && (
+                          <span className="flex-shrink-0">· {formatRelativeTime(job.posted_at)}</span>
+                        )}
+                      </span>
+                      <ExternalLink className="h-3.5 w-3.5 text-slate-300 flex-shrink-0" />
+                    </div>
+                  </Link>
+                ))}
+              </div>
+            </div>
+          )}
         </div>
       </div>
-    </div>
+    </div >
   )
 }

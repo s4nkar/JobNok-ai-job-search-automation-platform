@@ -117,8 +117,20 @@ def _score_job(
     remote_only = bool(payload.get("remote_only"))
 
     title_text = f'{job["role"]} {job["company"]} {job.get("description_text", "")}'
+    role_and_company_tokens = set(tokenize(f'{job["role"]} {job["company"]}'))
     query_tokens = tokenize(query)
-    if query_tokens and not any(token in normalize_text(title_text) for token in query_tokens):
+    # Gate on role+company only, not the full description, AND on whole
+    # tokens, not substrings. Two separate false-positive sources fixed here:
+    # (1) a stray keyword match anywhere in a long description (especially
+    # Arbeitnow's full, untruncated text vs. Adzuna's ~500-char excerpt) let
+    # clearly unrelated postings through, e.g. "Lead Product Designer"
+    # matching an "AI/ML Engineer" search because "AI" appeared once in an
+    # unrelated paragraph; (2) a plain substring check let a query token
+    # match *inside* an unrelated word - e.g. token "ml" matching inside
+    # company name "VML", not because the job has anything to do with ML.
+    # Description matches still count toward the score below via the full
+    # title_text - this only tightens the initial pass.
+    if query_tokens and not (set(query_tokens) & role_and_company_tokens):
         return None
 
     location_text = normalize_text(job["location"])
@@ -238,4 +250,58 @@ def _score_job(
         "description_text": job.get("description_text") or None,
         "salary_min": metadata.get("salary_min"),
         "salary_max": metadata.get("salary_max"),
+    }
+
+
+def score_bonus_job(
+    job: dict[str, Any], payload: dict[str, Any], user_applications: dict[str, dict[str, Any]]
+) -> dict[str, Any] | None:
+    """Lighter scoring for a provider with no country field (Arbeitnow) -
+    title+company relevance and freshness/remote (both real, structured
+    Arbeitnow fields) still apply, but deliberately NO location/country
+    filtering: without a country signal there's nothing reliable to filter
+    on, and pretending otherwise is what caused these results to previously
+    either wrongly reject genuine local matches or wrongly admit results
+    from anywhere in the world. These are shown separately as unverified-
+    location "bonus" finds instead, not merged into the main ranked list -
+    no citation/evidence, no score, just enough to render a simple card.
+    """
+    query = payload["query"]
+    role_and_company_tokens = set(tokenize(f'{job["role"]} {job["company"]}'))
+    query_tokens = tokenize(query)
+    if query_tokens and not (set(query_tokens) & role_and_company_tokens):
+        return None
+
+    metadata = job.get("metadata") or {}
+    location_text = normalize_text(job["location"])
+    is_remote = "remote" in location_text or bool(metadata.get("remote"))
+    if bool(payload.get("remote_only")) and not is_remote:
+        return None
+
+    cutoff_hours = payload.get("posted_within_hours")
+    posted_at = parse_dt(job.get("posted_at"))
+    if posted_at:
+        age_hours = max(0.0, (_now_utc() - posted_at).total_seconds() / 3600)
+        if cutoff_hours is not None and age_hours > cutoff_hours:
+            return None
+    elif cutoff_hours is not None:
+        return None
+
+    canonical_url = job["job_url_canonical"]
+    application = user_applications.get(canonical_url)
+
+    return {
+        "source_name": job["source_name"],
+        "provider_type": job["provider_type"],
+        "external_job_id": job["external_job_id"],
+        "company": job["company"],
+        "role": job["role"],
+        "location": job["location"],
+        "job_url": job["job_url"],
+        "job_url_canonical": canonical_url,
+        "posted_at": posted_at.isoformat() if posted_at else None,
+        "applied": bool(application and application.get("application_status") == "applied"),
+        "application_status": application.get("application_status") if application else None,
+        "tracked_application_id": application.get("id") if application else None,
+        "description_text": job.get("description_text") or None,
     }
