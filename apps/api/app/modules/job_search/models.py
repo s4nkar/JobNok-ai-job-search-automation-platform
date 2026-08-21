@@ -123,6 +123,7 @@ async def query_job_cache_candidates(
     query_tokens: list[str],
     posted_within_hours: int | None,
     limit: int,
+    include_null_country: bool = False,
 ) -> list[Job]:
     """Coarse, bounded pre-filter over the shared `jobs` cache, not exact
     matching, just narrows the candidate pool. Callers run their own
@@ -133,8 +134,21 @@ async def query_job_cache_candidates(
     (job_search and startup_hunt both call this) since it's a query against
     one shared table, each caller maps the returned rows into its own
     dict shape afterward, since those shapes genuinely differ per tool.
+
+    include_null_country: some providers have no country field at all (e.g.
+    job_search's Arbeitnow provider), so their cached rows are written with
+    country=None and would otherwise never be retrievable by any
+    country-scoped search. Opt-in and defaults to the original strict
+    behavior, since it's unverified whether every caller's own scorer
+    (specifically startup_hunt's) handles a missing country signal as
+    gracefully as job_search's does.
     """
-    conditions = [Job.expires_at > datetime.now(timezone.utc), Job.country == country_code]
+    country_condition = (
+        or_(Job.country == country_code, Job.country.is_(None))
+        if include_null_country
+        else Job.country == country_code
+    )
+    conditions = [Job.expires_at > datetime.now(timezone.utc), country_condition]
 
     if posted_within_hours is not None:
         cutoff = datetime.now(timezone.utc) - timedelta(hours=posted_within_hours)

@@ -7,8 +7,10 @@ exactly once instead of also duplicating into the Tracker's manual
 Applications tab.
 """
 
+import asyncio
 import hashlib
 import json
+import logging
 from datetime import datetime, timedelta, timezone
 
 from fastapi import HTTPException
@@ -19,22 +21,18 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.config import settings
 from app.services.cache import check_rate_limit, get_cached, set_cached
 from app.shared.utils import row_to_dict
-from app.modules.job_search.sources import (
-    AdzunaConfigError,
-    _tokenize,
-    adzuna_country_code,
-    canonicalize_job_url,
-    dedupe_and_rank,
-    fetch_adzuna_raw,
-    parse_preferences_prompt,
-    score_all,
-)
+from app.modules.job_search import dedup, scoring
+from app.modules.job_search.providers import ProviderError, ProviderSpec, applicable_providers
+from app.modules.job_search.providers.adzuna import adzuna_country_code
+from app.modules.job_search.providers.base import canonicalize_job_url
 from app.modules.job_search.models import Job, JobSearchApplication, query_job_cache_candidates
 from app.modules.job_search.schemas import (
     JobSearchApplicationCreateRequest,
     JobSearchApplicationUpdateRequest,
     JobSearchRequest,
 )
+
+logger = logging.getLogger(__name__)
 
 
 def _parse_dt(s: str | None) -> datetime | None:
@@ -104,7 +102,9 @@ def _response_cache_key(payload: dict) -> str:
         str(payload.get("result_limit", "")),
     ]
     digest = hashlib.sha256("|".join(parts).encode("utf-8")).hexdigest()
-    return f"job_search:adzuna:{digest}"
+    # Not namespaced to a single provider - the cached value can be a
+    # multi-provider combined result set.
+    return f"job_search:{digest}"
 
 
 async def _upsert_jobs_cache(db: AsyncSession, raw_jobs: list[dict], *, origin_tool: str = "recent_job_search") -> None:
@@ -170,9 +170,9 @@ async def _upsert_jobs_cache(db: AsyncSession, raw_jobs: list[dict], *, origin_t
 
 
 def _job_row_to_raw_dict(row: Job) -> dict:
-    """Map a `jobs` table row back into the same normalized dict shape
-    `fetch_adzuna_raw` produces, so `score_all`/`_score_job` can run on
-    DB-sourced candidates unchanged."""
+    """Map a `jobs` table row back into the same normalized dict shape a
+    provider's fetch() produces, so scoring.score_all can run on DB-sourced
+    candidates unchanged regardless of which provider originally wrote them."""
     return {
         "source_name": "Adzuna" if row.source == "adzuna" else row.source.title(),
         "provider_type": row.source,
@@ -195,27 +195,60 @@ def _job_row_to_raw_dict(row: Job) -> dict:
 
 async def _fetch_db_candidates(db: AsyncSession, payload: dict) -> list[dict]:
     """Coarse pre-filter over the shared `jobs` cache, bounded, not exact
-    matching. `score_all`/`_score_job` does the precise per-item decision
-    afterward, identically for these DB-sourced candidates and for anything
-    freshly fetched from Adzuna, so matching semantics never diverge between
-    the two sources.
+    matching. scoring.score_all does the precise per-item decision afterward,
+    identically for these DB-sourced candidates and for anything freshly
+    fetched live, so matching semantics never diverge between the two.
+
+    Country resolution here uses Adzuna's alias table specifically - it's the
+    broadest one today (17 countries) and the `jobs.country` column was
+    seeded under that code space. Revisit if a future provider needs a
+    country code Adzuna's table doesn't cover.
+
+    include_null_country=True: providers with no country field at all (e.g.
+    Arbeitnow) cache their rows with country=None - without this, those rows
+    could never be retrieved by any country-scoped search, only ever written.
+    scoring._score_job already treats a missing country signal as "can't
+    verify, don't reject" rather than a mismatch, so it's safe to hand these
+    candidates to every search regardless of country.
     """
     country_code = adzuna_country_code(payload.get("country")) or adzuna_country_code(payload.get("location"))
     if not country_code:
-        # Can't pass _score_job's country-match gate anyway, skip the DB
-        # round-trip and let the caller fall through to fetch_adzuna_raw,
-        # which raises the same AdzunaConfigError for an unresolved country.
         return []
 
     result_limit = int(payload.get("result_limit") or 10)
     rows = await query_job_cache_candidates(
         db,
         country_code=country_code,
-        query_tokens=_tokenize(str(payload.get("query") or "")),
+        query_tokens=scoring.tokenize(str(payload.get("query") or "")),
         posted_within_hours=payload.get("posted_within_hours"),
         limit=max(300, result_limit * 20),
+        include_null_country=True,
     )
     return [_job_row_to_raw_dict(row) for row in rows]
+
+
+async def _fetch_provider_safe(provider: ProviderSpec, payload: dict) -> tuple[list[dict], str | None]:
+    """Isolates one provider's failure from the others - a timeout, 429, or
+    malformed response from provider A must not stop provider B's results
+    from coming back, and must never surface as a crash of the whole search.
+
+    Catches Exception broadly, not just ProviderError: fetch() wraps its own
+    anticipated failures (timeouts, 4xx/5xx) into ProviderError, but response
+    parsing (response.json(), field access on the parsed body) isn't wrapped
+    - a malformed or unexpectedly-shaped response would otherwise raise
+    something else entirely, and asyncio.gather() propagates the first
+    exception from ANY task, cancelling the others - so one provider
+    returning garbage would take down a search that had perfectly good
+    results from every other provider and the DB cache.
+    """
+    try:
+        return await provider.fetch(payload), None
+    except ProviderError as exc:
+        logger.warning("Provider %s failed: %s", provider.name, exc)
+        return [], str(exc)
+    except Exception:
+        logger.exception("Provider %s raised an unexpected error", provider.name)
+        return [], None
 
 
 async def search_recent_jobs(db: AsyncSession, user_id: str, body: JobSearchRequest) -> dict:
@@ -223,7 +256,7 @@ async def search_recent_jobs(db: AsyncSession, user_id: str, body: JobSearchRequ
 
     user_applications = await _load_user_applications_map(db, user_id)
     payload = body.model_dump()
-    preferences = await parse_preferences_prompt(payload.get("preferences_prompt"))
+    preferences = await scoring.parse_preferences_prompt(payload.get("preferences_prompt"))
     limit = payload.get("result_limit", 10)
 
     cache_key = _response_cache_key(payload)
@@ -234,30 +267,40 @@ async def search_recent_jobs(db: AsyncSession, user_id: str, body: JobSearchRequ
     if cached:
         try:
             raw_jobs = json.loads(cached)
-            scored = dedupe_and_rank(score_all(raw_jobs, payload, preferences, user_applications))
+            scored = dedup.dedupe_and_rank(scoring.score_all(raw_jobs, payload, preferences, user_applications))
             return {"results": scored[:limit], "parsed_preferences": preferences, "searches_remaining": searches_remaining}
         except json.JSONDecodeError:
             pass
 
-    # DB-first: only call Adzuna for whatever the shared cache doesn't already
-    # cover (the shortfall), not a fixed split.
+    # DB-first: only call live providers for whatever the shared cache doesn't
+    # already cover (the shortfall), not a fixed split.
     db_raw_jobs = await _fetch_db_candidates(db, payload)
-    db_scored = score_all(db_raw_jobs, payload, preferences, user_applications)
+    db_scored = scoring.score_all(db_raw_jobs, payload, preferences, user_applications)
 
     shortfall = limit - len(db_scored)
     fresh_raw_jobs: list[dict] = []
     if shortfall > 0:
+        providers = applicable_providers(payload.get("country"), payload.get("location"))
         topup_limit = min(50, shortfall * 3)  # headroom, not everything survives scoring
         topup_payload = {**payload, "result_limit": topup_limit}
-        try:
-            fresh_raw_jobs = await fetch_adzuna_raw(topup_payload)
-        except AdzunaConfigError as exc:
-            if not db_scored:
-                raise HTTPException(status_code=400, detail=str(exc))
-            # DB already has something to show, degrade gracefully instead
-            # of failing the whole request over the top-up call.
-        else:
-            await _upsert_jobs_cache(db, fresh_raw_jobs)
+
+        if providers:
+            fetch_results = await asyncio.gather(
+                *(_fetch_provider_safe(provider, topup_payload) for provider in providers)
+            )
+            provider_errors: list[str] = []
+            for jobs, error in fetch_results:
+                fresh_raw_jobs.extend(jobs)
+                if error:
+                    provider_errors.append(error)
+
+            if fresh_raw_jobs:
+                await _upsert_jobs_cache(db, fresh_raw_jobs)
+            elif not db_scored:
+                # Every applicable provider failed and the cache has nothing either.
+                raise HTTPException(status_code=400, detail=provider_errors[0] if provider_errors else "Job search is temporarily unavailable.")
+        elif not db_scored:
+            raise HTTPException(status_code=400, detail="No job search provider covers that location yet.")
 
     if db_raw_jobs:
         # Refresh last_seen_at/expires_at for whatever was actually scanned
@@ -271,8 +314,8 @@ async def search_recent_jobs(db: AsyncSession, user_id: str, body: JobSearchRequ
     except Exception:
         pass
 
-    fresh_scored = score_all(fresh_raw_jobs, payload, preferences, user_applications) if fresh_raw_jobs else []
-    scored = dedupe_and_rank(db_scored + fresh_scored)
+    fresh_scored = scoring.score_all(fresh_raw_jobs, payload, preferences, user_applications) if fresh_raw_jobs else []
+    scored = dedup.dedupe_and_rank(db_scored + fresh_scored)
     return {
         "results": scored[:limit],
         "parsed_preferences": preferences,

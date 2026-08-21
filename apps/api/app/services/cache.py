@@ -4,8 +4,11 @@ Uses the Upstash REST API (HTTP-based) rather than a persistent TCP connection,
 which works correctly in Railway's serverless-style environment.
 """
 
+import hashlib
+import json
 import httpx
 from datetime import datetime, timezone
+from typing import Any, Awaitable, Callable
 from app.core.config import settings
 
 
@@ -113,3 +116,38 @@ async def get_cached(key: str) -> str | None:
 async def set_cached(key: str, value: str, ttl_seconds: int) -> None:
     redis = _get_redis()
     await redis.set(key, value, ex=ttl_seconds)
+
+
+async def cached_prompt_parse(
+    namespace: str,
+    prompt: str,
+    ttl_seconds: int,
+    parse_fn: Callable[[], Awaitable[dict[str, Any]]],
+) -> dict[str, Any]:
+    """Cache the structured-JSON result of parsing a free-text prompt (e.g.
+    job_search's preferences_prompt, startup_hunt's strategy_prompt) via an
+    LLM call. Same prompt text always extracts to the same filters, so
+    there's no reason to re-hit the LLM on every request for identical or
+    repeated input. Namespaced per caller so two tools' prompts never
+    collide even if the text happens to match.
+
+    Fails open on any cache error (get or set) - a cache miss/write failure
+    just means paying the LLM call again, never a broken response.
+    """
+    key = f"prompt_parse:{namespace}:{hashlib.sha256(prompt.strip().lower().encode('utf-8')).hexdigest()}"
+
+    try:
+        cached = await get_cached(key)
+        if cached:
+            return json.loads(cached)
+    except Exception:
+        pass
+
+    result = await parse_fn()
+
+    try:
+        await set_cached(key, json.dumps(result), ttl_seconds)
+    except Exception:
+        pass
+
+    return result
