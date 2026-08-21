@@ -27,6 +27,19 @@ class Job(Base, UUIDPKMixin, CreatedAtMixin):
         # Added by alembic/versions/e2f7c9a4b8d1_add_jobs_origin_tool_and_search_index.py
         # It must stay declared here too, or a future autogenerate will propose dropping it.
         Index("jobs_country_posted_at_idx", "country", desc("posted_at")),
+        # Backs query_job_cache_candidates()'s ILIKE '%token%' title/description filter -
+        # a leading-wildcard ILIKE can't use a plain B-tree index, so without a trigram
+        # GIN index every DB-first lookup is a full table scan once `jobs` has volume.
+        # Added by alembic/versions/a22ae866fa45_add_jobs_trigram_search_indexes.py
+        # (also enables the pg_trgm extension) - must stay declared here too, or a
+        # future autogenerate will propose dropping it.
+        Index("jobs_title_trgm_idx", "title", postgresql_using="gin", postgresql_ops={"title": "gin_trgm_ops"}),
+        Index(
+            "jobs_description_trgm_idx",
+            "description",
+            postgresql_using="gin",
+            postgresql_ops={"description": "gin_trgm_ops"},
+        ),
     )
 
     source: Mapped[str] = mapped_column(Text, nullable=False)

@@ -19,10 +19,16 @@ from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import settings
-from app.services.cache import check_rate_limit, get_cached, set_cached
+from app.services.cache import acquire_lock, check_rate_limit, get_cached, set_cached
 from app.shared.utils import row_to_dict
 from app.modules.job_search import dedup, scoring
-from app.modules.job_search.providers import ProviderError, ProviderSpec, applicable_providers
+from app.modules.job_search.providers import (
+    ProviderError,
+    ProviderSpec,
+    applicable_providers,
+    circuit_is_open,
+    record_provider_result,
+)
 from app.modules.job_search.providers.adzuna import adzuna_country_code
 from app.modules.job_search.providers.base import canonicalize_job_url
 from app.modules.job_search.models import Job, JobSearchApplication, query_job_cache_candidates
@@ -240,15 +246,39 @@ async def _fetch_provider_safe(provider: ProviderSpec, payload: dict) -> tuple[l
     exception from ANY task, cancelling the others - so one provider
     returning garbage would take down a search that had perfectly good
     results from every other provider and the DB cache.
+
+    Also checks/updates the provider's circuit breaker - a provider that's
+    failed CIRCUIT_FAILURE_THRESHOLD times recently is skipped entirely
+    (no network call) until its cooldown expires, instead of every search
+    paying the full request timeout on a call that's essentially guaranteed
+    to fail.
     """
+    if await circuit_is_open(provider.name):
+        logger.info("Skipping %s - circuit open (repeated recent failures)", provider.name)
+        return [], None
+
     try:
-        return await provider.fetch(payload), None
+        jobs = await provider.fetch(payload)
+        await record_provider_result(provider.name, ok=True)
+        return jobs, None
     except ProviderError as exc:
         logger.warning("Provider %s failed: %s", provider.name, exc)
+        await record_provider_result(provider.name, ok=False)
         return [], str(exc)
     except Exception:
         logger.exception("Provider %s raised an unexpected error", provider.name)
+        await record_provider_result(provider.name, ok=False)
         return [], None
+
+
+_SINGLE_FLIGHT_LOCK_TTL_SECONDS = 20
+_SINGLE_FLIGHT_POLL_INTERVAL_SECONDS = 0.5
+_SINGLE_FLIGHT_MAX_WAIT_SECONDS = 10
+
+
+def _score_and_finish(raw_jobs: list[dict], payload: dict, preferences: dict, user_applications: dict, limit: int, searches_remaining: int | None) -> dict:
+    scored = dedup.dedupe_and_rank(scoring.score_all(raw_jobs, payload, preferences, user_applications))
+    return {"results": scored[:limit], "parsed_preferences": preferences, "searches_remaining": searches_remaining}
 
 
 async def search_recent_jobs(db: AsyncSession, user_id: str, body: JobSearchRequest) -> dict:
@@ -267,10 +297,36 @@ async def search_recent_jobs(db: AsyncSession, user_id: str, body: JobSearchRequ
     if cached:
         try:
             raw_jobs = json.loads(cached)
-            scored = dedup.dedupe_and_rank(scoring.score_all(raw_jobs, payload, preferences, user_applications))
-            return {"results": scored[:limit], "parsed_preferences": preferences, "searches_remaining": searches_remaining}
+            return _score_and_finish(raw_jobs, payload, preferences, user_applications, limit, searches_remaining)
         except json.JSONDecodeError:
             pass
+
+    # Single-flight: if many requests hit this exact uncached search at once,
+    # only the lock-holder does the real DB+provider work - everyone else
+    # waits briefly for its result to land in the response cache and reuses
+    # it, instead of each independently fanning out to every provider. Fails
+    # open (treats as leader) on a Redis error, and a follower that times out
+    # waiting falls through to doing its own fetch rather than hanging
+    # forever on a slow or stuck leader.
+    try:
+        is_leader = await acquire_lock(f"{cache_key}:lock", _SINGLE_FLIGHT_LOCK_TTL_SECONDS)
+    except Exception:
+        is_leader = True
+
+    if not is_leader:
+        waited = 0.0
+        while waited < _SINGLE_FLIGHT_MAX_WAIT_SECONDS:
+            await asyncio.sleep(_SINGLE_FLIGHT_POLL_INTERVAL_SECONDS)
+            waited += _SINGLE_FLIGHT_POLL_INTERVAL_SECONDS
+            try:
+                cached = await get_cached(cache_key)
+            except Exception:
+                cached = None
+            if cached:
+                try:
+                    return _score_and_finish(json.loads(cached), payload, preferences, user_applications, limit, searches_remaining)
+                except json.JSONDecodeError:
+                    break
 
     # DB-first: only call live providers for whatever the shared cache doesn't
     # already cover (the shortfall), not a fixed split.
@@ -279,28 +335,45 @@ async def search_recent_jobs(db: AsyncSession, user_id: str, body: JobSearchRequ
 
     shortfall = limit - len(db_scored)
     fresh_raw_jobs: list[dict] = []
-    if shortfall > 0:
-        providers = applicable_providers(payload.get("country"), payload.get("location"))
+    provider_errors: list[str] = []
+    providers = applicable_providers(payload.get("country"), payload.get("location")) if shortfall > 0 else []
+
+    async def _fetch_group(provider_list: list[ProviderSpec]) -> list[dict]:
+        if not provider_list:
+            return []
         topup_limit = min(50, shortfall * 3)  # headroom, not everything survives scoring
         topup_payload = {**payload, "result_limit": topup_limit}
+        results = await asyncio.gather(
+            *(_fetch_provider_safe(provider, topup_payload) for provider in provider_list)
+        )
+        collected: list[dict] = []
+        for jobs, error in results:
+            collected.extend(jobs)
+            if error:
+                provider_errors.append(error)
+        return collected
 
-        if providers:
-            fetch_results = await asyncio.gather(
-                *(_fetch_provider_safe(provider, topup_payload) for provider in providers)
-            )
-            provider_errors: list[str] = []
-            for jobs, error in fetch_results:
-                fresh_raw_jobs.extend(jobs)
-                if error:
-                    provider_errors.append(error)
+    if providers:
+        # Free providers first - only call metered ones (e.g. Adzuna, which
+        # has a real external usage quota/cost) for whatever shortfall
+        # remains after free providers are exhausted, instead of always
+        # fanning out to every applicable provider regardless of need.
+        free_providers = [p for p in providers if not p.is_metered]
+        metered_providers = [p for p in providers if p.is_metered]
 
-            if fresh_raw_jobs:
-                await _upsert_jobs_cache(db, fresh_raw_jobs)
-            elif not db_scored:
-                # Every applicable provider failed and the cache has nothing either.
-                raise HTTPException(status_code=400, detail=provider_errors[0] if provider_errors else "Job search is temporarily unavailable.")
+        fresh_raw_jobs.extend(await _fetch_group(free_providers))
+
+        still_short = shortfall - len(scoring.score_all(fresh_raw_jobs, payload, preferences, user_applications))
+        if still_short > 0 and metered_providers:
+            fresh_raw_jobs.extend(await _fetch_group(metered_providers))
+
+        if fresh_raw_jobs:
+            await _upsert_jobs_cache(db, fresh_raw_jobs)
         elif not db_scored:
-            raise HTTPException(status_code=400, detail="No job search provider covers that location yet.")
+            # Every applicable provider failed and the cache has nothing either.
+            raise HTTPException(status_code=400, detail=provider_errors[0] if provider_errors else "Job search is temporarily unavailable.")
+    elif shortfall > 0 and not db_scored:
+        raise HTTPException(status_code=400, detail="No job search provider covers that location yet.")
 
     if db_raw_jobs:
         # Refresh last_seen_at/expires_at for whatever was actually scanned
