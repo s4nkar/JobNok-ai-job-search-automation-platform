@@ -14,6 +14,7 @@ import httpx
 
 from app.ai.llm import provider as ai_provider
 from app.core.config import settings
+from app.services.cache import cached_prompt_parse
 
 logger = logging.getLogger(__name__)
 
@@ -312,7 +313,8 @@ async def parse_strategy_prompt(prompt: str | None) -> dict[str, Any]:
             "seniority_preference": None,
         }
 
-    system = """Extract structured startup-hunt preferences from the user prompt.
+    async def _parse() -> dict[str, Any]:
+        system = """Extract structured startup-hunt preferences from the user prompt.
 Return JSON only:
 {
   "keywords": [string],
@@ -325,34 +327,38 @@ Return JSON only:
 }
 Normalize values into short lowercase phrases."""
 
-    try:
-        text = await ai_provider.generate_text(prompt.strip(), system=system, max_tokens=300)
-        start = text.find("{")
-        end = text.rfind("}") + 1
-        if start >= 0 and end > start:
-            data = json.loads(text[start:end])
-            return {
-                "keywords": [str(v).strip().lower() for v in data.get("keywords", []) if str(v).strip()],
-                "languages": [str(v).strip().lower() for v in data.get("languages", []) if str(v).strip()],
-                "company_stage": str(data.get("company_stage")).strip().lower() if data.get("company_stage") else None,
-                "preferred_cities": [str(v).strip().lower() for v in data.get("preferred_cities", []) if str(v).strip()],
-                "hidden_gem_signals": [str(v).strip().lower() for v in data.get("hidden_gem_signals", []) if str(v).strip()],
-                "contact_focus": [str(v).strip().lower() for v in data.get("contact_focus", []) if str(v).strip()],
-                "seniority_preference": _normalize_seniority_preference(str(data.get("seniority_preference"))) if data.get("seniority_preference") else None,
-            }
-    except Exception:
-        pass
+        try:
+            text = await ai_provider.generate_text(prompt.strip(), system=system, max_tokens=300, tier="light")
+            start = text.find("{")
+            end = text.rfind("}") + 1
+            if start >= 0 and end > start:
+                data = json.loads(text[start:end])
+                return {
+                    "keywords": [str(v).strip().lower() for v in data.get("keywords", []) if str(v).strip()],
+                    "languages": [str(v).strip().lower() for v in data.get("languages", []) if str(v).strip()],
+                    "company_stage": str(data.get("company_stage")).strip().lower() if data.get("company_stage") else None,
+                    "preferred_cities": [str(v).strip().lower() for v in data.get("preferred_cities", []) if str(v).strip()],
+                    "hidden_gem_signals": [str(v).strip().lower() for v in data.get("hidden_gem_signals", []) if str(v).strip()],
+                    "contact_focus": [str(v).strip().lower() for v in data.get("contact_focus", []) if str(v).strip()],
+                    "seniority_preference": _normalize_seniority_preference(str(data.get("seniority_preference"))) if data.get("seniority_preference") else None,
+                }
+        except Exception:
+            pass
 
-    lowered = prompt.lower()
-    return {
-        "keywords": tokenize(prompt),
-        "languages": ["english"] if "english" in lowered else [],
-        "company_stage": "pre-seed" if "pre seed" in lowered or "pre-seed" in lowered else ("seed" if "seed" in lowered else None),
-        "preferred_cities": [city for city in ["berlin", "munich", "hamburg", "cologne", "germany"] if city in lowered],
-        "hidden_gem_signals": [signal for signal in ["small startup", "early access", "founder-led", "hidden gems"] if signal.split()[0] in lowered],
-        "contact_focus": [focus for focus in ["founder", "ceo", "hiring manager", "head of ai"] if focus in lowered],
-        "seniority_preference": _infer_seniority_preference_from_prompt(prompt),
-    }
+        lowered = prompt.lower()
+        return {
+            "keywords": tokenize(prompt),
+            "languages": ["english"] if "english" in lowered else [],
+            "company_stage": "pre-seed" if "pre seed" in lowered or "pre-seed" in lowered else ("seed" if "seed" in lowered else None),
+            "preferred_cities": [city for city in ["berlin", "munich", "hamburg", "cologne", "germany"] if city in lowered],
+            "hidden_gem_signals": [signal for signal in ["small startup", "early access", "founder-led", "hidden gems"] if signal.split()[0] in lowered],
+            "contact_focus": [focus for focus in ["founder", "ceo", "hiring manager", "head of ai"] if focus in lowered],
+            "seniority_preference": _infer_seniority_preference_from_prompt(prompt),
+        }
+
+    return await cached_prompt_parse(
+        "startup_hunt_strategy", prompt.strip(), settings.prompt_parse_cache_ttl_seconds, _parse
+    )
 
 
 async def search_startup_hunt(

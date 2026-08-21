@@ -27,6 +27,19 @@ class Job(Base, UUIDPKMixin, CreatedAtMixin):
         # Added by alembic/versions/e2f7c9a4b8d1_add_jobs_origin_tool_and_search_index.py
         # It must stay declared here too, or a future autogenerate will propose dropping it.
         Index("jobs_country_posted_at_idx", "country", desc("posted_at")),
+        # Backs query_job_cache_candidates()'s ILIKE '%token%' title/description filter -
+        # a leading-wildcard ILIKE can't use a plain B-tree index, so without a trigram
+        # GIN index every DB-first lookup is a full table scan once `jobs` has volume.
+        # Added by alembic/versions/a22ae866fa45_add_jobs_trigram_search_indexes.py
+        # (also enables the pg_trgm extension) - must stay declared here too, or a
+        # future autogenerate will propose dropping it.
+        Index("jobs_title_trgm_idx", "title", postgresql_using="gin", postgresql_ops={"title": "gin_trgm_ops"}),
+        Index(
+            "jobs_description_trgm_idx",
+            "description",
+            postgresql_using="gin",
+            postgresql_ops={"description": "gin_trgm_ops"},
+        ),
     )
 
     source: Mapped[str] = mapped_column(Text, nullable=False)
@@ -85,6 +98,12 @@ class JobSearchApplication(Base, UUIDPKMixin, CreatedAtMixin):
     company: Mapped[str] = mapped_column(Text, nullable=False)
     role: Mapped[str] = mapped_column(Text, nullable=False)
     location: Mapped[str] = mapped_column(Text, nullable=False)
+    # Snapshotted from the search result at apply-time. Adzuna's own text, not
+    # AI-generated, but capped at ~500 chars by their /search endpoint (no
+    # param lifts this) - a preview, not the full posting. Still lets
+    # resume-tailor/interview-prep prefill with something real instead of
+    # just "{role} at {company}".
+    job_description: Mapped[str | None] = mapped_column(Text, nullable=True)
     posted_at: Mapped[datetime | None] = mapped_column(TIMESTAMP(timezone=True), nullable=True)
     discovered_at: Mapped[datetime] = mapped_column(
         TIMESTAMP(timezone=True), server_default=func.now(), nullable=False
@@ -117,6 +136,7 @@ async def query_job_cache_candidates(
     query_tokens: list[str],
     posted_within_hours: int | None,
     limit: int,
+    include_null_country: bool = False,
 ) -> list[Job]:
     """Coarse, bounded pre-filter over the shared `jobs` cache, not exact
     matching, just narrows the candidate pool. Callers run their own
@@ -127,8 +147,21 @@ async def query_job_cache_candidates(
     (job_search and startup_hunt both call this) since it's a query against
     one shared table, each caller maps the returned rows into its own
     dict shape afterward, since those shapes genuinely differ per tool.
+
+    include_null_country: some providers have no country field at all (e.g.
+    job_search's Arbeitnow provider), so their cached rows are written with
+    country=None and would otherwise never be retrievable by any
+    country-scoped search. Opt-in and defaults to the original strict
+    behavior, since it's unverified whether every caller's own scorer
+    (specifically startup_hunt's) handles a missing country signal as
+    gracefully as job_search's does.
     """
-    conditions = [Job.expires_at > datetime.now(timezone.utc), Job.country == country_code]
+    country_condition = (
+        or_(Job.country == country_code, Job.country.is_(None))
+        if include_null_country
+        else Job.country == country_code
+    )
+    conditions = [Job.expires_at > datetime.now(timezone.utc), country_condition]
 
     if posted_within_hours is not None:
         cutoff = datetime.now(timezone.utc) - timedelta(hours=posted_within_hours)

@@ -1,18 +1,31 @@
-"""AI provider abstraction — Groq, Cerebras, Anthropic, HuggingFace.
+"""AI provider abstraction — Groq (primary), OpenRouter (fallback).
 
 Configured via env:
     AI_PROVIDER=groq           # primary
-    AI_FALLBACK_CHAIN=cerebras,huggingface   # tried in order on transient failures
+    AI_FALLBACK_CHAIN=openrouter   # tried on transient failures
 
-Groq and Cerebras both expose OpenAI-compatible REST APIs and are reached via
-httpx — no extra SDK. Anthropic and HuggingFace keep their existing clients.
+Both Groq and OpenRouter expose OpenAI-compatible REST APIs and are reached
+via httpx — no extra SDK needed for either.
 
-Public interface (unchanged):
-    generate_text(prompt, system, max_tokens) -> str
-    stream_text(prompt, system, max_tokens)   -> AsyncGenerator[str, None]
+Public interface:
+    generate_text(prompt, system, max_tokens, tier="heavy") -> str
+    stream_text(prompt, system, max_tokens, tier="heavy")   -> AsyncGenerator[str, None]
+
+tier: "heavy" (default) uses each provider's configured generation model — for
+prose the user reads (resume rewrites, cover letters, interview answers). "light"
+uses a smaller, non-reasoning model where available (currently Groq only, via
+groq_light_model) — for small extraction/classification tasks (e.g. parsing a
+free-text preferences prompt into structured JSON) that don't need a heavy
+model's quality, and where a reasoning model would waste its token budget on
+invisible chain-of-thought instead of writing the answer. OpenRouter is the
+sole fallback and isn't tier-split - it's rarely invoked (only on a Groq
+failure), so one general-purpose non-reasoning model serves both tiers.
 
 Failure semantics:
-    - generate_text retries the next provider on rate-limit / 5xx / network errors.
+    - generate_text retries the next provider on rate-limit / 5xx / network errors,
+      AND on an empty completion (e.g. a reasoning model exhausting max_tokens on
+      chain-of-thought before writing any content) - an empty string is never
+      treated as a successful response.
     - stream_text retries the next provider ONLY if the first provider fails before
       yielding any tokens. Once a stream has started emitting, we do not switch
       mid-stream (would produce garbled output).
@@ -39,7 +52,7 @@ class _ProviderUnavailable(_ProviderError):
     """Provider is not configured (e.g. missing API key) — skip without logging as error."""
 
 
-# ── OpenAI-compatible (Groq, Cerebras) ────────────────────────────
+# ── OpenAI-compatible (Groq, OpenRouter) ────────────────────────────
 
 async def _openai_compat_generate(
     prompt: str, system: str, max_tokens: int,
@@ -63,18 +76,31 @@ async def _openai_compat_generate(
     except httpx.HTTPError as exc:
         raise _ProviderError(f"{label} network error: {exc!r}") from exc
 
-    if resp.status_code == 429 or resp.status_code >= 500:
-        raise _ProviderError(f"{label} HTTP {resp.status_code}: {resp.text[:200]}")
     if resp.status_code >= 400:
-        # 4xx (other than 429) usually means bad request — don't retry on another provider
-        # because the request itself is the problem.
-        raise RuntimeError(f"{label} HTTP {resp.status_code}: {resp.text[:200]}")
+        # Every call site here always sends a well-formed payload (message shape
+        # never varies, only content/system/max_tokens) - so in practice a 4xx
+        # means a provider-specific problem (deprecated/inaccessible model, org
+        # policy), not a malformed request that would fail identically on every
+        # provider. Retrying the next provider is the right move, not a hard
+        # stop - a stale model id on one provider must not break the whole chain.
+        raise _ProviderError(f"{label} HTTP {resp.status_code}: {resp.text[:200]}")
 
     data = resp.json()
     try:
-        return data["choices"][0]["message"]["content"] or ""
+        choice = data["choices"][0]
+        content = choice["message"]["content"] or ""
     except (KeyError, IndexError, TypeError) as exc:
         raise _ProviderError(f"{label} malformed response: {exc!r}") from exc
+
+    if not content.strip():
+        # A reasoning model can spend its whole max_tokens budget on invisible
+        # chain-of-thought and finish with finish_reason="length" before writing
+        # any content - that's a real failure to produce output, not a valid
+        # empty response, so it must retry the next provider like any other
+        # transient failure instead of silently returning "".
+        raise _ProviderError(f"{label} returned empty content (finish_reason={choice.get('finish_reason')!r})")
+
+    return content
 
 
 async def _openai_compat_stream(
@@ -103,12 +129,9 @@ async def _openai_compat_stream(
                     "max_tokens": max_tokens, "temperature": 0.7, "stream": True,
                 },
             ) as resp:
-                if resp.status_code == 429 or resp.status_code >= 500:
-                    body = await resp.aread()
-                    raise _ProviderError(f"{label} HTTP {resp.status_code}: {body[:200]!r}")
                 if resp.status_code >= 400:
                     body = await resp.aread()
-                    raise RuntimeError(f"{label} HTTP {resp.status_code}: {body[:200]!r}")
+                    raise _ProviderError(f"{label} HTTP {resp.status_code}: {body[:200]!r}")
 
                 async for line in resp.aiter_lines():
                     if not line or not line.startswith("data: "):
@@ -128,142 +151,6 @@ async def _openai_compat_stream(
             raise _ProviderError(f"{label} network error: {exc!r}") from exc
 
 
-# ── Anthropic ────────────────────────────────────────────────────
-
-async def _anthropic_generate(prompt: str, system: str, max_tokens: int) -> str:
-    if not settings.anthropic_api_key:
-        raise _ProviderUnavailable("anthropic: API key not configured")
-    import anthropic
-    client = anthropic.AsyncAnthropic(api_key=settings.anthropic_api_key)
-    try:
-        message = await client.messages.create(
-            model=settings.ai_model,
-            max_tokens=max_tokens,
-            system=system,
-            messages=[{"role": "user", "content": prompt}],
-        )
-        return message.content[0].text
-    except anthropic.APIStatusError as exc:
-        if exc.status_code == 429 or exc.status_code >= 500:
-            raise _ProviderError(f"anthropic HTTP {exc.status_code}") from exc
-        raise
-
-
-async def _anthropic_stream(prompt: str, system: str, max_tokens: int) -> AsyncGenerator[str, None]:
-    if not settings.anthropic_api_key:
-        raise _ProviderUnavailable("anthropic: API key not configured")
-    import anthropic
-    client = anthropic.AsyncAnthropic(api_key=settings.anthropic_api_key)
-    try:
-        async with client.messages.stream(
-            model=settings.ai_model,
-            max_tokens=max_tokens,
-            system=system,
-            messages=[{"role": "user", "content": prompt}],
-        ) as stream:
-            async for text in stream.text_stream:
-                yield text
-    except anthropic.APIStatusError as exc:
-        if exc.status_code == 429 or exc.status_code >= 500:
-            raise _ProviderError(f"anthropic HTTP {exc.status_code}") from exc
-        raise
-
-
-# ── HuggingFace ──────────────────────────────────────────────────
-
-def _hf_raise(exc: Exception) -> None:
-    """Re-raise HuggingFace errors with the right semantics.
-
-    429 / 5xx → _ProviderError (transient, try next provider).
-    400        → RuntimeError  (bad request / model config — retrying won't help).
-    """
-    from huggingface_hub.utils import HfHubHTTPError
-    if isinstance(exc, HfHubHTTPError) and exc.response is not None:
-        if exc.response.status_code == 429 or exc.response.status_code >= 500:
-            raise _ProviderError(f"huggingface error: {exc!r}") from exc
-        # 400 "model not supported" — hard failure; don't burn the fallback chain.
-        raise RuntimeError(f"huggingface error: {exc!r}") from exc
-    raise _ProviderError(f"huggingface error: {exc!r}") from exc
-
-
-async def _huggingface_generate(prompt: str, system: str, max_tokens: int) -> str:
-    import asyncio
-    from huggingface_hub import InferenceClient
-    from huggingface_hub.utils import HfHubHTTPError
-
-    messages = []
-    if system:
-        messages.append({"role": "system", "content": system})
-    messages.append({"role": "user", "content": prompt})
-
-    def _call() -> str:
-        client = InferenceClient(provider="auto", api_key=settings.huggingface_api_key or None)
-        try:
-            response = client.chat.completions.create(
-                model=settings.huggingface_model,
-                messages=messages,
-                max_tokens=min(max_tokens, settings.huggingface_max_tokens),
-                temperature=0.7,
-            )
-            return response.choices[0].message.content or ""
-        except HfHubHTTPError as exc:
-            _hf_raise(exc)
-            raise  # unreachable
-
-    return await asyncio.to_thread(_call)
-
-
-async def _huggingface_stream(prompt: str, system: str, max_tokens: int) -> AsyncGenerator[str, None]:
-    import asyncio
-    import queue as _queue
-    from huggingface_hub import InferenceClient
-    from huggingface_hub.utils import HfHubHTTPError
-
-    messages = []
-    if system:
-        messages.append({"role": "system", "content": system})
-    messages.append({"role": "user", "content": prompt})
-
-    # Run the blocking HF stream in a thread, bridging via a queue.
-    _SENTINEL = object()
-    q: _queue.Queue = _queue.Queue()
-
-    def _produce() -> None:
-        client = InferenceClient(provider="auto", api_key=settings.huggingface_api_key or None)
-        try:
-            stream = client.chat.completions.create(
-                model=settings.huggingface_model,
-                messages=messages,
-                max_tokens=min(max_tokens, settings.huggingface_max_tokens),
-                temperature=0.7,
-                stream=True,
-            )
-            for chunk in stream:
-                delta = chunk.choices[0].delta.content
-                if delta:
-                    q.put(delta)
-        except HfHubHTTPError as exc:
-            q.put(exc)
-        except Exception as exc:
-            q.put(exc)
-        finally:
-            q.put(_SENTINEL)
-
-    loop = asyncio.get_event_loop()
-    loop.run_in_executor(None, _produce)
-
-    while True:
-        item = await asyncio.to_thread(q.get)
-        if item is _SENTINEL:
-            break
-        if isinstance(item, HfHubHTTPError):
-            _hf_raise(item)
-            raise  # unreachable
-        if isinstance(item, Exception):
-            raise _ProviderError(f"huggingface stream error: {item!r}") from item
-        yield item
-
-
 # ── Provider dispatch ────────────────────────────────────────────
 
 def _provider_chain() -> list[str]:
@@ -273,50 +160,46 @@ def _provider_chain() -> list[str]:
     return chain
 
 
-async def _dispatch_generate(provider: str, prompt: str, system: str, max_tokens: int) -> str:
+def _groq_model(tier: str) -> str:
+    return settings.groq_light_model if tier == "light" else settings.groq_model
+
+
+async def _dispatch_generate(provider: str, prompt: str, system: str, max_tokens: int, tier: str) -> str:
     if provider == "groq":
         return await _openai_compat_generate(
             prompt, system, max_tokens,
-            settings.groq_base_url, settings.groq_api_key, settings.groq_model, "groq",
+            settings.groq_base_url, settings.groq_api_key, _groq_model(tier), "groq",
         )
-    if provider == "cerebras":
+    if provider == "openrouter":
         return await _openai_compat_generate(
             prompt, system, max_tokens,
-            settings.cerebras_base_url, settings.cerebras_api_key, settings.cerebras_model, "cerebras",
+            settings.openrouter_base_url, settings.openrouter_api_key, settings.openrouter_model, "openrouter",
         )
-    if provider == "anthropic":
-        return await _anthropic_generate(prompt, system, max_tokens)
-    if provider == "huggingface":
-        return await _huggingface_generate(prompt, system, max_tokens)
     raise ValueError(f"Unknown AI provider: {provider!r}")
 
 
-def _dispatch_stream(provider: str, prompt: str, system: str, max_tokens: int) -> AsyncGenerator[str, None]:
+def _dispatch_stream(provider: str, prompt: str, system: str, max_tokens: int, tier: str) -> AsyncGenerator[str, None]:
     if provider == "groq":
         return _openai_compat_stream(
             prompt, system, max_tokens,
-            settings.groq_base_url, settings.groq_api_key, settings.groq_model, "groq",
+            settings.groq_base_url, settings.groq_api_key, _groq_model(tier), "groq",
         )
-    if provider == "cerebras":
+    if provider == "openrouter":
         return _openai_compat_stream(
             prompt, system, max_tokens,
-            settings.cerebras_base_url, settings.cerebras_api_key, settings.cerebras_model, "cerebras",
+            settings.openrouter_base_url, settings.openrouter_api_key, settings.openrouter_model, "openrouter",
         )
-    if provider == "anthropic":
-        return _anthropic_stream(prompt, system, max_tokens)
-    if provider == "huggingface":
-        return _huggingface_stream(prompt, system, max_tokens)
     raise ValueError(f"Unknown AI provider: {provider!r}")
 
 
 # ── Public Interface ─────────────────────────────────────────────
 
-async def generate_text(prompt: str, system: str = "", max_tokens: int = 2048) -> str:
+async def generate_text(prompt: str, system: str = "", max_tokens: int = 2048, tier: str = "heavy") -> str:
     chain = _provider_chain()
     last_error: Exception | None = None
     for provider in chain:
         try:
-            return await _dispatch_generate(provider, prompt, system, max_tokens)
+            return await _dispatch_generate(provider, prompt, system, max_tokens, tier)
         except _ProviderUnavailable as exc:
             logger.info("ai_provider skip %s: %s", provider, exc)
             last_error = exc
@@ -328,13 +211,13 @@ async def generate_text(prompt: str, system: str = "", max_tokens: int = 2048) -
     raise RuntimeError(f"All AI providers exhausted ({chain}). Last error: {last_error!r}")
 
 
-async def stream_text(prompt: str, system: str = "", max_tokens: int = 2048) -> AsyncGenerator[str, None]:
+async def stream_text(prompt: str, system: str = "", max_tokens: int = 2048, tier: str = "heavy") -> AsyncGenerator[str, None]:
     chain = _provider_chain()
     last_error: Exception | None = None
 
     for provider in chain:
         try:
-            gen = _dispatch_stream(provider, prompt, system, max_tokens)
+            gen = _dispatch_stream(provider, prompt, system, max_tokens, tier)
             # Pull the first chunk eagerly so we can fall back on a clean failure
             # before any bytes reach the client.
             first_iter = gen.__aiter__()

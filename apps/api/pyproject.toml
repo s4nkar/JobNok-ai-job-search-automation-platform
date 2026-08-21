@@ -14,47 +14,34 @@ dependencies = [
     "ddgs>=9.0",                # DuckDuckGo search (renamed from duckduckgo-search)
     "pydantic==2.8.2",
     "pydantic-settings==2.4.0",
-
     # AI Providers
-    "anthropic==0.32.0",
-    "huggingface-hub>=0.31.0",
-
     # Embeddings (API-based — Jina/Cohere). Only numpy needed locally for matrix ops.
     "numpy>=1.26,<3.0",
-
     # Background Tasks
     "arq==0.26.1",
     "redis==5.0.8",
-
     # Database — direct Postgres access via SQLAlchemy, hosted on Neon.
     "sqlalchemy[asyncio]==2.0.35",
     "asyncpg==0.29.0",
     "psycopg[binary]==3.2.3",
     "alembic==1.13.3",
-
     # PDF Parsing + Generation
     "PyMuPDF==1.24.9",
     "scrapling>=0.2.96",
     "weasyprint==62.3",
     "pydyf==0.10.0",
     "jinja2==3.1.4",
-
     # File uploads
     "python-multipart==0.0.9",
-
     # CV photo storage
     "cloudinary==1.41.0",
-
     # Email
     "resend==2.4.0",
-
     # Error Monitoring
     "sentry-sdk[fastapi]==2.12.0",
-
     # JWT Validation
     "PyJWT==2.9.0",
     "cryptography==43.0.0",
-
     # Clerk webhook signature verification
     "svix==1.61.0",
 ]

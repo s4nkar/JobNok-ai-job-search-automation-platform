@@ -40,6 +40,16 @@
   }
 }
 
+@layer components {
+  /* Components layer sits below utilities in Tailwind's layer order, so a
+     utility class (e.g. `hidden`) on the same element reliably overrides this
+     base style - unlike a plain unlayered/utilities-layer rule, where it
+     would come down to source order instead of intent. */
+  .page-header-icon {
+    @apply w-9 h-9 rounded-xl flex items-center justify-center shrink-0;
+  }
+}
+
 @layer utilities {
   .scrollbar-hide {
     -ms-overflow-style: none;
@@ -64,6 +74,17 @@
     border-radius: 2px;
   }
 
+  /* Fades content out right at the top/bottom edge of a scrollable
+     container instead of hard-clipping it mid-field - without this, a
+     panel scrolled to a middle position looks like content is abruptly
+     chopped off rather than intentionally scrollable, especially with
+     scrollbar-hide removing the one visual cue that would otherwise
+     signal "there's more above/below". */
+  .scroll-fade-y {
+    mask-image: linear-gradient(to bottom, transparent, black 16px, black calc(100% - 16px), transparent);
+    -webkit-mask-image: linear-gradient(to bottom, transparent, black 16px, black calc(100% - 16px), transparent);
+  }
+
   .gradient-brand {
     background: linear-gradient(135deg, hsl(239 84% 67%) 0%, hsl(262 83% 68%) 100%);
   }
@@ -77,9 +98,5 @@
 
   .card-hover {
     @apply transition-all duration-200 hover:shadow-md hover:-translate-y-0.5;
-  }
-
-  .page-header-icon {
-    @apply w-9 h-9 rounded-xl flex items-center justify-center shrink-0;
   }
 }

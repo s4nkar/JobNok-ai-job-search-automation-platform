@@ -4,7 +4,11 @@ import * as React from 'react'
 import type { ToastActionElement, ToastProps } from './toast'
 
 const TOAST_LIMIT = 5
-const TOAST_REMOVE_DELAY = 300000
+// Delay between a toast closing (open: false) and its removal from state -
+// just needs to outlast the exit animation (~200ms). Was 300000 (5 minutes),
+// a leftover default that left "closed" toasts sitting in state long after
+// they'd visually disappeared.
+const TOAST_REMOVE_DELAY = 600
 
 type ToasterToast = ToastProps & {
   id: string

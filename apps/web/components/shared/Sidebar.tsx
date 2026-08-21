@@ -57,7 +57,12 @@ export function Sidebar() {
 
   const [userEmail, setUserEmail] = useState<string | null>(null)
   const [confirmSignOut, setConfirmSignOut] = useState(false)
-  const { collapsed, toggleCollapsed: toggleCollapsedShared } = useSidebar()
+  const { collapsed, toggleCollapsed: toggleCollapsedShared, mobileOpen, closeMobile } = useSidebar()
+
+  // The desktop icon-only layout must never apply while the mobile drawer is
+  // open — a returning user with `collapsed` persisted from a desktop visit
+  // would otherwise see a cramped icon-only drawer on their phone.
+  const iconOnly = collapsed && !mobileOpen
 
   // Single fixed-position tooltip — bypasses all overflow clipping
   const [tooltip, setTooltip] = useState<{ label: string; y: number } | null>(null)
@@ -72,6 +77,13 @@ export function Sidebar() {
     if (!collapsed) setTooltip(null)   // clear any visible tip when collapsing
     toggleCollapsedShared()
   }
+
+  // Close the mobile drawer whenever the route changes (link taps navigate,
+  // then should dismiss the overlay instead of leaving it open).
+  useEffect(() => {
+    closeMobile()
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [pathname])
 
   useEffect(() => {
     if (user) setUserEmail(user.primaryEmailAddress?.emailAddress ?? null)
@@ -102,11 +114,11 @@ export function Sidebar() {
       <Link
         key={item.href}
         href={item.href}
-        onMouseEnter={collapsed ? (e) => showTip(e, item.label) : undefined}
-        onMouseLeave={collapsed ? hideTip : undefined}
+        onMouseEnter={iconOnly ? (e) => showTip(e, item.label) : undefined}
+        onMouseLeave={iconOnly ? hideTip : undefined}
         className={cn(
           'relative flex items-center rounded-lg text-[0.80rem] font-medium transition-all duration-150',
-          collapsed ? 'justify-center gap-0 px-0 py-2 w-full' : 'gap-2.5 px-3 py-1.5',
+          iconOnly ? 'justify-center gap-0 px-0 py-2 w-full' : 'gap-2.5 px-3 py-1.5',
           active
             ? 'bg-accent text-accent-foreground'
             : 'text-muted-foreground hover:bg-muted hover:text-foreground'
@@ -117,12 +129,12 @@ export function Sidebar() {
         )}
         <Icon className={cn(
           'flex-shrink-0 transition-colors',
-          collapsed ? 'h-4 w-4' : 'h-[15px] w-[15px]',
+          iconOnly ? 'h-4 w-4' : 'h-[15px] w-[15px]',
           active ? 'text-primary' : 'text-muted-foreground'
         )} />
         <span className={cn(
           'transition-all duration-200 whitespace-nowrap overflow-hidden',
-          collapsed ? 'w-0 opacity-0' : 'flex-1 opacity-100'
+          iconOnly ? 'w-0 opacity-0' : 'flex-1 opacity-100'
         )}>
           {item.label}
         </span>
@@ -133,7 +145,7 @@ export function Sidebar() {
   return (
     <>
       {/* Fixed tooltip — rendered outside aside so it's never clipped */}
-      {collapsed && tooltip && (
+      {iconOnly && tooltip && (
         <div
           className="fixed z-[9999] pointer-events-none"
           style={{ top: tooltip.y, left: 68, transform: 'translateY(-50%)' }}
@@ -144,18 +156,33 @@ export function Sidebar() {
         </div>
       )}
 
+      {/* Mobile backdrop — tap to close the drawer */}
+      {mobileOpen && (
+        <div
+          className="fixed inset-0 z-40 bg-black/50 md:hidden"
+          onClick={closeMobile}
+          aria-hidden="true"
+        />
+      )}
+
       <aside
         className={cn(
-          'relative flex-shrink-0 flex flex-col h-screen sticky top-0 border-r shadow-[4px_0_16px_-4px_rgba(15,23,42,0.06)] transition-[width] duration-200 ease-in-out',
-          collapsed ? 'w-[60px]' : 'w-64'
+          'flex flex-col h-screen border-r shadow-[4px_0_16px_-4px_rgba(15,23,42,0.06)]',
+          // Mobile: off-canvas drawer, fixed above content, slides in/out.
+          'fixed inset-y-0 left-0 z-50 w-64 transform transition-transform duration-200 ease-in-out',
+          mobileOpen ? 'translate-x-0' : '-translate-x-full',
+          // Desktop: back in normal flow, sticky to the viewport, width
+          // follows the collapsed preference instead of the drawer state.
+          'md:sticky md:top-0 md:left-auto md:translate-x-0 md:flex-shrink-0 md:transition-[width] md:duration-200 md:ease-in-out',
+          collapsed ? 'md:w-[60px]' : 'md:w-64'
         )}
         style={{ backgroundColor: 'hsl(var(--sidebar-bg))', borderColor: 'hsl(var(--sidebar-border))' }}
       >
-        {/* ── Toggle button — fixed on right edge, same position always ── */}
+        {/* ── Toggle button — desktop only, fixed on right edge ── */}
         <button
           onClick={toggleCollapsed}
           aria-label={collapsed ? 'Expand sidebar' : 'Collapse sidebar'}
-          className="absolute -right-3 top-[22px] z-20 w-6 h-6 rounded-full flex items-center justify-center shadow-md border transition-all duration-150 hover:scale-110"
+          className="hidden md:flex absolute -right-3 top-[22px] z-20 w-6 h-6 rounded-full items-center justify-center shadow-md border transition-all duration-150 hover:scale-110"
           style={{
             backgroundColor: 'hsl(var(--sidebar-bg))',
             borderColor: 'hsl(var(--sidebar-border))',
@@ -169,13 +196,21 @@ export function Sidebar() {
 
         {/* ── Brand ── */}
         <div
-          className="px-3 py-[18px] border-b flex items-center"
+          className="px-3 py-[18px] border-b flex items-center justify-between"
           style={{ borderColor: 'hsl(var(--sidebar-border))' }}
         >
-          {collapsed
+          {iconOnly
             ? <img src="/brand-icon.png" alt="JobNok" className="w-8 h-8 flex-shrink-0 mx-auto" />
             : <img src="/logo.png" alt="JobNok" className="h-8 w-auto" />
           }
+          {/* Mobile-only close button */}
+          <button
+            onClick={closeMobile}
+            aria-label="Close menu"
+            className="md:hidden h-7 w-7 rounded-lg flex items-center justify-center text-muted-foreground hover:bg-muted transition-colors flex-shrink-0"
+          >
+            <X className="h-4 w-4" />
+          </button>
         </div>
 
         {/* ── Nav ── */}
@@ -188,7 +223,7 @@ export function Sidebar() {
             <div key={group.section} className={cn(gi > 0 && 'mt-2.5')}>
               <div className={cn(
                 'transition-all duration-200',
-                collapsed ? 'h-0 opacity-0 overflow-hidden mb-0' : 'opacity-100 mb-1'
+                iconOnly ? 'h-0 opacity-0 overflow-hidden mb-0' : 'opacity-100 mb-1'
               )}>
                 <p className="text-[10px] font-semibold text-muted-foreground uppercase tracking-widest px-3 whitespace-nowrap">
                   {group.section}
@@ -208,11 +243,11 @@ export function Sidebar() {
           {/* Profile */}
           <Link
             href="/profile"
-            onMouseEnter={collapsed ? (e) => showTip(e, userName || 'My Profile') : undefined}
-            onMouseLeave={collapsed ? hideTip : undefined}
+            onMouseEnter={iconOnly ? (e) => showTip(e, userName || 'My Profile') : undefined}
+            onMouseLeave={iconOnly ? hideTip : undefined}
             className={cn(
               'flex items-center rounded-xl transition-all duration-150 group w-full',
-              collapsed ? 'justify-center gap-0 px-0 py-2' : 'gap-3 px-3 py-2.5',
+              iconOnly ? 'justify-center gap-0 px-0 py-2' : 'gap-3 px-3 py-2.5',
               pathname === '/profile' ? 'bg-accent' : 'hover:bg-muted'
             )}
           >
@@ -222,7 +257,7 @@ export function Sidebar() {
                 : <span className="text-[10px] font-bold text-primary-foreground">{initials}</span>
               }
             </div>
-            {!collapsed && (
+            {!iconOnly && (
               <>
                 <div className="min-w-0 flex-1">
                   <p className="text-[13px] font-medium text-foreground truncate leading-tight">{userName || 'My Profile'}</p>
@@ -234,7 +269,7 @@ export function Sidebar() {
           </Link>
 
           {/* Sign out — expanded */}
-          {!collapsed && (
+          {!iconOnly && (
             confirmSignOut ? (
               <div className="flex items-center gap-2 px-3 py-2">
                 <span className="text-[12px] text-muted-foreground flex-1">Sign out?</span>
@@ -253,7 +288,7 @@ export function Sidebar() {
           )}
 
           {/* Sign out — collapsed (icon with 2-step confirm) */}
-          {collapsed && (
+          {iconOnly && (
             confirmSignOut ? (
               <div className="flex items-center justify-center gap-2 py-2">
                 <button
@@ -285,7 +320,7 @@ export function Sidebar() {
             )
           )}
         </div>
-      </aside >
+      </aside>
     </>
   )
 }

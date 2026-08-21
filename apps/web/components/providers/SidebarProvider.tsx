@@ -2,12 +2,21 @@
 
 import { createContext, useContext, useEffect, useState, type ReactNode } from 'react'
 
-const SidebarContext = createContext<{ collapsed: boolean; toggleCollapsed: () => void } | null>(null)
+const SidebarContext = createContext<{
+  collapsed: boolean
+  toggleCollapsed: () => void
+  mobileOpen: boolean
+  toggleMobileOpen: () => void
+  closeMobile: () => void
+} | null>(null)
 
 export function SidebarProvider({ children }: { children: ReactNode }) {
   // Open by default on first visit (no stored preference yet). A returning
   // user who explicitly collapsed it gets that choice restored.
   const [collapsed, setCollapsed] = useState(false)
+  // Mobile off-canvas drawer state - separate from `collapsed` (a desktop-only
+  // icon-width preference). Always starts closed regardless of `collapsed`.
+  const [mobileOpen, setMobileOpen] = useState(false)
 
   useEffect(() => {
     if (localStorage.getItem('sidebar_collapsed') === 'true') setCollapsed(true)
@@ -21,8 +30,16 @@ export function SidebarProvider({ children }: { children: ReactNode }) {
     })
   }
 
+  function toggleMobileOpen() {
+    setMobileOpen((prev) => !prev)
+  }
+
+  function closeMobile() {
+    setMobileOpen(false)
+  }
+
   return (
-    <SidebarContext.Provider value={{ collapsed, toggleCollapsed }}>
+    <SidebarContext.Provider value={{ collapsed, toggleCollapsed, mobileOpen, toggleMobileOpen, closeMobile }}>
       {children}
     </SidebarContext.Provider>
   )

@@ -244,16 +244,41 @@ export interface JobSearchResult {
   application_status: JobSearchApplicationStatus | null
   tracked_application_id: string | null
   citation: JobCitation
+  description_text: string | null
+  salary_min: number | null
+  salary_max: number | null
+}
+
+// Bonus finds come from Arbeitnow only, which has no country field - title
+// matched, location NOT verified. Deliberately no citation/salary (no
+// evidence to cite), keep this shape in sync with
+// apps/api/app/modules/job_search/scoring.py::score_bonus_job's return dict.
+export interface BonusJob {
+  source_name: string
+  provider_type: string
+  external_job_id: string | null
+  company: string
+  role: string
+  location: string
+  job_url: string
+  job_url_canonical: string
+  posted_at: string | null
+  applied: boolean
+  application_status: JobSearchApplicationStatus | null
+  tracked_application_id: string | null
+  description_text: string | null
 }
 
 export interface JobSearchResponse {
   results: JobSearchResult[]
+  bonus_jobs: BonusJob[]
   parsed_preferences: {
     keywords: string[]
     languages: string[]
     company_stage: string | null
     notes: string[]
   }
+  searches_remaining: number | null
 }
 
 export interface JobSearchApplication {
@@ -266,6 +291,7 @@ export interface JobSearchApplication {
   company: string
   role: string
   location: string
+  job_description: string | null
   posted_at: string | null
   discovered_at: string
   applied_at: string | null

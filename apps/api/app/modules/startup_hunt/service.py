@@ -21,7 +21,7 @@ from app.shared.repository import UserScopedRepository
 from app.shared.utils import row_to_dict
 from app.modules.job_search.models import Job, query_job_cache_candidates, touch_job_cache_rows
 from app.modules.job_search.service import _upsert_jobs_cache
-from app.modules.job_search.sources import adzuna_country_code
+from app.modules.job_search.providers.adzuna import adzuna_country_code
 from app.modules.startup_hunt.engine import (
     _dedupe_opportunities,
     _score_opportunity,
@@ -156,8 +156,8 @@ async def _fetch_theirstack_db_candidates(
 ) -> tuple[list[dict[str, Any]], list[uuid.UUID]]:
     """DB-first pre-check for the theirstack bucket only (see plan). Returns
     already-scored opportunity dicts plus the underlying row ids (for TTL
-    refresh), or ([], []) if the country can't be resolved — in which case
-    the live theirstack fetch's own AdzunaConfigError-equivalent handling
+    refresh), or ([], []) if the country can't be resolved, in which case
+    the live theirstack fetch's own ProviderError-equivalent handling
     (settings.theirstack_api_key check) takes over exactly as before."""
     country_code = adzuna_country_code(payload.get("country")) or adzuna_country_code(payload.get("location"))
     if not country_code:

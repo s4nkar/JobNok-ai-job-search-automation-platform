@@ -17,34 +17,39 @@ from typing import Self
 
 class Settings(BaseSettings):
     # ── AI Provider ──────────────────────────────────────────────────────────
-    # Primary provider. Supported: groq | cerebras | anthropic | huggingface
+    # Primary provider. Supported: groq | openrouter
     ai_provider: str = "groq"
-    # Model for the primary provider (Anthropic-style id when ai_provider=anthropic,
-    # otherwise ignored — provider-specific *_model fields below are authoritative).
-    ai_model: str = "claude-sonnet-4-6"
     # Comma-separated fallback chain tried in order on rate-limit/5xx/timeouts.
-    # Example: "cerebras,huggingface". Leave empty to disable fallback.
-    ai_fallback_chain: str = "cerebras,huggingface"
+    # Example: "openrouter". Leave empty to disable fallback.
+    ai_fallback_chain: str = "openrouter"
     # Per-call timeout (seconds) — applies to non-streaming generate_text only.
     ai_request_timeout_seconds: int = 60
+    # Shared cache for free-text-prompt-to-structured-JSON parsing (e.g. job_search's
+    # preferences_prompt, startup_hunt's strategy_prompt) — same input text always
+    # extracts to the same structured filters, so no need to re-hit the LLM per request.
+    prompt_parse_cache_ttl_seconds: int = 3600
 
     # Groq (OpenAI-compatible)
     groq_api_key: str = ""
-    groq_model: str = "llama-3.3-70b-versatile"
+    groq_model: str = "openai/gpt-oss-20b"
+    # Fast, non-reasoning model for small "light" tier calls (e.g. free-text-prompt
+    # extraction) — the heavy model above may be a reasoning model that spends
+    # max_tokens on invisible chain-of-thought before writing any answer, which
+    # starves short extraction tasks of output entirely. See generate_text(tier=).
+    groq_light_model: str = "allam-2-7b"
     groq_base_url: str = "https://api.groq.com/openai/v1"
 
-    # Cerebras (OpenAI-compatible)
-    cerebras_api_key: str = ""
-    cerebras_model: str = "llama-3.3-70b"
-    cerebras_base_url: str = "https://api.cerebras.ai/v1"
-
-    # Anthropic (paid fallback / explicit opt-in)
-    anthropic_api_key: str = ""
-
-    # HuggingFace Inference (last-resort fallback)
-    huggingface_api_key: str = ""
-    huggingface_model: str = "Qwen/Qwen2.5-7B-Instruct"
-    huggingface_max_tokens: int = 2048
+    # OpenRouter (OpenAI-compatible) — sole fallback, used for both tiers since
+    # it's rarely invoked (only on a Groq failure). nemotron-3-super is a
+    # non-reasoning instruct model - live-tested clean on both a trivial task
+    # and the actual JSON-extraction shape. The smaller/more popular free
+    # models (gemma-4-31b-it:free, glm-5.2:free) were hitting instant 429s
+    # from upstream congestion on OpenRouter's shared free pool at the time
+    # of testing - this one wasn't, so it's the more reliable pick for a
+    # fallback specifically (rarely used, but must work when it's used).
+    openrouter_api_key: str = ""
+    openrouter_model: str = "nvidia/nemotron-3-super-120b-a12b:free"
+    openrouter_base_url: str = "https://openrouter.ai/api/v1"
 
     # ── Embedding Providers ──────────────────────────────────────────────────
     # Primary embedding provider. Supported: jina | cohere
@@ -77,6 +82,12 @@ class Settings(BaseSettings):
     rate_limit_startup_hunt_per_day: int = 8
     rate_limit_bulk_email_per_campaign: int = 500
     rate_limit_bulk_email_per_month: int = 3000
+    # Short-window burst limit, separate from the daily quotas above - caps
+    # rapid-fire requests (double-click, retry loop, no search-box debounce)
+    # within the same day's allowance. Same limit/window pair reused across
+    # tools unless one needs its own.
+    rate_limit_burst_limit: int = 3
+    rate_limit_burst_window_seconds: int = 10
 
     # ── LinkedIn Scraping ────────────────────────────────────────────────────
     # Primary scraper — RAPIDAPI_KEY from RapidAPI dashboard
@@ -89,12 +100,52 @@ class Settings(BaseSettings):
     # Shared LinkedIn profile cache TTL (days)
     linkedin_cache_ttl_days: int = 7 
 
-    # ── Job Search (Adzuna) ────────────────────────────────────────────────
+    # ── Job Search ─ providers ──────────────────────────────────────────────
+    # Per-provider kill switch, independent of whether credentials are
+    # configured - flip to false to pull a provider out of search immediately
+    # (e.g. an unofficial API breaking) without touching code or removing keys.
+    job_search_adzuna_enabled: bool = True
+    job_search_bundesagentur_enabled: bool = True
+    # Arbeitnow has no country field, so it can never reliably participate in
+    # the main location-filtered/ranked results - it's shown separately as
+    # "bonus" finds instead (title-matched only, location unverified). This
+    # toggle still fully disables that section.
+    job_search_arbeitnow_enabled: bool = True
+    # How many bonus finds to surface per search - deliberately small and
+    # randomly sampled from everything that passes the title match (not the
+    # top-N by score), since there's no reliable ranking signal without
+    # location data to weight against.
+    job_search_bonus_jobs_limit: int = 12
     adzuna_app_id: str = ""
     adzuna_app_key: str = ""
     adzuna_base_url: str = "https://api.adzuna.com/v1/api"
+    # PLACEHOLDER - confirm against the actual Adzuna account's plan quota
+    # (dashboard or contract), then set the real number. This is a global
+    # budget shared across every user, not a per-user limit - it exists to
+    # stop the app's aggregate usage from exhausting Adzuna's own account-level
+    # daily quota even when every individual user is well under their own
+    # per-day cap (the same failure shape as the Upstash Redis quota
+    # exhaustion hit earlier - a shared external resource exhausted by
+    # aggregate legitimate use, not abuse). Deliberately set a bit under
+    # whatever the real quota is once known, to leave safety margin.
+    adzuna_daily_call_budget: int = 200
+    # PLACEHOLDER - Bundesagentur is an unofficial/reverse-engineered endpoint
+    # (no developer program, no published rate limit) - conservative estimate
+    # until either confirmed live or an actual block/429 pattern is observed.
+    bundesagentur_daily_call_budget: int = 300
+    # Combined external-provider call budget for the whole Job Search tool,
+    # across every provider - a cost-governance ceiling distinct from any
+    # single provider's own quota. Catches aggregate cost growth that no
+    # per-provider budget would (e.g. a provider with no hard external quota
+    # of its own still costs real bandwidth/DB writes/compute at volume).
+    # Arbeitnow isn't counted here - its own 30-min page cache already bounds
+    # it far tighter (~48 real fetches/day) than any budget number would add.
+    # PLACEHOLDER - tune from real usage/cost data once available; currently
+    # set below the sum of the two per-provider budgets above (500) as a
+    # deliberately stricter overall ceiling.
+    job_search_tool_daily_budget: int = 400
     job_search_timeout_seconds: int = 12
-    # Postgres `jobs` cache row TTL — how long a cached listing is considered fresh.
+    # Postgres `jobs` cache row TTL, how long a cached listing is considered fresh.
     job_search_cache_ttl_days: int = 14
     # Redis response cache TTL for identical (query, location, country, ...) searches.
     job_search_response_cache_ttl_seconds: int = 900
@@ -207,10 +258,8 @@ class Settings(BaseSettings):
         # AI provider key — validate the primary provider has its credential.
         # Fallback providers are best-effort; missing keys just skip them at runtime.
         provider_key_map = {
-            "anthropic": ("ANTHROPIC_API_KEY", self.anthropic_api_key),
             "groq": ("GROQ_API_KEY", self.groq_api_key),
-            "cerebras": ("CEREBRAS_API_KEY", self.cerebras_api_key),
-            # huggingface allows anonymous calls — key optional
+            "openrouter": ("OPENROUTER_API_KEY", self.openrouter_api_key),
         }
         primary = self.ai_provider.lower()
         if primary in provider_key_map:
