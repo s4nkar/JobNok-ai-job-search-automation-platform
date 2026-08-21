@@ -21,6 +21,8 @@ found by testing against real external APIs and the real DB/Redis instances.
 - [ ] Every text field has both a length bound and (where relevant) a value-range check, backend AND frontend
 - [ ] Every DB query pattern has a matching index — check `EXPLAIN`, not just "there's an index somewhere"
 - [ ] Rate limiting fails in the correct direction for the operation's cost (see "Rate limiting" below)
+- [ ] A per-user burst limit exists in addition to any daily quota (daily quota alone doesn't cap arrival rate)
+- [ ] A metered external provider has a *global* daily budget, not just per-user limits (per-user limits don't stop aggregate exhaustion)
 - [ ] A cold cache under concurrent identical requests doesn't fan out N times (single-flight)
 - [ ] Fixed-TTL cache entries have jitter so correlated writes don't all expire in the same instant
 - [ ] If a data source has a metered/paid quota, cheaper sources are tried first
@@ -235,14 +237,73 @@ query pattern can use it."
 small `max_tokens` on the default (heavy) tier should pass `tier="light"` if
 the task is extraction/classification, not prose generation.
 
-## 12. Rate limiting — a design question, not fully resolved
+## 12. Rate limiting — four layers, one open design question
 
-`_check_rate_limit_fail_open()` runs **before** the cache-key check, so a
-search fully served by cache (near-zero cost) counts against the user's
-daily quota the same as a fully fresh, expensive search. Left as-is —
-could be intentional (quota as a UX promise, not a cost-tracking mechanism)
-or an oversight. **Flagging for whoever hardens the next tool**: decide this
-deliberately, don't just copy the pattern without thinking about it.
+Four separate rate-limiting layers exist now, each answering a different
+question - don't collapse them into "we have rate limiting" as if one
+mechanism covers all of it:
+
+1. **Per-user daily quota** (`check_rate_limit`) - "how much total use is
+   allowed" per identity. Was already in place.
+2. **Per-user burst limit** (`check_burst_limit`, new) - "how fast can
+   requests arrive" per identity. The daily quota alone doesn't catch a
+   double-clicked search button or a retry loop with no backoff - each
+   still pays full cost regardless of whether it's request #1 or #10 of the
+   day. Short fixed window (3 requests / 10 seconds, `rate_limit_burst_limit`
+   / `rate_limit_burst_window_seconds`), same Redis INCR-first pattern as
+   the daily quota, reused generically (not job-search-specific - any tool
+   can call `check_burst_limit(user_id, tool, limit, window_seconds)`).
+   Wired into `_check_rate_limit_fail_open()` alongside the daily check.
+3. **Global per-provider daily budget** (`check_provider_budget`, new) -
+   "how much can the *whole app* use against this one external provider's
+   own account-level quota", aggregated across every user. Per-user limits
+   don't protect against this: 200 users each safely under their own 10/day
+   cap is still a theoretical 2000 calls/day, which can exceed a provider's
+   own quota even though no single user misbehaved - the same failure shape
+   as the Upstash Redis quota exhaustion hit earlier (a shared external
+   resource exhausted by aggregate *legitimate* use, not abuse). Added
+   `ProviderSpec.daily_budget: int | None`, checked in
+   `_fetch_provider_safe()` alongside the circuit breaker, resets at
+   midnight UTC. **All three providers now have one** - Adzuna (200),
+   Bundesagentur (300), Arbeitnow (100, largely redundant with its own
+   30-min page cache but a defense-in-depth ceiling regardless). Every
+   value is a **placeholder** flagged explicitly in `config.py` - none are
+   confirmed against real published quotas (Adzuna's needs checking against
+   the actual account plan; Bundesagentur/Arbeitnow have no published
+   number at all, these are conservative estimates until a real
+   block/429 pattern is observed).
+4. **Whole-tool daily budget** (`check_tool_budget`, new) - "how much can
+   the *whole tool* spend today, combined across every provider", a
+   cost-governance ceiling distinct from any single provider's own quota.
+   This is the layer per-provider budgets *can't* provide: even if every
+   individual provider stays under its own limit, the tool's aggregate
+   external-call volume is still real bandwidth/DB writes/compute, and
+   nothing capped that in total before this. Checked in
+   `_fetch_provider_safe()` alongside the per-provider budget - a call only
+   proceeds if it clears its own provider's gates *and* this shared one.
+   `job_search_tool_daily_budget = 500`, deliberately set below the sum of
+   the three per-provider budgets (600) as a stricter overall ceiling -
+   also a placeholder, tune from real usage data once available.
+
+**Verified**: burst limiter - 5 rapid calls against a limit of 3 returned
+`[True, True, True, False, False]`. Provider budget and tool budget - same
+pattern, both independently confirmed. An unmetered provider (`daily_budget
+= None`) always returns `True` without touching Redis at all - not
+currently true for any of the three real providers anymore, all have a
+real (if placeholder) number.
+
+**Still an open design question, not resolved**: `_check_rate_limit_fail_open()`
+runs **before** the cache-key check, so a search fully served by cache
+(near-zero cost) counts against the user's daily quota the same as a fully
+fresh, expensive search. Left as-is — could be intentional (quota as a UX
+promise, not a cost-tracking mechanism) or an oversight. **Flagging for
+whoever hardens the next tool**: decide this deliberately, don't just copy
+the pattern without thinking about it.
+
+**Apply elsewhere**: any tool fanning out to a metered external API should
+have a `daily_budget` the same way; any tool with a rapid-repeat-click risk
+(most search/generate buttons) should have a burst limit the same way. Both
+are now generic, reusable primitives - not job-search-specific plumbing.
 
 ## 13. Input validation
 
@@ -287,10 +348,20 @@ actual cascade/containing-block mechanics before assuming the JSX is wrong.
 
 ## What's explicitly *not* done (accepted tradeoffs)
 
-- No per-tool cost dashboard/budget alerting — provider quota exhaustion is
-  still discovered by a request failing, not proactively flagged.
+- The per-provider and whole-tool budgets (§12) now prevent exhaustion
+  proactively, but there's still no dashboard/alerting — nobody gets
+  notified when a budget trips, it just silently skips the provider (or the
+  whole fan-out) for the rest of the day. Worth adding a log-based alert at
+  minimum before this matters at scale.
+- All four budget values (`adzuna_daily_call_budget`, `bundesagentur_daily_call_budget`,
+  `arbeitnow_daily_call_budget`, `job_search_tool_daily_budget`) are
+  **placeholders**, not confirmed against real quotas — Adzuna's needs
+  checking against the actual account plan; Bundesagentur/Arbeitnow have no
+  published number to check against at all (conservative estimates until a
+  real block/429 pattern is observed); the tool-wide one needs tuning from
+  real usage/cost data once there is any.
 - OpenRouter's free-tier model has no uptime/SLA guarantee (documented gap
   in OpenRouter's own docs) — acceptable for a rarely-invoked fallback, not
   acceptable if traffic patterns change and it becomes load-bearing.
-- Rate-limit-counts-cache-hits (see §11) — deliberately left as an open
+- Rate-limit-counts-cache-hits (see §12) — deliberately left as an open
   question, not a resolved decision.

@@ -82,6 +82,12 @@ class Settings(BaseSettings):
     rate_limit_startup_hunt_per_day: int = 8
     rate_limit_bulk_email_per_campaign: int = 500
     rate_limit_bulk_email_per_month: int = 3000
+    # Short-window burst limit, separate from the daily quotas above - caps
+    # rapid-fire requests (double-click, retry loop, no search-box debounce)
+    # within the same day's allowance. Same limit/window pair reused across
+    # tools unless one needs its own.
+    rate_limit_burst_limit: int = 3
+    rate_limit_burst_window_seconds: int = 10
 
     # ── LinkedIn Scraping ────────────────────────────────────────────────────
     # Primary scraper — RAPIDAPI_KEY from RapidAPI dashboard
@@ -104,6 +110,36 @@ class Settings(BaseSettings):
     adzuna_app_id: str = ""
     adzuna_app_key: str = ""
     adzuna_base_url: str = "https://api.adzuna.com/v1/api"
+    # PLACEHOLDER - confirm against the actual Adzuna account's plan quota
+    # (dashboard or contract), then set the real number. This is a global
+    # budget shared across every user, not a per-user limit - it exists to
+    # stop the app's aggregate usage from exhausting Adzuna's own account-level
+    # daily quota even when every individual user is well under their own
+    # per-day cap (the same failure shape as the Upstash Redis quota
+    # exhaustion hit earlier - a shared external resource exhausted by
+    # aggregate legitimate use, not abuse). Deliberately set a bit under
+    # whatever the real quota is once known, to leave safety margin.
+    adzuna_daily_call_budget: int = 200
+    # PLACEHOLDER - Bundesagentur is an unofficial/reverse-engineered endpoint
+    # (no developer program, no published rate limit) - conservative estimate
+    # until either confirmed live or an actual block/429 pattern is observed.
+    bundesagentur_daily_call_budget: int = 300
+    # PLACEHOLDER - Arbeitnow has no published hard limit, only a soft "please
+    # don't abuse this" ask. Largely redundant with its own 30-minute shared
+    # page cache (providers/arbeitnow.py), which already bounds real fetches
+    # to ~48/day regardless of search volume - this is a defense-in-depth
+    # ceiling for if that cache is ever bypassed or misconfigured, not the
+    # primary protection.
+    arbeitnow_daily_call_budget: int = 100
+    # Combined external-provider call budget for the whole Job Search tool,
+    # across every provider - a cost-governance ceiling distinct from any
+    # single provider's own quota. Catches aggregate cost growth that no
+    # per-provider budget would (e.g. a provider with no hard external quota
+    # of its own still costs real bandwidth/DB writes/compute at volume).
+    # PLACEHOLDER - tune from real usage/cost data once available; currently
+    # set below the sum of the three per-provider budgets above (600) as a
+    # deliberately stricter overall ceiling.
+    job_search_tool_daily_budget: int = 500
     job_search_timeout_seconds: int = 12
     # Postgres `jobs` cache row TTL, how long a cached listing is considered fresh.
     job_search_cache_ttl_days: int = 14

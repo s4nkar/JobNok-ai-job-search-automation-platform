@@ -116,6 +116,18 @@ async def check_rate_limit(user_id: str, tool: str, limit: int) -> tuple[bool, i
     return True, max(0, limit - new_count)
 
 
+async def check_burst_limit(user_id: str, tool: str, limit: int, window_seconds: int) -> bool:
+    """Short fixed-window burst limit, separate from check_rate_limit's daily
+    quota - protects against rapid-fire requests (double-click, a retry loop,
+    a search box with no debounce) within the same day's allowance, which the
+    daily quota alone doesn't address since it only caps total volume, not
+    arrival rate. Same INCR-first pattern as check_rate_limit, just a much
+    shorter window (e.g. 3 requests / 10 seconds instead of N / day)."""
+    key = f"rl_burst:{user_id}:{tool}:{window_seconds}"
+    count = await increment_with_ttl(key, window_seconds)
+    return count <= limit
+
+
 async def get_cached(key: str) -> str | None:
     redis = _get_redis()
     return await redis.get(key)

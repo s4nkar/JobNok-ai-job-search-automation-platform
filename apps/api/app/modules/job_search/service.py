@@ -20,13 +20,15 @@ from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import settings
-from app.services.cache import acquire_lock, check_rate_limit, get_cached, set_cached
+from app.services.cache import acquire_lock, check_burst_limit, check_rate_limit, get_cached, set_cached
 from app.shared.utils import row_to_dict
 from app.modules.job_search import dedup, scoring
 from app.modules.job_search.providers import (
     ProviderError,
     ProviderSpec,
     applicable_providers,
+    check_provider_budget,
+    check_tool_budget,
     circuit_is_open,
     record_provider_result,
 )
@@ -51,7 +53,21 @@ def _parse_dt(s: str | None) -> datetime | None:
 async def _check_rate_limit_fail_open(user_id: str) -> int | None:
     """Returns remaining searches for today, or None if Redis is unreachable
     (fail-open, the request still proceeds, the frontend just can't show a
-    live count)."""
+    live count).
+
+    Checks two independent limits: a short burst window (catches a
+    double-click or a retry loop - the daily quota alone doesn't cap arrival
+    rate, only total volume) and the daily quota itself.
+    """
+    try:
+        burst_ok = await check_burst_limit(
+            user_id, "job_search", settings.rate_limit_burst_limit, settings.rate_limit_burst_window_seconds
+        )
+    except Exception:
+        burst_ok = True
+    if not burst_ok:
+        raise HTTPException(status_code=429, detail="Searching too quickly - please wait a few seconds and try again.")
+
     try:
         allowed, remaining = await check_rate_limit(user_id, "job_search", settings.rate_limit_job_search_per_day)
     except Exception:
@@ -265,9 +281,26 @@ async def _fetch_provider_safe(provider: ProviderSpec, payload: dict) -> tuple[l
     (no network call) until its cooldown expires, instead of every search
     paying the full request timeout on a call that's essentially guaranteed
     to fail.
+
+    Also checks the provider's global daily call budget (if it has one) -
+    protects a metered provider's own account-level quota from aggregate
+    exhaustion across all users, distinct from the circuit breaker (reacts
+    to failures) and the per-user daily limit (doesn't aggregate). And the
+    whole-tool budget shared across every provider - a cost-governance
+    ceiling that catches aggregate growth no single provider's own budget
+    would (e.g. a provider with no hard external quota still costs real
+    compute at volume).
     """
     if await circuit_is_open(provider.name):
         logger.info("Skipping %s - circuit open (repeated recent failures)", provider.name)
+        return [], None
+
+    if not await check_provider_budget(provider):
+        logger.info("Skipping %s - global daily call budget exhausted", provider.name)
+        return [], None
+
+    if not await check_tool_budget():
+        logger.info("Skipping %s - whole-tool daily call budget exhausted", provider.name)
         return [], None
 
     try:
