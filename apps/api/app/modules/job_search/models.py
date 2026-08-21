@@ -137,6 +137,7 @@ async def query_job_cache_candidates(
     posted_within_hours: int | None,
     limit: int,
     include_null_country: bool = False,
+    allowed_sources: set[str] | None = None,
 ) -> list[Job]:
     """Coarse, bounded pre-filter over the shared `jobs` cache, not exact
     matching, just narrows the candidate pool. Callers run their own
@@ -155,6 +156,15 @@ async def query_job_cache_candidates(
     behavior, since it's unverified whether every caller's own scorer
     (specifically startup_hunt's) handles a missing country signal as
     gracefully as job_search's does.
+
+    allowed_sources: restricts results to these `Job.source` values (e.g.
+    only currently-enabled providers). None = no filter (every cached
+    source is eligible), matching the original behavior. Needed because a
+    provider's kill switch (e.g. `job_search_adzuna_enabled=False`) only
+    gates *live* fetches via `applicable_providers()` - without this, a
+    disabled provider's already-cached rows would keep surfacing from the
+    DB indefinitely (up to their 14-day TTL), silently defeating the kill
+    switch's whole point.
     """
     country_condition = (
         or_(Job.country == country_code, Job.country.is_(None))
@@ -162,6 +172,9 @@ async def query_job_cache_candidates(
         else Job.country == country_code
     )
     conditions = [Job.expires_at > datetime.now(timezone.utc), country_condition]
+
+    if allowed_sources is not None:
+        conditions.append(Job.source.in_(allowed_sources))
 
     if posted_within_hours is not None:
         cutoff = datetime.now(timezone.utc) - timedelta(hours=posted_within_hours)

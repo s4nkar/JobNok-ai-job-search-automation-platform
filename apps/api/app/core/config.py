@@ -104,7 +104,7 @@ class Settings(BaseSettings):
     # Per-provider kill switch, independent of whether credentials are
     # configured - flip to false to pull a provider out of search immediately
     # (e.g. an unofficial API breaking) without touching code or removing keys.
-    job_search_adzuna_enabled: bool = True
+    job_search_adzuna_enabled: bool = True 
     job_search_bundesagentur_enabled: bool = True
     # Arbeitnow has no country field, so it can never reliably participate in
     # the main location-filtered/ranked results - it's shown separately as

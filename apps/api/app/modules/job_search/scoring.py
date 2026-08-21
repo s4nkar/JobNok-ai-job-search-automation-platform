@@ -48,6 +48,25 @@ def tokenize(value: str) -> list[str]:
     return [token for token in re.findall(r"[a-z0-9]+", value.lower()) if len(token) > 1]
 
 
+def _dedupe_preferences(preferences: dict[str, Any]) -> dict[str, Any]:
+    """Strip anything from keywords that's already shown elsewhere (as a
+    language or the company stage). A term can legitimately belong to both -
+    "english" is genuinely a keyword-ish concept and a language, "seed" is
+    genuinely a keyword and a company stage - but the frontend renders
+    keywords/languages/company_stage as separate pill lists with no
+    cross-field dedup, so showing the same term twice reads as a bug, not a
+    feature. Applied uniformly to both the LLM and heuristic-fallback paths,
+    since the fallback (a plain tokenize() of the prompt) has the identical
+    overlap risk - e.g. it'll put "english" in both keywords and languages
+    just as easily as the LLM would.
+    """
+    exclude = set(preferences["languages"])
+    if preferences["company_stage"]:
+        exclude.add(preferences["company_stage"])
+    preferences["keywords"] = [kw for kw in preferences["keywords"] if kw not in exclude]
+    return preferences
+
+
 async def parse_preferences_prompt(prompt: str | None) -> dict[str, Any]:
     if not prompt or not prompt.strip():
         return {"keywords": [], "languages": [], "company_stage": None, "notes": []}
@@ -69,21 +88,21 @@ Keep values short and normalized."""
             end = text.rfind("}") + 1
             if start >= 0 and end > start:
                 data = json.loads(text[start:end])
-                return {
+                return _dedupe_preferences({
                     "keywords": [str(v).strip().lower() for v in data.get("keywords", []) if str(v).strip()],
                     "languages": [str(v).strip().lower() for v in data.get("languages", []) if str(v).strip()],
                     "company_stage": (str(data.get("company_stage")).strip().lower() if data.get("company_stage") else None),
                     "notes": [str(v).strip() for v in data.get("notes", []) if str(v).strip()],
-                }
+                })
         except Exception:
             pass
 
-        return {
+        return _dedupe_preferences({
             "keywords": tokenize(prompt),
             "languages": ["english"] if "english" in prompt.lower() else [],
             "company_stage": None,
             "notes": [],
-        }
+        })
 
     return await cached_prompt_parse(
         "job_search_preferences", prompt.strip(), settings.prompt_parse_cache_ttl_seconds, _parse
