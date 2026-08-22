@@ -113,6 +113,7 @@ def _job_row_to_opportunity_dict(row: Job) -> dict[str, Any]:
         "company_payload": {},
         "contacts": [],
         "raw_text": raw_text,
+        "description_text": row.description or None,
         "citation": {
             "source_name": "TheirStack",
             "canonical_url": row.canonical_url,

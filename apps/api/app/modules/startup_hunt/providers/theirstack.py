@@ -93,6 +93,7 @@ def _normalize_items(
                 "company_payload": company_payload,
                 "contacts": [],
                 "raw_text": f"{title} {company_name} {description}",
+                "description_text": description or None,
                 "citation": {
                     "source_name": source_name,
                     "canonical_url": canonicalize_url(source_url) if source_url else "",

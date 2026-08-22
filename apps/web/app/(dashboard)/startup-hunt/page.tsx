@@ -24,14 +24,12 @@ import {
   ChevronUp,
   Compass,
   ExternalLink,
-  Info,
   ListPlus,
   Loader2,
   Mail,
   MapPin,
   Plus,
   SlidersHorizontal,
-  Sparkles,
   Trash2,
   UserRound,
 } from 'lucide-react'
@@ -44,16 +42,12 @@ const schema = z.object({
   result_limit: z.coerce.number().int().min(1).max(50),
   include_seeded_sources: z.enum(['false', 'true']).default('false'),
   remote_only: z.enum(['false', 'true']).default('false'),
-  direct_links_only: z.enum(['false', 'true']).default('false'),
   english_friendly_only: z.enum(['false', 'true']).default('false'),
   company_stage: z.string().optional(),
   strategy_prompt: z.string().optional(),
   // Per-provider enabled/limit toggles used to live here (crawler_enabled,
   // theirstack_limit, etc.) - removed. Every provider's on/off state and
   // result cap is server-side config now, not a per-search choice.
-  // seeded_limit stays - that's a real data-scope choice ("include my own
-  // watchlist"), not a provider toggle.
-  seeded_limit: z.coerce.number().int().min(0).max(50),
 })
 
 type FormData = z.infer<typeof schema>
@@ -67,11 +61,9 @@ const DEFAULT_VALUES: FormData = {
   result_limit: 30,
   include_seeded_sources: 'false',
   remote_only: 'false',
-  direct_links_only: 'false',
   english_friendly_only: 'false',
   company_stage: '',
   strategy_prompt: 'applied ai engineer, mid-level, 3+ years experience, not senior/staff/principal, early-stage, founder-led, english friendly, relocation friendly, modern AI stack (LLMs, RAG, agents, FastAPI, MLOps), fresh hiring momentum, avoid recruiters and large enterprises.',
-  seeded_limit: 0,
 }
 
 // Score labels are informational tags, not status — several can appear at
@@ -85,8 +77,6 @@ const labelClasses: Record<string, string> = {
   'Germany Match': 'bg-slate-100 text-slate-700 hover:bg-slate-100',
   'AI/ML Fit': 'bg-slate-100 text-slate-700 hover:bg-slate-100',
 }
-
-const SOURCE_DIAGNOSTIC_ORDER: ProviderBucket[] = ['ats', 'theirstack']
 
 const PROVIDER_LABELS: Record<ProviderBucket, string> = {
   crawler: 'Crawler',
@@ -129,17 +119,21 @@ export default function StartupHuntPage() {
   const [overflowResults, setOverflowResults] = useState<StartupHuntResult[]>([])
   const [filteredOut, setFilteredOut] = useState<StartupHuntResponse['filtered_out']>([])
   const [parsedStrategy, setParsedStrategy] = useState<StartupHuntResponse['parsed_strategy'] | null>(null)
-  const [sourceCount, setSourceCount] = useState(0)
-  const [sourceResultCounts, setSourceResultCounts] = useState<Record<string, number>>({})
-  const [sourceDiagnostics, setSourceDiagnostics] = useState<StartupHuntResponse['source_diagnostics']>({})
   const [expandedCards, setExpandedCards] = useState<Record<string, boolean>>({})
   const [error, setError] = useState<string | null>(null)
+  // Mobile/tablet-only: filters start collapsed so results are reachable
+  // without scrolling past every field first. Ignored at lg+ (always expanded).
+  const [filtersOpen, setFiltersOpen] = useState(false)
   const { toast } = useToast()
 
   const { register, handleSubmit, setValue, watch, formState: { errors } } = useForm<FormData>({
     resolver: zodResolver(schema),
     defaultValues: DEFAULT_VALUES,
   })
+
+  const watchedQuery = watch('query')
+  const watchedLocation = watch('location')
+  const filterSummary = [watchedQuery, watchedLocation].filter(Boolean).join(' · ')
 
   // ── My Sources dialog ──────────────────────────────────────────────
   const queryClient = useQueryClient()
@@ -218,7 +212,6 @@ export default function StartupHuntPage() {
           company_stage: data.company_stage?.trim() || null,
           include_seeded_sources: data.include_seeded_sources === 'true',
           remote_only: data.remote_only === 'true',
-          direct_links_only: data.direct_links_only === 'true',
           english_friendly_only: data.english_friendly_only === 'true',
           strategy_prompt: data.strategy_prompt?.trim() || null,
         }),
@@ -230,22 +223,14 @@ export default function StartupHuntPage() {
         setOverflowResults([])
         setFilteredOut([])
         setParsedStrategy(null)
-        setSourceCount(0)
-        setSourceResultCounts({})
-        setSourceDiagnostics({})
         setExpandedCards({})
         return
       }
       const payload = json as StartupHuntResponse
-      const diagnostics = payload.source_diagnostics || {}
-      const enabledProviders = Object.values(diagnostics).filter((diagnostic) => diagnostic?.enabled).length
       setResults(payload.results)
       setOverflowResults(payload.overflow_results || [])
       setFilteredOut(payload.filtered_out || [])
       setParsedStrategy(payload.parsed_strategy)
-      setSourceCount(enabledProviders || payload.configured_source_count)
-      setSourceResultCounts(payload.source_result_counts || {})
-      setSourceDiagnostics(diagnostics)
       setExpandedCards({})
     } catch {
       setError('Network error. Please try again.')
@@ -289,11 +274,9 @@ export default function StartupHuntPage() {
             country: watch('country') || null,
             posted_within_hours: watch('posted_within_hours'),
             include_seeded_sources: watch('include_seeded_sources') === 'true',
-            direct_links_only: watch('direct_links_only') === 'true',
             english_friendly_only: watch('english_friendly_only') === 'true',
             company_stage: watch('company_stage') || null,
             strategy_prompt: watch('strategy_prompt') || null,
-            seeded_limit: watch('seeded_limit'),
           },
           contacts: job.contacts,
         }),
@@ -340,16 +323,6 @@ export default function StartupHuntPage() {
     setExpandedCards((prev) => ({ ...prev, [key]: !prev[key] }))
   }
 
-  const rankedResultsWithBands = results.map((result, index) => {
-    const bucket = (result.source_bucket || 'crawler') as ProviderBucket
-    const previousBucket = index > 0 ? ((results[index - 1].source_bucket || 'crawler') as ProviderBucket) : null
-    return {
-      result,
-      bucket,
-      showBand: index === 0 || previousBucket !== bucket,
-    }
-  })
-
   return (
     <div className="animate-fade-in">
       <div className="flex items-start justify-between gap-4 mb-6">
@@ -374,244 +347,187 @@ export default function StartupHuntPage() {
         </Button>
       </div>
 
-      <div className="flex items-start gap-2.5 bg-indigo-50 border border-indigo-100 text-indigo-700 rounded-xl px-4 py-2.5 mb-6 text-sm">
-        <Info className="h-4 w-4 flex-shrink-0 text-indigo-500 mt-0.5" />
-        <span>
-          <strong>{config.rateLimits.startupHuntPerDay} hunts/day</strong> on the free tier. This tool blends ATS roles with startup
-          lead discovery and contact enrichment, then ranks them for early access and outreach potential.
-        </span>
-      </div>
-
-      <div className="grid grid-cols-[320px_1fr] gap-5 items-start">
+      {/* lg:, not md: - at md (768px, iPad portrait) a fixed 320px sidebar
+          would leave the results column only ~420px wide while its cards'
+          internal sm: breakpoints (640px) still key off full viewport width,
+          not that column's actual space, so they'd assume room they don't
+          have. Staying stacked through lg: keeps the column = viewport width
+          the whole time those sm: breakpoints are active. */}
+      <div className="grid grid-cols-1 lg:grid-cols-[320px_1fr] gap-5 items-start">
         <form
           onSubmit={handleSubmit(onSubmit)}
-          className="bg-white rounded-2xl border border-slate-100 shadow-sm p-5 space-y-5 sticky top-6"
+          className="bg-white rounded-2xl border border-slate-100 shadow-sm lg:sticky lg:top-6 lg:max-h-[calc(100vh-2rem)] lg:flex lg:flex-col overflow-hidden"
         >
-          <div className="flex items-center gap-2 pb-1 border-b border-slate-100">
-            <SlidersHorizontal className="h-3.5 w-3.5 text-slate-400" />
-            <span className="text-xs font-semibold text-slate-500 uppercase tracking-wider">Hunt Strategy</span>
-          </div>
-
-          <div className="space-y-1.5">
-            <Label className="text-xs font-medium text-slate-600">Target role</Label>
-            <Input
-              placeholder="AI Engineer"
-              className="rounded-xl h-9 text-sm border-slate-200 focus:border-indigo-300 focus:ring-1 focus:ring-indigo-200"
-              {...register('query')}
-            />
-            {errors.query && <p className="text-xs text-destructive">{errors.query.message}</p>}
-          </div>
-
-          <div className="space-y-1.5">
-            <Label className="text-xs font-medium text-slate-600">Cities / regions</Label>
-            <Textarea
-              rows={2}
-              placeholder="Berlin, Munich, Hamburg, Frankfurt, Cologne, Remote"
-              className="rounded-xl text-sm border-slate-200 focus:border-indigo-300 focus:ring-1 focus:ring-indigo-200"
-              {...register('location')}
-            />
-            <p className="text-[10px] text-slate-400 leading-relaxed">Comma-separated. Each city runs in parallel; add &quot;Remote&quot; to include remote roles.</p>
-            {errors.location && <p className="text-xs text-destructive">{errors.location.message}</p>}
-          </div>
-
-          <div className="space-y-1.5">
-            <Label className="text-xs font-medium text-slate-600">Country</Label>
-            <Input
-              placeholder="Germany"
-              className="rounded-xl h-9 text-sm border-slate-200 focus:border-indigo-300 focus:ring-1 focus:ring-indigo-200"
-              {...register('country')}
-            />
-          </div>
-
-          <div className="grid grid-cols-2 gap-3">
-            <div className="space-y-1.5">
-              <Label className="text-xs font-medium text-slate-600">Freshness</Label>
-              <Select value={String(watch('posted_within_hours'))} onValueChange={(v) => setValue('posted_within_hours', parseInt(v, 10))}>
-                <SelectTrigger className="rounded-xl h-9 text-sm border-slate-200"><SelectValue /></SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="24" className="text-sm">24 hours</SelectItem>
-                  <SelectItem value="72" className="text-sm">72 hours</SelectItem>
-                  <SelectItem value="168" className="text-sm">7 days</SelectItem>
-                </SelectContent>
-              </Select>
-            </div>
-            <div className="space-y-1.5">
-              <Label className="text-xs font-medium text-slate-600">Startup stage</Label>
-              <Select value={watch('company_stage') || 'any'} onValueChange={(v) => setValue('company_stage', v === 'any' ? '' : v)}>
-                <SelectTrigger className="rounded-xl h-9 text-sm border-slate-200"><SelectValue /></SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="any" className="text-sm">Any stage</SelectItem>
-                  <SelectItem value="pre-seed" className="text-sm">Pre-seed</SelectItem>
-                  <SelectItem value="seed" className="text-sm">Seed</SelectItem>
-                  <SelectItem value="series a" className="text-sm">Series A</SelectItem>
-                </SelectContent>
-              </Select>
-            </div>
-          </div>
-
-          <div className="space-y-1.5">
-            <Label className="text-xs font-medium text-slate-600">Result limit</Label>
-            <Input
-              type="number"
-              min={1}
-              max={50}
-              className="rounded-xl h-9 text-sm border-slate-200 focus:border-indigo-300 focus:ring-1 focus:ring-indigo-200"
-              {...register('result_limit')}
-            />
-          </div>
-
-          <div className="space-y-1.5">
-            <Label className="text-xs font-medium text-slate-600">Use curated watchlist</Label>
-            <Select value={watch('include_seeded_sources')} onValueChange={(v) => setValue('include_seeded_sources', v as 'false' | 'true')}>
-              <SelectTrigger className="rounded-xl h-9 text-sm border-slate-200"><SelectValue /></SelectTrigger>
-              <SelectContent>
-                <SelectItem value="false" className="text-sm">Off</SelectItem>
-                <SelectItem value="true" className="text-sm">On</SelectItem>
-              </SelectContent>
-            </Select>
-          </div>
-
-          <div className="space-y-1.5">
-            <Label className="text-xs font-medium text-slate-600">Watchlist cap</Label>
-            <Input
-              type="number"
-              min={0}
-              max={50}
-              className="rounded-xl h-9 text-sm border-slate-200 focus:border-indigo-300 focus:ring-1 focus:ring-indigo-200"
-              {...register('seeded_limit')}
-              disabled={watch('include_seeded_sources') !== 'true'}
-            />
-          </div>
-
-          <div className="space-y-1.5">
-            <Label className="text-xs font-medium text-slate-600">Remote only</Label>
-            <Select value={watch('remote_only')} onValueChange={(v) => setValue('remote_only', v as 'false' | 'true')}>
-              <SelectTrigger className="rounded-xl h-9 text-sm border-slate-200"><SelectValue /></SelectTrigger>
-              <SelectContent>
-                <SelectItem value="false" className="text-sm">Include onsite and hybrid</SelectItem>
-                <SelectItem value="true" className="text-sm">Remote only</SelectItem>
-              </SelectContent>
-            </Select>
-          </div>
-
-          <div className="space-y-1.5">
-            <Label className="text-xs font-medium text-slate-600">Direct links only</Label>
-            <Select value={watch('direct_links_only')} onValueChange={(v) => setValue('direct_links_only', v as 'false' | 'true')}>
-              <SelectTrigger className="rounded-xl h-9 text-sm border-slate-200"><SelectValue /></SelectTrigger>
-              <SelectContent>
-                <SelectItem value="false" className="text-sm">Allow ATS and lead sources</SelectItem>
-                <SelectItem value="true" className="text-sm">Only show direct company links</SelectItem>
-              </SelectContent>
-            </Select>
-          </div>
-
-          <div className="space-y-1.5">
-            <Label className="text-xs font-medium text-slate-600">English-friendly only</Label>
-            <Select value={watch('english_friendly_only')} onValueChange={(v) => setValue('english_friendly_only', v as 'false' | 'true')}>
-              <SelectTrigger className="rounded-xl h-9 text-sm border-slate-200"><SelectValue /></SelectTrigger>
-              <SelectContent>
-                <SelectItem value="true" className="text-sm">Prefer English-friendly teams</SelectItem>
-                <SelectItem value="false" className="text-sm">Show all teams</SelectItem>
-              </SelectContent>
-            </Select>
-          </div>
-
-          <div className="space-y-1.5">
-            <Label className="text-xs font-medium text-slate-600">Strategy prompt</Label>
-            <Textarea
-              rows={4}
-              placeholder="hidden gems, small startups, founder-led teams, low-competition, english-friendly, relocation support"
-              className="rounded-xl text-sm border-slate-200 focus:border-indigo-300 focus:ring-1 focus:ring-indigo-200"
-              {...register('strategy_prompt')}
-            />
-          </div>
-
-          <Button
-            type="submit"
-            disabled={loading}
-            className="w-full gradient-brand text-white border-0 shadow-sm hover:opacity-90 transition-opacity rounded-xl h-9 text-sm font-semibold"
+          {/* Mobile/tablet-only collapsible header - filters start closed so
+              results are reachable without scrolling past every field first. */}
+          <button
+            type="button"
+            onClick={() => setFiltersOpen((prev) => !prev)}
+            className="w-full lg:hidden flex items-center justify-between gap-3 px-5 py-3.5"
           >
-            {loading
-              ? <><Loader2 className="h-3.5 w-3.5 mr-2 animate-spin" />Hunting…</>
-              : <><Compass className="h-3.5 w-3.5 mr-2" />Run Startup Hunt</>
-            }
-          </Button>
+            <span className="flex items-center gap-2 text-xs font-semibold text-slate-500 uppercase tracking-wider flex-shrink-0">
+              <SlidersHorizontal className="h-3.5 w-3.5 text-slate-400" />
+              Filters
+            </span>
+            <span className="flex items-center gap-1.5 text-xs text-slate-500 font-normal normal-case min-w-0">
+              <span className="truncate">{filterSummary}</span>
+              {filtersOpen ? <ChevronUp className="h-3.5 w-3.5 flex-shrink-0" /> : <ChevronDown className="h-3.5 w-3.5 flex-shrink-0" />}
+            </span>
+          </button>
+
+          <div className={`${filtersOpen ? 'block' : 'hidden'} lg:block lg:flex-1 lg:min-h-0 lg:overflow-y-auto scrollbar-hide lg:scroll-fade-y p-5 lg:pt-5 space-y-5 ${filtersOpen ? 'border-t border-slate-100 lg:border-t-0' : ''}`}>
+            <div className="hidden lg:flex items-center gap-2 pb-1 border-b border-slate-100">
+              <SlidersHorizontal className="h-3.5 w-3.5 text-slate-400" />
+              <span className="text-xs font-semibold text-slate-500 uppercase tracking-wider">Hunt Strategy</span>
+            </div>
+
+            <div className="space-y-1.5">
+              <Label className="text-xs font-medium text-slate-600">Target role</Label>
+              <Input
+                placeholder="AI Engineer"
+                className="rounded-xl h-9 text-sm border-slate-200 focus:border-indigo-300 focus:ring-1 focus:ring-indigo-200"
+                {...register('query')}
+              />
+              {errors.query && <p className="text-xs text-destructive">{errors.query.message}</p>}
+            </div>
+
+            <div className="space-y-1.5">
+              <Label className="text-xs font-medium text-slate-600">Cities / regions</Label>
+              <Textarea
+                rows={2}
+                placeholder="Berlin, Munich, Hamburg, Frankfurt, Cologne, Remote"
+                className="rounded-xl text-sm border-slate-200 focus:border-indigo-300 focus:ring-1 focus:ring-indigo-200"
+                {...register('location')}
+              />
+              <p className="text-[10px] text-slate-400 leading-relaxed">Comma-separated. Each city runs in parallel; add &quot;Remote&quot; to include remote roles.</p>
+              {errors.location && <p className="text-xs text-destructive">{errors.location.message}</p>}
+            </div>
+
+            <div className="space-y-1.5">
+              <Label className="text-xs font-medium text-slate-600">Country</Label>
+              <Input
+                placeholder="Germany"
+                className="rounded-xl h-9 text-sm border-slate-200 focus:border-indigo-300 focus:ring-1 focus:ring-indigo-200"
+                {...register('country')}
+              />
+            </div>
+
+            <div className="grid grid-cols-2 gap-3">
+              <div className="space-y-1.5">
+                <Label className="text-xs font-medium text-slate-600">Freshness</Label>
+                <Select value={String(watch('posted_within_hours'))} onValueChange={(v) => setValue('posted_within_hours', parseInt(v, 10))}>
+                  <SelectTrigger className="rounded-xl h-9 text-sm border-slate-200"><SelectValue /></SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="24" className="text-sm">24 hours</SelectItem>
+                    <SelectItem value="72" className="text-sm">72 hours</SelectItem>
+                    <SelectItem value="168" className="text-sm">7 days</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+              <div className="space-y-1.5">
+                <Label className="text-xs font-medium text-slate-600">Startup stage</Label>
+                <Select value={watch('company_stage') || 'any'} onValueChange={(v) => setValue('company_stage', v === 'any' ? '' : v)}>
+                  <SelectTrigger className="rounded-xl h-9 text-sm border-slate-200"><SelectValue /></SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="any" className="text-sm">Any stage</SelectItem>
+                    <SelectItem value="pre-seed" className="text-sm">Pre-seed</SelectItem>
+                    <SelectItem value="seed" className="text-sm">Seed</SelectItem>
+                    <SelectItem value="series a" className="text-sm">Series A</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+            </div>
+
+            <div className="space-y-1.5">
+              <Label className="text-xs font-medium text-slate-600">Result limit</Label>
+              <Input
+                type="number"
+                min={1}
+                max={50}
+                className="rounded-xl h-9 text-sm border-slate-200 focus:border-indigo-300 focus:ring-1 focus:ring-indigo-200"
+                {...register('result_limit')}
+              />
+            </div>
+
+            <div className="space-y-1.5">
+              <Label className="text-xs font-medium text-slate-600">Use curated watchlist</Label>
+              <Select value={watch('include_seeded_sources')} onValueChange={(v) => setValue('include_seeded_sources', v as 'false' | 'true')}>
+                <SelectTrigger className="rounded-xl h-9 text-sm border-slate-200"><SelectValue /></SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="false" className="text-sm">Off</SelectItem>
+                  <SelectItem value="true" className="text-sm">On</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+
+            <div className="space-y-1.5">
+              <Label className="text-xs font-medium text-slate-600">Remote only</Label>
+              <Select value={watch('remote_only')} onValueChange={(v) => setValue('remote_only', v as 'false' | 'true')}>
+                <SelectTrigger className="rounded-xl h-9 text-sm border-slate-200"><SelectValue /></SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="false" className="text-sm">Include onsite and hybrid</SelectItem>
+                  <SelectItem value="true" className="text-sm">Remote only</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+
+            <div className="space-y-1.5">
+              <Label className="text-xs font-medium text-slate-600">English-friendly only</Label>
+              <Select value={watch('english_friendly_only')} onValueChange={(v) => setValue('english_friendly_only', v as 'false' | 'true')}>
+                <SelectTrigger className="rounded-xl h-9 text-sm border-slate-200"><SelectValue /></SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="true" className="text-sm">Prefer English-friendly teams</SelectItem>
+                  <SelectItem value="false" className="text-sm">Show all teams</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+
+            <div className="space-y-1.5">
+              <Label className="text-xs font-medium text-slate-600">Strategy prompt</Label>
+              <Textarea
+                rows={4}
+                placeholder="hidden gems, small startups, founder-led teams, low-competition, english-friendly, relocation support"
+                className="rounded-xl text-sm border-slate-200 focus:border-indigo-300 focus:ring-1 focus:ring-indigo-200 resize-none"
+                {...register('strategy_prompt')}
+              />
+              {parsedStrategy && (parsedStrategy.keywords.length > 0 || parsedStrategy.languages.length > 0 || parsedStrategy.preferred_cities.length > 0 || parsedStrategy.company_stage) && (
+                <div className="flex flex-wrap gap-1.5 pt-1">
+                  {parsedStrategy.keywords.map((keyword) => (
+                    <span key={keyword} className="inline-flex items-center px-2 py-0.5 rounded-full text-[11px] font-medium bg-slate-100 text-slate-700">{keyword}</span>
+                  ))}
+                  {parsedStrategy.languages.map((language) => (
+                    <span key={language} className="inline-flex items-center px-2 py-0.5 rounded-full text-[11px] font-medium bg-slate-50 text-slate-600 border border-slate-200">{language}</span>
+                  ))}
+                  {parsedStrategy.preferred_cities.map((city) => (
+                    <span key={city} className="inline-flex items-center px-2 py-0.5 rounded-full text-[11px] font-medium bg-slate-50 text-slate-600 border border-slate-200">{city}</span>
+                  ))}
+                  {parsedStrategy.company_stage && (
+                    <span className="inline-flex items-center px-2 py-0.5 rounded-full text-[11px] font-medium bg-amber-50 text-amber-800 border border-amber-100">{parsedStrategy.company_stage}</span>
+                  )}
+                </div>
+              )}
+            </div>
+
+            <Button
+              type="submit"
+              disabled={loading}
+              className="w-full gradient-brand text-white border-0 shadow-sm hover:opacity-90 transition-opacity rounded-xl h-9 text-sm font-semibold"
+            >
+              {loading
+                ? <><Loader2 className="h-3.5 w-3.5 mr-2 animate-spin" />Hunting…</>
+                : <><Compass className="h-3.5 w-3.5 mr-2" />Run Startup Hunt</>
+              }
+            </Button>
+            <p className="text-center text-[11px] text-slate-400">
+              Up to {config.rateLimits.startupHuntPerDay} hunts/day on the free tier
+            </p>
+          </div>
         </form>
 
         <div className="min-w-0 space-y-4">
           {error && (
             <div className="bg-red-50 border border-red-100 text-red-700 rounded-xl px-4 py-3 text-sm">
               {error}
-            </div>
-          )}
-
-          {parsedStrategy && (
-            <div className="bg-white rounded-2xl border border-slate-100 shadow-sm p-4">
-              <div className="flex items-center gap-2 mb-3">
-                <Sparkles className="h-4 w-4 text-amber-500" />
-                <p className="text-sm font-semibold text-slate-700">Parsed Hunt Strategy</p>
-                <span className="text-xs text-slate-400 ml-auto">{sourceCount} providers enabled | {results.length} ranked results</span>
-              </div>
-              <div className="flex flex-wrap gap-1.5">
-                {parsedStrategy.keywords.map((keyword) => (
-                  <span key={keyword} className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-slate-100 text-slate-700">{keyword}</span>
-                ))}
-                {parsedStrategy.languages.map((language) => (
-                  <span key={language} className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-slate-50 text-slate-600 border border-slate-200">{language}</span>
-                ))}
-                {parsedStrategy.preferred_cities.map((city) => (
-                  <span key={city} className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-slate-50 text-slate-600 border border-slate-200">{city}</span>
-                ))}
-                {parsedStrategy.company_stage && (
-                  <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-amber-50 text-amber-800 border border-amber-100">{parsedStrategy.company_stage}</span>
-                )}
-              </div>
-              {Object.keys(sourceResultCounts).length > 0 && (
-                <div className="flex flex-wrap gap-1.5 mt-3 pt-3 border-t border-slate-100">
-                  {SOURCE_DIAGNOSTIC_ORDER.map((bucket) => (
-                    <span key={bucket} className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-white text-slate-600 border border-slate-200">
-                      {bucketLabel(bucket)}: {sourceResultCounts[bucket] || 0}
-                    </span>
-                  ))}
-                </div>
-              )}
-              {Object.keys(sourceDiagnostics).length > 0 && (
-                <div className="grid grid-cols-2 gap-3 mt-3 pt-3 border-t border-slate-100">
-                  {SOURCE_DIAGNOSTIC_ORDER.map((bucket) => {
-                    const info = sourceDiagnostics[bucket]
-                    if (!info) return null
-                    const statusClasses = !info.enabled
-                      ? 'bg-slate-50 border-slate-200 text-slate-500'
-                      : !info.available
-                        ? 'bg-amber-50 border-amber-200 text-amber-900'
-                        : info.status === 'ok'
-                          ? 'bg-emerald-50 border-emerald-200 text-emerald-800'
-                          : info.status === 'error'
-                            ? 'bg-red-50 border-red-200 text-red-800'
-                            : info.status === 'filtered'
-                              ? 'bg-amber-50 border-amber-200 text-amber-800'
-                              : info.status === 'empty'
-                                ? 'bg-slate-50 border-slate-200 text-slate-700'
-                                : 'bg-slate-50 border-slate-200 text-slate-500'
-                    const stateLabel = !info.enabled ? 'Disabled' : !info.available ? 'Unavailable' : info.status
-                    return (
-                      <div key={bucket} className={`rounded-xl border p-3 ${statusClasses}`}>
-                        <div className="flex items-center justify-between gap-2 mb-1.5">
-                          <span className="text-xs font-semibold uppercase tracking-wide">{bucketLabel(bucket)}</span>
-                          <span className="text-[11px] font-semibold">{stateLabel}</span>
-                        </div>
-                        <p className="text-[11px] opacity-80 mb-1">Cap {info.requested_limit} | Accepted {info.accepted_count} | Raw {info.raw_count}</p>
-                        <p className="text-xs leading-5">{info.message}</p>
-                        {info.sources.length > 0 && (
-                          <p className="text-[11px] mt-1.5 opacity-80">
-                            {info.sources.map((source) => source.error ? `${source.name}: ${source.error}` : `${source.name}: ${source.raw_count}`).join(' | ')}
-                          </p>
-                        )}
-                      </div>
-                    )
-                  })}
-                </div>
-              )}
             </div>
           )}
 
@@ -672,9 +588,10 @@ export default function StartupHuntPage() {
             </div>
           )}
 
-          {rankedResultsWithBands.length > 0 && (
+          {results.length > 0 && (
             <div className="space-y-5">
-              {rankedResultsWithBands.map(({ result: job, bucket, showBand }, index) => {
+              {results.map((job, index) => {
+                const bucket = job.source_bucket || 'crawler'
                 const resultKey = job.canonical_job_url || `${job.company_name}-${job.role_title}-${job.location}`
                 const primaryLink = job.direct_apply_url || job.company_careers_url || job.portal_job_url || job.company_website_url
                 const hasApplyPath = Boolean(job.direct_apply_url)
@@ -688,17 +605,6 @@ export default function StartupHuntPage() {
                 const expanded = Boolean(expandedCards[resultKey])
                 return (
                   <div key={resultKey} className="space-y-3">
-                    {showBand && (
-                      <div className="flex items-center justify-between gap-3 px-4 py-2 bg-slate-100 rounded-lg">
-                        <div>
-                          <h2 className="text-sm font-semibold text-slate-800">{bucketLabel(bucket)}</h2>
-                          <p className="text-xs text-slate-500">Provider band continues from global rank #{index + 1}</p>
-                        </div>
-                        <span className="inline-flex items-center px-2.5 py-1 rounded-full text-xs font-medium bg-slate-100 text-slate-700">
-                          Ranked stream
-                        </span>
-                      </div>
-                    )}
                     <div className="bg-white rounded-2xl border border-slate-100 shadow-sm p-5">
                       <div className="flex items-start justify-between gap-4">
                         <div className="min-w-0">
@@ -707,7 +613,7 @@ export default function StartupHuntPage() {
                             <span className="inline-flex items-center px-2 py-0.5 rounded-md text-[10px] font-semibold bg-slate-100 text-slate-700 border border-slate-200">
                               Rank #{index + 1}
                             </span>
-                            <span className="inline-flex items-center px-2 py-0.5 rounded-md text-[10px] font-semibold bg-slate-50 text-slate-600 border border-slate-200">
+                            {/* <span className="inline-flex items-center px-2 py-0.5 rounded-md text-[10px] font-semibold bg-slate-50 text-slate-600 border border-slate-200">
                               {bucketLabel(bucket)}
                             </span>
                             {job.cache_hit && (
@@ -717,7 +623,7 @@ export default function StartupHuntPage() {
                               >
                                 Cached · {job.source_name}
                               </span>
-                            )}
+                            )} */}
                             {job.score_labels.map((label) => (
                               <span key={label} className={`inline-flex items-center px-2 py-0.5 rounded-md text-[10px] font-semibold border ${labelClasses[label] || 'bg-slate-100 text-slate-700 border-slate-200'}`}>
                                 {label}
@@ -733,8 +639,8 @@ export default function StartupHuntPage() {
                           <div className="flex items-center gap-2 text-xs text-slate-500 mt-1.5 flex-wrap">
                             <MapPin className="h-3 w-3" />
                             <span>{job.location}</span>
-                            <span>·</span>
-                            <span>{job.source_name}</span>
+                            {/* <span>·</span>
+                            <span>{job.source_name}</span> */}
                             {job.posted_at && <><span>·</span><span>{formatDate(job.posted_at)}</span></>}
                             <span>·</span>
                             <span className="font-semibold text-indigo-600">Score {job.score_total}</span>
@@ -787,24 +693,18 @@ export default function StartupHuntPage() {
                         </div>
                       </div>
 
-                      <div className="grid grid-cols-2 gap-4 mt-4">
-                        <div className="rounded-xl border border-slate-100 bg-slate-50 p-3.5 space-y-2">
-                          <p className="text-[10px] font-bold text-slate-500 uppercase tracking-widest">Main signals</p>
-                          {compactReasons(job.score_reasons).length > 0 ? compactReasons(job.score_reasons).map((reason) => (
-                            <p key={reason} className="text-sm text-slate-700">{reason}</p>
-                          )) : <p className="text-sm text-slate-400">No ranking reasons captured.</p>}
+                      <div className="rounded-xl border border-slate-100 p-3.5 space-y-2">
+                        <div className="flex items-center gap-2">
+                          <Building2 className="h-3.5 w-3.5 text-slate-400" />
+                          <p className="text-[10px] font-bold text-slate-500 uppercase tracking-widest">Citation</p>
                         </div>
-
-                        <div className="rounded-xl border border-slate-100 bg-slate-50 p-3.5 space-y-2">
-                          <p className="text-[10px] font-bold text-slate-500 uppercase tracking-widest">Quick view</p>
-                          <p className="text-sm text-slate-700">
-                            {job.opportunity_kind === 'job' ? 'Job result' : 'Outreach lead'} from {job.source_name}
-                          </p>
-                          <p className="text-sm text-slate-700">
-                            {job.direct_apply_url ? 'Direct apply path available.' : job.company_careers_url ? 'Company careers page available.' : 'Lead source for follow-up and outreach.'}
-                          </p>
+                        <div className="flex flex-wrap gap-1.5">
+                          {job.citation.evidence.map((line) => (
+                            <span key={line} className="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-medium bg-white text-slate-600 border border-slate-200">{line}</span>
+                          ))}
                         </div>
                       </div>
+
 
                       <div className="mt-4">
                         <button
@@ -822,80 +722,25 @@ export default function StartupHuntPage() {
                           <div className="rounded-xl border border-slate-100 bg-slate-50 p-3.5 space-y-2">
                             <p className="text-[10px] font-bold text-slate-500 uppercase tracking-widest">Full ranking details</p>
                             {job.score_reasons.length > 0 ? job.score_reasons.map((reason) => (
-                              <p key={reason} className="text-sm text-slate-700">{reason}</p>
+                              <p key={reason} className="text-xs text-slate-700">{reason}</p>
                             )) : <p className="text-sm text-slate-400">No extra ranking reasons captured.</p>}
                           </div>
 
-                          <div className="rounded-xl border border-slate-100 bg-slate-50 p-3.5 space-y-2">
-                            <p className="text-[10px] font-bold text-slate-500 uppercase tracking-widest">Startup profile</p>
-                            {(job.company_website_url || job.company_careers_url || job.portal_job_url) && (
-                              <div className="text-xs text-slate-600 space-y-1">
-                                {job.company_website_url && <p><span className="font-medium">Website:</span> {job.company_website_url}</p>}
-                                {job.company_careers_url && <p><span className="font-medium">Careers:</span> {job.company_careers_url}</p>}
-                                {job.portal_job_url && <p><span className="font-medium">Source:</span> {job.portal_job_url}</p>}
+                          {job.description_text && (
+                            <div className="rounded-xl border border-slate-100 bg-slate-50 p-3.5 space-y-2">
+                              <p className="text-[10px] font-bold text-slate-500 uppercase tracking-widest">Job Description</p>
+                              <div className="max-h-[28rem] overflow-y-auto scrollbar-hide">
+                                <p className="text-sm text-slate-700 whitespace-pre-wrap leading-relaxed">
+                                  {job.description_text}
+                                </p>
                               </div>
-                            )}
-                            {job.company.ai_relevance && (
-                              <p className="text-xs text-slate-600"><span className="font-medium">Company signal:</span> {job.company.ai_relevance}</p>
-                            )}
-                          </div>
-
-                          <div className="rounded-xl border border-slate-100 p-3.5 space-y-3">
-                            <div className="flex items-center gap-2">
-                              <UserRound className="h-3.5 w-3.5 text-slate-400" />
-                              <p className="text-[10px] font-bold text-slate-500 uppercase tracking-widest">Contacts</p>
+                              {primaryLink && (
+                                <p className="text-xs text-slate-400 mt-2">
+                                  Open the job to read the full posting.
+                                </p>
+                              )}
                             </div>
-                            {job.contacts.length === 0 ? (
-                              <p className="text-sm text-slate-400">No contact surfaced yet from the configured source.</p>
-                            ) : (
-                              <div className="grid grid-cols-2 gap-3">
-                                {job.contacts.map((contact) => (
-                                  <div key={`${contact.name}-${contact.linkedin_url || contact.email || contact.title}`} className="rounded-xl bg-slate-50 border border-slate-100 p-3">
-                                    <p className="text-sm font-semibold text-slate-900">{contact.name}</p>
-                                    <p className="text-xs text-slate-600 mt-0.5">{contact.title}</p>
-                                    <p className="text-[10px] text-slate-400 mt-0.5">{contact.contact_type}</p>
-                                    {contact.email && (
-                                      <p className="text-xs text-slate-700 mt-2 flex items-center gap-1">
-                                        <Mail className="h-3 w-3 text-slate-400" />
-                                        {contact.email}
-                                      </p>
-                                    )}
-                                    <div className="flex flex-wrap gap-1 mt-2">
-                                      <span className="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-medium bg-white text-slate-600 border border-slate-200">{contact.source}</span>
-                                      <span className="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-medium bg-white text-slate-600 border border-slate-200">email {contact.email_confidence}</span>
-                                    </div>
-                                    {contact.linkedin_url && (
-                                      <Link href={contact.linkedin_url} target="_blank" className="text-xs text-indigo-600 hover:underline mt-2 inline-flex">
-                                        LinkedIn profile
-                                      </Link>
-                                    )}
-                                  </div>
-                                ))}
-                              </div>
-                            )}
-                          </div>
-
-                          <div className="rounded-xl border border-slate-100 p-3.5 space-y-2">
-                            <div className="flex items-center gap-2">
-                              <Building2 className="h-3.5 w-3.5 text-slate-400" />
-                              <p className="text-[10px] font-bold text-slate-500 uppercase tracking-widest">Citation</p>
-                            </div>
-                            <p className="text-xs text-slate-600">{job.citation.extraction_note}</p>
-                            {(job.citation.canonical_url || job.citation.job_url) && (
-                              <Link
-                                href={job.citation.canonical_url || job.citation.job_url}
-                                target="_blank"
-                                className="text-xs text-indigo-600 hover:underline break-all block"
-                              >
-                                {job.citation.canonical_url || job.citation.job_url}
-                              </Link>
-                            )}
-                            <div className="flex flex-wrap gap-1.5">
-                              {job.citation.evidence.map((line) => (
-                                <span key={line} className="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-medium bg-white text-slate-600 border border-slate-200">{line}</span>
-                              ))}
-                            </div>
-                          </div>
+                          )}
                         </div>
                       )}
                     </div>

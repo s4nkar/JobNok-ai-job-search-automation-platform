@@ -59,6 +59,7 @@ async def fetch(client: httpx.AsyncClient, source: StartupHuntSourceConfig) -> l
                 "company_payload": company_payload,
                 "contacts": _contacts_from_metadata(source.metadata, source.company),
                 "raw_text": f"{title} {source.company} {description_text}",
+                "description_text": description_text or None,
                 "citation": {
                     "source_name": source.name,
                     "canonical_url": canonicalize_url(job_url),

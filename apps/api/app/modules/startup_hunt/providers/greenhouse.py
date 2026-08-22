@@ -56,6 +56,10 @@ async def fetch(client: httpx.AsyncClient, source: StartupHuntSourceConfig) -> l
                 "company_payload": company_payload,
                 "contacts": _contacts_from_metadata(source.metadata, source.company),
                 "raw_text": f"{title} {source.company}",
+                # Greenhouse's board-list endpoint doesn't include job body
+                # content - only the per-job detail endpoint does, and that's
+                # a second request per listing we don't make here.
+                "description_text": None,
                 "citation": {
                     "source_name": source.name,
                     "canonical_url": canonicalize_url(job_url),

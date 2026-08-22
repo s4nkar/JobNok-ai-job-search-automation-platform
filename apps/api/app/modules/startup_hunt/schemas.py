@@ -22,10 +22,9 @@ class StartupHuntSearchRequest(BaseModel):
     # theirstack_limit, etc.) - removed. Every provider's on/off state and
     # result cap is server-side config now (see config.py's "Startup Hunt —
     # providers" section and app/modules/startup_hunt/providers/), not a
-    # per-request choice. include_seeded_sources/seeded_limit stay - that's
-    # a real per-search data-scope choice ("include my own watchlist"), not
-    # a provider availability toggle.
-    seeded_limit: int = 0
+    # per-request choice. include_seeded_sources stays - that's a real
+    # per-search data-scope choice ("include my own watchlist"), not a
+    # provider availability toggle.
 
     @field_validator("query", "location")
     @classmethod
@@ -52,13 +51,6 @@ class StartupHuntSearchRequest(BaseModel):
     def validate_limit(cls, v: int) -> int:
         if v < 1 or v > 50:
             raise ValueError("result_limit must be between 1 and 50")
-        return v
-
-    @field_validator("seeded_limit")
-    @classmethod
-    def validate_source_limit(cls, v: int) -> int:
-        if v < 0 or v > 50:
-            raise ValueError("Source limits must be between 0 and 50")
         return v
 
 

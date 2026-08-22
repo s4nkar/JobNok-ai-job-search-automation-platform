@@ -3392,6 +3392,7 @@ def _score_opportunity(
         "rank_age_hours": age_hours,
         "source_bucket": source_bucket,
         "cache_hit": bool(item.get("cache_hit")),
+        "description_text": item.get("description_text"),
     }, None)
 
 
