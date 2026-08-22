@@ -20,10 +20,12 @@ import { formatDate } from '@jobnok/ui'
 import { StartupHuntResponse, StartupHuntResult, StartupHuntSource, StartupHuntSourceType } from '@/lib/types'
 import {
   Building2,
+  CheckCircle2,
   ChevronDown,
   ChevronUp,
   Compass,
   ExternalLink,
+  HelpCircle,
   ListPlus,
   Loader2,
   Mail,
@@ -33,6 +35,23 @@ import {
   Trash2,
   UserRound,
 } from 'lucide-react'
+
+// LinkedIn-style relative freshness ("2h", "3d") shown alongside the absolute
+// date - computed client-side from posted_at, no backend change needed.
+function formatRelativeTime(dateStr: string): string | null {
+  const diffMs = Date.now() - new Date(dateStr).getTime()
+  if (diffMs < 0) return null
+  const minutes = Math.floor(diffMs / 60000)
+  if (minutes < 1) return 'just now'
+  if (minutes < 60) return `${minutes}m`
+  const hours = Math.floor(minutes / 60)
+  if (hours < 24) return `${hours}h`
+  const days = Math.floor(hours / 24)
+  if (days < 7) return `${days}d`
+  const weeks = Math.floor(days / 7)
+  if (weeks < 5) return `${weeks}w`
+  return `${Math.floor(days / 30)}mo`
+}
 
 const schema = z.object({
   query: z.string().min(2, 'Enter a target AI/ML role'),
@@ -450,7 +469,15 @@ export default function StartupHuntPage() {
             </div>
 
             <div className="space-y-1.5">
-              <Label className="text-xs font-medium text-slate-600">Use curated watchlist</Label>
+              <div className="flex items-center gap-1.5">
+                <Label className="text-xs font-medium text-slate-600">Use curated watchlist</Label>
+                <div className="group relative inline-flex">
+                  <HelpCircle className="h-3.5 w-3.5 text-slate-400 cursor-help" />
+                  <div className="pointer-events-none absolute left-1/2 top-full z-10 mt-1.5 w-56 -translate-x-1/2 rounded-lg bg-slate-900 px-2.5 py-1.5 text-[11px] leading-relaxed text-white opacity-0 shadow-lg transition-opacity group-hover:opacity-100">
+                    If this is on, you&apos;ll also get results from your own added companies (My Sources) plus a shared curated list, on top of the regular live search.
+                  </div>
+                </div>
+              </div>
               <Select value={watch('include_seeded_sources')} onValueChange={(v) => setValue('include_seeded_sources', v as 'false' | 'true')}>
                 <SelectTrigger className="rounded-xl h-9 text-sm border-slate-200"><SelectValue /></SelectTrigger>
                 <SelectContent>
@@ -595,13 +622,11 @@ export default function StartupHuntPage() {
                 const resultKey = job.canonical_job_url || `${job.company_name}-${job.role_title}-${job.location}`
                 const primaryLink = job.direct_apply_url || job.company_careers_url || job.portal_job_url || job.company_website_url
                 const hasApplyPath = Boolean(job.direct_apply_url)
-                const primaryLinkLabel = job.direct_apply_url
-                  ? 'Apply'
-                  : job.company_careers_url
-                    ? 'Open Careers'
-                    : job.portal_job_url
-                      ? 'View Source'
-                      : 'Open Website'
+                const trackedLabel = job.saved_status === 'applied'
+                  ? 'Applied tracked'
+                  : job.saved_status === 'contacted'
+                    ? 'Contacted tracked'
+                    : 'Saved'
                 const expanded = Boolean(expandedCards[resultKey])
                 return (
                   <div key={resultKey} className="space-y-3">
@@ -630,8 +655,9 @@ export default function StartupHuntPage() {
                               </span>
                             ))}
                             {job.saved && (
-                              <span className="inline-flex items-center px-2 py-0.5 rounded-md text-[10px] font-semibold bg-slate-100 text-slate-600 border border-slate-200">
-                                {job.saved_status || 'saved'}
+                              <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-semibold bg-emerald-50 text-emerald-700 border border-emerald-100">
+                                <CheckCircle2 className="h-3 w-3 mr-1" />
+                                {trackedLabel}
                               </span>
                             )}
                           </div>
@@ -642,8 +668,14 @@ export default function StartupHuntPage() {
                             {/* <span>·</span>
                             <span>{job.source_name}</span> */}
                             {job.posted_at && <><span>·</span><span>{formatDate(job.posted_at)}</span></>}
+                            {job.posted_at && formatRelativeTime(job.posted_at) && (
+                              <>
+                                <span>·</span>
+                                <span>{formatRelativeTime(job.posted_at)}</span>
+                              </>
+                            )}
                             <span>·</span>
-                            <span className="font-semibold text-indigo-600">Score {job.score_total}</span>
+                            <span className="font-semibold text-indigo-600">Match {job.score_total}%</span>
                           </div>
                           <div className="flex flex-wrap gap-1.5 mt-3">
                             {job.company.stage && <span className="inline-flex items-center px-2 py-0.5 rounded-md text-xs font-medium bg-slate-50 text-slate-700 border border-slate-200">{job.company.stage}</span>}
@@ -659,35 +691,35 @@ export default function StartupHuntPage() {
                             <Button variant="outline" asChild className="rounded-xl h-9 text-xs">
                               <Link href={primaryLink} target="_blank">
                                 <ExternalLink className="h-3.5 w-3.5 mr-1.5" />
-                                {primaryLinkLabel}
+                                Open Job
                               </Link>
                             </Button>
                           )}
                           <Button
-                            disabled={savingId === resultKey}
+                            disabled={job.saved || savingId === resultKey}
                             onClick={() => saveOpportunity(job, 'saved')}
-                            className="gradient-brand text-white border-0 hover:opacity-90 rounded-xl h-9 text-xs"
+                            className={`rounded-xl h-9 text-xs ${job.saved ? 'bg-emerald-500 text-white hover:bg-emerald-600' : 'gradient-brand text-white border-0 hover:opacity-90'}`}
                           >
                             {savingId === resultKey && <Loader2 className="h-3.5 w-3.5 mr-1.5 animate-spin" />}
-                            Save
+                            {job.saved ? 'Saved' : 'Save'}
                           </Button>
                           {hasApplyPath ? (
                             <Button
                               variant="secondary"
-                              disabled={savingId === resultKey}
+                              disabled={job.saved_status === 'applied' || savingId === resultKey}
                               onClick={() => saveOpportunity(job, 'applied')}
-                              className="rounded-xl h-9 text-xs"
+                              className={`rounded-xl h-9 text-xs ${job.saved_status === 'applied' ? 'bg-emerald-500 text-white hover:bg-emerald-600' : ''}`}
                             >
-                              Track Applied
+                              {job.saved_status === 'applied' ? 'Applied' : 'Mark Applied'}
                             </Button>
                           ) : (
                             <Button
                               variant="secondary"
-                              disabled={savingId === resultKey}
+                              disabled={job.saved_status === 'contacted' || savingId === resultKey}
                               onClick={() => saveOpportunity(job, 'contacted')}
-                              className="rounded-xl h-9 text-xs"
+                              className={`rounded-xl h-9 text-xs ${job.saved_status === 'contacted' ? 'bg-emerald-500 text-white hover:bg-emerald-600' : ''}`}
                             >
-                              Mark Contacted
+                              {job.saved_status === 'contacted' ? 'Contacted' : 'Mark Contacted'}
                             </Button>
                           )}
                         </div>
@@ -713,24 +745,16 @@ export default function StartupHuntPage() {
                           className="inline-flex items-center gap-1.5 text-xs font-semibold text-slate-600 hover:text-slate-900"
                         >
                           {expanded ? <ChevronUp className="h-3.5 w-3.5" /> : <ChevronDown className="h-3.5 w-3.5" />}
-                          {expanded ? 'Show fewer details' : 'Show more details'}
+                          Job Description
                         </button>
                       </div>
 
                       {expanded && (
                         <div className="space-y-4 mt-4">
-                          <div className="rounded-xl border border-slate-100 bg-slate-50 p-3.5 space-y-2">
-                            <p className="text-[10px] font-bold text-slate-500 uppercase tracking-widest">Full ranking details</p>
-                            {job.score_reasons.length > 0 ? job.score_reasons.map((reason) => (
-                              <p key={reason} className="text-xs text-slate-700">{reason}</p>
-                            )) : <p className="text-sm text-slate-400">No extra ranking reasons captured.</p>}
-                          </div>
-
                           {job.description_text && (
                             <div className="rounded-xl border border-slate-100 bg-slate-50 p-3.5 space-y-2">
-                              <p className="text-[10px] font-bold text-slate-500 uppercase tracking-widest">Job Description</p>
                               <div className="max-h-[28rem] overflow-y-auto scrollbar-hide">
-                                <p className="text-sm text-slate-700 whitespace-pre-wrap leading-relaxed">
+                                <p className="text-xs text-slate-700 whitespace-pre-wrap leading-relaxed">
                                   {job.description_text}
                                 </p>
                               </div>
@@ -792,7 +816,7 @@ export default function StartupHuntPage() {
                             <span>·</span>
                             <span>{job.source_name}</span>
                             <span>·</span>
-                            <span className="font-semibold text-indigo-600">Score {job.score_total}</span>
+                            <span className="font-semibold text-indigo-600">Match {job.score_total}%</span>
                           </div>
                         </div>
 
@@ -850,7 +874,7 @@ export default function StartupHuntPage() {
             <DialogTitle className="text-lg font-bold">My Sources</DialogTitle>
           </DialogHeader>
           <p className="text-sm text-muted-foreground -mt-2">
-            ATS boards or companies you want searched every time — always included, independent of the seeded-sources toggle.
+            ATS boards or companies you want searched. Included whenever &quot;Use curated watchlist&quot; is turned on for a hunt.
           </p>
 
           <form onSubmit={handleSubmitSource(onAddSource)} className="space-y-3 border-b border-slate-100 pb-4">

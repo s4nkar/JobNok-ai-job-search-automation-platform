@@ -7,8 +7,11 @@ up exactly once instead of also duplicating into the Tracker's manual
 Applications tab.
 """
 
+import asyncio
+import hashlib
+import json
 import uuid
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 from typing import Any
 
@@ -17,12 +20,14 @@ from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import settings
+from app.services.cache import acquire_lock, get_cached, jittered_ttl, set_cached
 from app.shared.repository import UserScopedRepository
 from app.shared.utils import row_to_dict
 from app.modules.job_search.models import Job, query_job_cache_candidates, touch_job_cache_rows
 from app.modules.job_search.service import _upsert_jobs_cache
 from app.modules.job_search.providers.adzuna import adzuna_country_code
 from app.modules.startup_hunt.engine import (
+    StartupHuntSourceConfig,
     _dedupe_opportunities,
     _score_opportunity,
     build_seeded_sources,
@@ -63,23 +68,30 @@ async def _load_opportunities(db: AsyncSession, user_id: str) -> list[StartupHun
     return list(rows)
 
 
+def _opportunity_lookup_key(data: dict[str, Any]) -> str:
+    """Same fallback-to-composite-key logic used for matching a result item
+    back to a user's own saved opportunity, shared between
+    _load_opportunity_map (building the lookup table) and
+    _reattach_saved_state (looking a cached result item up in it) so both
+    sides always build the key the same way."""
+    return data.get("canonical_job_url") or (
+        f'{(data.get("company_name") or "").strip().lower()}|'
+        f'{(data.get("role_title") or "").strip().lower()}|'
+        f'{(data.get("location") or "").strip().lower()}'
+    )
+
+
 async def _load_opportunity_map(db: AsyncSession, user_id: str) -> dict[str, dict]:
     opportunities = await _load_opportunities(db, user_id)
-    output: dict[str, dict] = {}
-    for row in opportunities:
-        d = row_to_dict(row)
-        key = d.get("canonical_job_url") or (
-            f'{(d.get("company_name") or "").strip().lower()}|'
-            f'{(d.get("role_title") or "").strip().lower()}|'
-            f'{(d.get("location") or "").strip().lower()}'
-        )
-        output[key] = d
-    return output
+    dicts = [row_to_dict(row) for row in opportunities]
+    return {_opportunity_lookup_key(d): d for d in dicts}
 
 
 def _job_row_to_opportunity_dict(row: Job) -> dict[str, Any]:
     """Map a shared `jobs` cache row into Startup Hunt's opportunity dict shape
-    so the existing `_score_opportunity` can run on it unchanged.
+    so the existing `_score_opportunity` can run on it unchanged. Used for
+    both the theirstack DB-shortfall check and the ATS (greenhouse/lever/
+    ashby) DB-first cache-first check - row.source tells us which.
 
     No company_payload/contacts enrichment survives a cache round-trip — the
     generic `jobs` table has no columns for funding stage, company size,
@@ -90,11 +102,16 @@ def _job_row_to_opportunity_dict(row: Job) -> dict[str, Any]:
     see the plan notes for why this needed no changes to that function.
     """
     raw_text = f"{row.title} {row.company} {row.description or ''}".strip()
+    # theirstack's live source_type is "theirstack_search" (see
+    # providers/theirstack.py), everything else's live source_type matches
+    # row.source directly (e.g. "greenhouse") - mirrored here so a cache hit
+    # buckets/badges identically to a fresh live result (via
+    # _result_source_bucket in engine.py).
+    source_type = "theirstack_search" if row.source == "theirstack" else row.source
+    source_label = "TheirStack" if row.source == "theirstack" else row.source.title()
     return {
         # Surfaced through _score_opportunity's return dict unchanged, so the
-        # frontend can badge this distinctly from a live theirstack fetch —
-        # it fills the theirstack bucket/cap for accounting purposes, but may
-        # have actually originated from any provider (see source_name below).
+        # frontend can badge this distinctly from a fresh live fetch.
         "cache_hit": True,
         "opportunity_kind": "job",
         "company_name": row.company,
@@ -104,8 +121,8 @@ def _job_row_to_opportunity_dict(row: Job) -> dict[str, Any]:
         "role_title": row.title,
         "location": row.location,
         "country": row.country,
-        "source_name": "TheirStack" if row.source == "theirstack" else row.source.title(),
-        "source_type": "theirstack_search",
+        "source_name": source_label,
+        "source_type": source_type,
         "direct_apply_url": row.apply_url,
         "canonical_job_url": row.canonical_url,
         "portal_job_url": row.apply_url,
@@ -115,7 +132,7 @@ def _job_row_to_opportunity_dict(row: Job) -> dict[str, Any]:
         "raw_text": raw_text,
         "description_text": row.description or None,
         "citation": {
-            "source_name": "TheirStack",
+            "source_name": source_label,
             "canonical_url": row.canonical_url,
             "job_url": row.apply_url,
             "posted_at": row.posted_at.isoformat() if row.posted_at else None,
@@ -125,21 +142,32 @@ def _job_row_to_opportunity_dict(row: Job) -> dict[str, Any]:
     }
 
 
-def _theirstack_opportunity_to_job_cache_row(item: dict[str, Any]) -> dict[str, Any] | None:
-    """Adapt a freshly-fetched theirstack opportunity dict into job_search's
-    flat upsert shape, so the existing `_upsert_jobs_cache` can write it into
-    the shared `jobs` table unchanged. TheirStack results carry no stable
-    per-item ID (confirmed in engine.py's `_normalize_theirstack_items`), so
-    the canonical URL doubles as the dedup key — same role canonical URLs
-    already play everywhere else in this codebase."""
+# Every source_type whose live results get written back into the shared
+# `jobs` cache. Only these currently have a DB-first read path that could
+# reuse them (theirstack, via _fetch_theirstack_db_candidates) or are worth
+# banking for a future one (the ATS providers) - startupmap/web/indeed/apify
+# stay live-only, unchanged, out of scope for this pass.
+_CACHEABLE_SOURCE_TYPES = {"theirstack_search", "greenhouse", "lever", "ashby"}
+
+
+def _opportunity_to_job_cache_row(item: dict[str, Any]) -> dict[str, Any] | None:
+    """Adapt a freshly-fetched startup_hunt opportunity dict (theirstack or
+    any ATS provider - see _CACHEABLE_SOURCE_TYPES) into job_search's flat
+    upsert shape, so the existing `_upsert_jobs_cache` can write it into the
+    shared `jobs` table unchanged. None of these carry a provider-native ID
+    we can rely on being stable long-term, so the canonical URL doubles as
+    the dedup key — same role canonical URLs already play everywhere else
+    in this codebase."""
     canonical_url = item.get("canonical_job_url")
     apply_url = item.get("direct_apply_url") or item.get("portal_job_url") or canonical_url
     if not canonical_url or not apply_url:
         return None
     posted_at = item.get("posted_at")
     country_code = adzuna_country_code(item.get("country")) or None
+    source_type = item.get("source_type") or ""
+    provider_type = "theirstack" if source_type == "theirstack_search" else source_type
     return {
-        "provider_type": "theirstack",
+        "provider_type": provider_type,
         "external_job_id": canonical_url,
         "role": item.get("role_title") or "",
         "company": item.get("company_name") or "",
@@ -147,9 +175,66 @@ def _theirstack_opportunity_to_job_cache_row(item: dict[str, Any]) -> dict[str, 
         "job_url": apply_url,
         "job_url_canonical": canonical_url,
         "posted_at": posted_at.isoformat() if isinstance(posted_at, datetime) else posted_at,
-        "description_text": (item.get("raw_text") or "")[:2000],
+        "description_text": (item.get("description_text") or item.get("raw_text") or "")[:2000],
         "metadata": {"country": country_code, "salary_min": None, "salary_max": None, "category": None},
     }
+
+
+async def _fetch_ats_db_candidates(
+    db: AsyncSession,
+    sources: list[StartupHuntSourceConfig],
+    payload: dict[str, Any],
+    strategy: dict[str, Any],
+    existing: dict[str, dict[str, Any]],
+) -> tuple[list[dict[str, Any]], list[StartupHuntSourceConfig], list[uuid.UUID]]:
+    """DB-first cache-first check for the ATS bucket (greenhouse/lever/
+    ashby) - per-source, not query-driven like _fetch_theirstack_db_candidates
+    below. Each ATS source here is one company's board, not a broad search,
+    so "do we still need to fetch this live" is a per-company freshness
+    question: if this company's board was fetched within
+    startup_hunt_ats_cache_freshness_hours, reuse those cached rows and skip
+    it; otherwise it goes into the still-needs-a-live-fetch list unchanged.
+
+    Returns (scored cache-hit opportunities, sources that still need a live
+    fetch, row ids to refresh TTL for). Non-ATS sources pass through
+    untouched in the second element - callers can pass this function's
+    output straight back into search_startup_hunt() as the new source list.
+    """
+    ats_types = {"greenhouse", "lever", "ashby"}
+    ats_sources = [s for s in sources if s.type in ats_types]
+    if not ats_sources:
+        return [], sources, []
+
+    live_sources = [s for s in sources if s.type not in ats_types]
+    freshness_cutoff = datetime.now(timezone.utc) - timedelta(hours=settings.startup_hunt_ats_cache_freshness_hours)
+
+    scored: list[dict[str, Any]] = []
+    row_ids: list[uuid.UUID] = []
+    for source in ats_sources:
+        rows = (
+            await db.execute(
+                select(Job).where(
+                    Job.origin_tool == "startup_hunt",
+                    Job.source == source.type,
+                    Job.company == source.company,
+                    Job.expires_at > datetime.now(timezone.utc),
+                    Job.last_seen_at > freshness_cutoff,
+                )
+            )
+        ).scalars().all()
+
+        if not rows:
+            live_sources.append(source)
+            continue
+
+        for row in rows:
+            item = _job_row_to_opportunity_dict(row)
+            scored_item, _ = _score_opportunity(item, payload, strategy, existing)
+            if scored_item is not None:
+                scored.append(scored_item)
+            row_ids.append(row.id)
+
+    return scored, live_sources, row_ids
 
 
 async def _fetch_theirstack_db_candidates(
@@ -159,7 +244,16 @@ async def _fetch_theirstack_db_candidates(
     already-scored opportunity dicts plus the underlying row ids (for TTL
     refresh), or ([], []) if the country can't be resolved, in which case
     the live theirstack fetch's own ProviderError-equivalent handling
-    (settings.theirstack_api_key check) takes over exactly as before."""
+    (settings.theirstack_api_key check) takes over exactly as before.
+
+    allowed_sources={"theirstack"} keeps this shortfall calculation
+    theirstack-specific - cached Greenhouse/Lever/Ashby rows exist in the
+    same table now (see _opportunity_to_job_cache_row) but cover a
+    different, unrelated set of companies, so they shouldn't count toward
+    "do we still need to call TheirStack live." allowed_origin_tools
+    additionally guards against recent_job_search's own cached rows
+    (Adzuna/Bundesagentur/Arbeitnow - general market listings with no
+    startup signal) ever leaking into a startup-focused search."""
     country_code = adzuna_country_code(payload.get("country")) or adzuna_country_code(payload.get("location"))
     if not country_code:
         return [], []
@@ -171,6 +265,8 @@ async def _fetch_theirstack_db_candidates(
         query_tokens=tokenize(str(payload.get("query") or "")),
         posted_within_hours=payload.get("posted_within_hours"),
         limit=max(300, theirstack_limit * 20),
+        allowed_sources={"theirstack"},
+        allowed_origin_tools={"startup_hunt"},
     )
 
     scored: list[dict[str, Any]] = []
@@ -183,8 +279,137 @@ async def _fetch_theirstack_db_candidates(
     return scored, [row.id for row in rows]
 
 
+def _normalize_scores_to_top_result(*item_lists: list[dict[str, Any]]) -> None:
+    """Rescale score_total to 0-100 relative to the best result in this
+    search, in place across all given lists together.
+
+    The raw score from _score_opportunity is an open-ended sum of weighted
+    signal bonuses (keyword matches, freshness, direct-apply link, seniority
+    fit, etc.) with no fixed ceiling - a bare number like "29.268" has no
+    reference point for a user to judge it against. Scaling every result
+    against this search's own top score turns it into "how good is this
+    compared to the best match here," which does.
+    """
+    all_items = [item for items in item_lists for item in items]
+    if not all_items:
+        return
+    max_score = max(float(item.get("score_total") or 0) for item in all_items)
+    if max_score <= 0:
+        for item in all_items:
+            item["score_total"] = 0.0
+        return
+    for item in all_items:
+        raw = float(item.get("score_total") or 0)
+        item["score_total"] = round(max(0.0, min(100.0, raw / max_score * 100)), 1)
+
+
+def _response_cache_key(payload: dict[str, Any]) -> str:
+    """Hashes the whole request payload (sorted keys), not a hand-picked
+    subset like job_search's _response_cache_key - startup_hunt's payload
+    affects result content in more places (e.g. strategy_prompt changes
+    what TheirStack's live query looks like, not just post-fetch scoring
+    the way job_search's preferences_prompt does), so picking a "safe to
+    exclude" subset is genuinely harder to get right here. Hashing
+    everything trades away a bit of cache-hit reuse (two searches differing
+    only in, say, remote_only won't share a cache entry) for correctness
+    that doesn't depend on remembering to update this list every time a new
+    payload field is added."""
+    digest = hashlib.sha256(json.dumps(payload, sort_keys=True, default=str).encode("utf-8")).hexdigest()
+    return f"startup_hunt:{digest}"
+
+
+def _strip_personalized_fields(response: dict[str, Any]) -> dict[str, Any]:
+    """Shallow-copies the response and blanks out per-user save-state
+    (saved/saved_status/saved_opportunity_id) before it goes into the
+    shared Redis response cache. That cache has no user_id in its key
+    (matching job_search's L1 cache design - shared across every user's
+    searches), so caching one user's save-state as-is would leak it to
+    every other user who later hits the same cache key. Re-attached fresh
+    per request by _reattach_saved_state below."""
+    def _strip_list(items: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        stripped = []
+        for item in items:
+            copy = dict(item)
+            copy["saved"] = False
+            copy["saved_status"] = None
+            copy["saved_opportunity_id"] = None
+            stripped.append(copy)
+        return stripped
+
+    return {
+        **response,
+        "results": _strip_list(response["results"]),
+        "overflow_results": _strip_list(response["overflow_results"]),
+    }
+
+
+def _reattach_saved_state(response: dict[str, Any], existing: dict[str, dict[str, Any]]) -> None:
+    """Inverse of _strip_personalized_fields, applied in place to a
+    cache-hit response - re-attaches the CURRENT request's own
+    saved-opportunity map. Every other field in the response is otherwise
+    identical to what a fresh live search would have produced, since the
+    cache key covers everything else that affects scoring/filtering/
+    content."""
+    for bucket_key in ("results", "overflow_results"):
+        for item in response.get(bucket_key, []):
+            match = existing.get(_opportunity_lookup_key(item))
+            item["saved"] = bool(match)
+            item["saved_status"] = match.get("opportunity_status") if match else None
+            item["saved_opportunity_id"] = match.get("id") if match else None
+
+
+_SINGLE_FLIGHT_LOCK_TTL_SECONDS = 20
+_SINGLE_FLIGHT_POLL_INTERVAL_SECONDS = 0.5
+_SINGLE_FLIGHT_MAX_WAIT_SECONDS = 10
+
+
 async def search_startup_hunt_opportunities(db: AsyncSession, user_id: str, body) -> dict:
     existing = await _load_opportunity_map(db, user_id)
+    payload = body.model_dump()
+
+    cache_key = _response_cache_key(payload)
+    try:
+        cached = await get_cached(cache_key)
+    except Exception:
+        cached = None
+    if cached:
+        try:
+            response = json.loads(cached)
+            _reattach_saved_state(response, existing)
+            return response
+        except json.JSONDecodeError:
+            pass
+
+    # Single-flight: if many requests hit this exact uncached search at
+    # once, only the lock-holder does the real DB+provider work - everyone
+    # else waits briefly for its result to land in the response cache and
+    # reuses it, instead of each independently fanning out to every
+    # provider. Fails open (treats as leader) on a Redis error, and a
+    # follower that times out waiting falls through to doing its own fetch
+    # rather than hanging forever on a slow or stuck leader. Same pattern
+    # job_search's search_recent_jobs uses.
+    try:
+        is_leader = await acquire_lock(f"{cache_key}:lock", _SINGLE_FLIGHT_LOCK_TTL_SECONDS)
+    except Exception:
+        is_leader = True
+
+    if not is_leader:
+        waited = 0.0
+        while waited < _SINGLE_FLIGHT_MAX_WAIT_SECONDS:
+            await asyncio.sleep(_SINGLE_FLIGHT_POLL_INTERVAL_SECONDS)
+            waited += _SINGLE_FLIGHT_POLL_INTERVAL_SECONDS
+            try:
+                cached = await get_cached(cache_key)
+            except Exception:
+                cached = None
+            if cached:
+                try:
+                    response = json.loads(cached)
+                    _reattach_saved_state(response, existing)
+                    return response
+                except json.JSONDecodeError:
+                    break
+
     # Global curated sources stay gated behind include_seeded_sources + the
     # "crawler" bucket toggle (unchanged). A user's own sources are always
     # searched when present — there's no reason to hide something they
@@ -192,8 +417,25 @@ async def search_startup_hunt_opportunities(db: AsyncSession, user_id: str, body
     global_sources = build_seeded_sources(await list_global_startup_hunt_sources(db))
     user_sources = build_seeded_sources(await list_user_startup_hunt_sources(db, user_id))
 
-    payload = body.model_dump()
     strategy = await parse_strategy_prompt(payload.get("strategy_prompt"))
+
+    db_scored: list[dict[str, Any]] = []
+    db_job_ids: list[uuid.UUID] = []
+
+    # ATS (greenhouse/lever/ashby) DB-first cache-first check - per-source
+    # freshness, not the query-driven shortfall theirstack uses below (see
+    # _fetch_ats_db_candidates). Whichever sources have a fresh-enough cache
+    # hit get pulled out of global_sources/user_sources here, so they don't
+    # ALSO get live-fetched a few lines down inside search_startup_hunt().
+    if settings.startup_hunt_greenhouse_enabled or settings.startup_hunt_lever_enabled or settings.startup_hunt_ashby_enabled:
+        global_ats_scored, global_sources, global_ats_row_ids = await _fetch_ats_db_candidates(
+            db, global_sources, payload, strategy, existing
+        )
+        user_ats_scored, user_sources, user_ats_row_ids = await _fetch_ats_db_candidates(
+            db, user_sources, payload, strategy, existing
+        )
+        db_scored.extend(global_ats_scored + user_ats_scored)
+        db_job_ids.extend(global_ats_row_ids + user_ats_row_ids)
 
     # DB-first shortfall check — theirstack bucket only (see plan). The other
     # 6 buckets run exactly as they always have, fully live, every search.
@@ -206,13 +448,13 @@ async def search_startup_hunt_opportunities(db: AsyncSession, user_id: str, body
     # what lets this shortfall-driven skip/shrink still work: config decides
     # whether theirstack is allowed to run at all, this decides whether IT
     # needs to for this specific search.
-    db_scored: list[dict[str, Any]] = []
-    db_job_ids: list[uuid.UUID] = []
     adjusted_payload = payload
     if settings.startup_hunt_theirstack_enabled:
-        db_scored, db_job_ids = await _fetch_theirstack_db_candidates(db, payload, strategy, existing)
+        theirstack_scored, theirstack_row_ids = await _fetch_theirstack_db_candidates(db, payload, strategy, existing)
+        db_scored.extend(theirstack_scored)
+        db_job_ids.extend(theirstack_row_ids)
         theirstack_limit = int(payload.get("theirstack_limit") or settings.startup_hunt_theirstack_result_limit)
-        shortfall = theirstack_limit - len(db_scored)
+        shortfall = theirstack_limit - len(theirstack_scored)
         adjusted_payload = dict(payload)
         if shortfall <= 0:
             adjusted_payload["theirstack_enabled"] = False
@@ -224,16 +466,20 @@ async def search_startup_hunt_opportunities(db: AsyncSession, user_id: str, body
         configured_source_count, source_result_counts, source_diagnostics,
     ) = await search_startup_hunt(adjusted_payload, existing, global_sources, user_sources, strategy=strategy)
 
-    # Upsert freshly-fetched theirstack results into the shared cache, and
-    # refresh TTL for whatever DB candidates were actually scanned as
-    # relevant (bounded by _fetch_theirstack_db_candidates' filters, not the
-    # whole table) — same pattern job_search's search_recent_jobs uses.
-    fresh_theirstack_rows = [
-        row for item in results if item.get("source_type") == "theirstack_search"
-        if (row := _theirstack_opportunity_to_job_cache_row(item)) is not None
+    # Upsert freshly-fetched theirstack + ATS (greenhouse/lever/ashby)
+    # results into the shared cache, so a repeat search covering the same
+    # companies/roles can be served from the DB instead of hitting those
+    # providers live again — same pattern job_search's search_recent_jobs
+    # uses. Scans overflow too, not just the ranked cutoff: any live-fetched
+    # result is equally reusable regardless of where it landed in this
+    # search's own ranking. Runs before the db_scored merge below, so this
+    # only ever sees fresh live results, never re-upserts a cache hit.
+    fresh_cacheable_rows = [
+        row for item in results + overflow_results if item.get("source_type") in _CACHEABLE_SOURCE_TYPES
+        if (row := _opportunity_to_job_cache_row(item)) is not None
     ]
-    if fresh_theirstack_rows:
-        await _upsert_jobs_cache(db, fresh_theirstack_rows, origin_tool="startup_hunt")
+    if fresh_cacheable_rows:
+        await _upsert_jobs_cache(db, fresh_cacheable_rows, origin_tool="startup_hunt")
     if db_job_ids:
         await touch_job_cache_rows(db, db_job_ids, ttl_days=settings.job_search_cache_ttl_days)
 
@@ -244,7 +490,9 @@ async def search_startup_hunt_opportunities(db: AsyncSession, user_id: str, body
         results = combined[:result_limit]
         overflow_results = combined[result_limit:] + overflow_results
 
-    return {
+    _normalize_scores_to_top_result(results, overflow_results)
+
+    response = {
         "results": results,
         "overflow_results": overflow_results,
         "filtered_out": filtered_out,
@@ -253,6 +501,17 @@ async def search_startup_hunt_opportunities(db: AsyncSession, user_id: str, body
         "source_result_counts": source_result_counts,
         "source_diagnostics": source_diagnostics,
     }
+
+    try:
+        await set_cached(
+            cache_key,
+            json.dumps(_strip_personalized_fields(response)),
+            jittered_ttl(settings.startup_hunt_response_cache_ttl_seconds),
+        )
+    except Exception:
+        pass
+
+    return response
 
 
 async def list_startup_hunt_opportunities(db: AsyncSession, user_id: str) -> list[dict]:

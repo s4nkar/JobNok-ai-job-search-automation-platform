@@ -377,11 +377,15 @@ async def search_startup_hunt(
     # include_seeded_sources to. include_seeded_sources is a real, distinct
     # request field with its own UI toggle (unlike the bucket bools, which
     # are gone now) - that alone is the intended gate here.
+    #
+    # user_sources (a user's own added companies, via "My Sources") used to
+    # always run regardless of this toggle. Folded under the same gate now -
+    # the toggle is the user's explicit "search my watchlist too" decision,
+    # and that should cover their own added companies just as much as the
+    # shared curated list, not bypass it.
     if payload.get("include_seeded_sources"):
         sources.extend(global_sources or [])
-    # A user's own explicitly-added sources are always searched — no reason to
-    # hide them behind the (currently off-by-default) crawler bucket toggle.
-    sources.extend(user_sources or [])
+        sources.extend(user_sources or [])
     sources.extend(_auto_sources_from_integrations(payload))
     sources.extend(_auto_dynamic_sources(payload))
     # Callers that already parsed strategy_prompt (e.g. to score DB-cache

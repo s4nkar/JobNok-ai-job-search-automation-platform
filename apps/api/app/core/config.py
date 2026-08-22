@@ -161,6 +161,16 @@ class Settings(BaseSettings):
     startup_hunt_timeout_seconds: int = 20
     startup_hunt_apify_poll_seconds: int = 60
     startup_hunt_total_budget_seconds: int = 30
+    # Redis response cache TTL for identical (query, location, filters, ...)
+    # hunts - mirrors job_search_response_cache_ttl_seconds.
+    startup_hunt_response_cache_ttl_seconds: int = 900
+    # How long a cached ATS (greenhouse/lever/ashby) fetch for one company
+    # board is trusted before a hunt will re-fetch it live again. Shorter
+    # than job_search_cache_ttl_days (14 days) deliberately - that's how
+    # long a row stays *eligible* for reuse at all, this is how long it's
+    # trusted as "fresh enough to skip a live call," which needs to be much
+    # tighter given a company can post/close a role within hours.
+    startup_hunt_ats_cache_freshness_hours: int = 6
 
     # ── Startup Hunt — providers ─────────────────────────────────────────────
     # Per-provider kill switch, server-side only - there is no per-request

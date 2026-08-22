@@ -20,6 +20,7 @@ import { queryKeys } from '@/lib/queryKeys'
 import {
   Bookmark,
   BriefcaseBusiness,
+  Building2,
   CheckCircle2,
   ChevronDown,
   ChevronUp,
@@ -524,7 +525,7 @@ export default function RecentJobSearchPage() {
                   <div className="flex flex-col sm:flex-row sm:items-start sm:justify-between gap-4">
                     <div className="min-w-0">
                       <div className="flex items-center gap-2 flex-wrap mb-1">
-                        <h2 className="text-sm font-semibold text-slate-900">{job.role}</h2>
+                        <h3 className="text-base font-semibold text-slate-900">{job.role}</h3>
                         {job.applied && (
                           <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-semibold bg-emerald-50 text-emerald-700 border border-emerald-100">
                             <CheckCircle2 className="h-3 w-3 mr-1" />
@@ -574,42 +575,46 @@ export default function RecentJobSearchPage() {
                     </div>
                   </div>
 
-                  <div className="rounded-xl border border-slate-100 bg-slate-50 p-3.5">
-                    <p className="text-[10px] font-bold text-slate-500 uppercase tracking-widest mb-2">Citation</p>
-                    <p className="text-xs text-slate-600">{job.citation.extraction_note}</p>
-                    <div className="flex flex-wrap gap-1.5 mt-2.5">
+                  <div className="rounded-xl border border-slate-100 p-3.5 space-y-2">
+                    <div className="flex items-center gap-2">
+                      <Building2 className="h-3.5 w-3.5 text-slate-400" />
+                      <p className="text-[10px] font-bold text-slate-500 uppercase tracking-widest">Citation</p>
+                    </div>
+                    <div className="flex flex-wrap gap-1.5">
                       {job.citation.evidence.map((line) => (
-                        <span key={line} className="inline-flex items-center px-2 py-0.5 rounded-md text-[10px] font-medium bg-white text-slate-600 border border-slate-200">
-                          {line}
-                        </span>
+                        <span key={line} className="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-medium bg-white text-slate-600 border border-slate-200">{line}</span>
                       ))}
                     </div>
                   </div>
 
                   {job.description_text && (
-                    <div className="rounded-xl border-slate-100 overflow-hidden">
-                      <button
-                        type="button"
-                        onClick={() => toggleDescription(job.job_url_canonical)}
-                        className="w-full flex items-center justify-between gap-2 px-3.5 py-2.5 text-xs font-semibold text-slate-600 hover:bg-slate-40 transition-colors"
-                      >
-                        Job Description Preview
-                        {expandedDescriptions.has(job.job_url_canonical)
-                          ? <ChevronUp className="h-3.5 w-3.5 text-slate-400" />
-                          : <ChevronDown className="h-3.5 w-3.5 text-slate-400" />
-                        }
-                      </button>
+                    <>
+                      <div className="mt-4">
+                        <button
+                          type="button"
+                          onClick={() => toggleDescription(job.job_url_canonical)}
+                          className="inline-flex items-center gap-1.5 text-xs font-semibold text-slate-600 hover:text-slate-900"
+                        >
+                          {expandedDescriptions.has(job.job_url_canonical) ? <ChevronUp className="h-3.5 w-3.5" /> : <ChevronDown className="h-3.5 w-3.5" />}
+                          Job Description
+                        </button>
+                      </div>
+
                       {expandedDescriptions.has(job.job_url_canonical) && (
-                        <div className="px-3.5 pb-3.5 max-h-[28rem] overflow-y-auto scrollbar-hide">
-                          <p className="text-sm text-slate-700 whitespace-pre-wrap leading-relaxed">
-                            {job.description_text}
-                          </p>
-                          <p className="text-xs text-slate-400 mt-2">
-                            Open the job to read the full posting.
-                          </p>
+                        <div className="space-y-4 mt-4">
+                          <div className="rounded-xl border border-slate-100 bg-slate-50 p-3.5 space-y-2">
+                            <div className="max-h-[28rem] overflow-y-auto scrollbar-hide">
+                              <p className="text-xs text-slate-700 whitespace-pre-wrap leading-relaxed">
+                                {job.description_text}
+                              </p>
+                            </div>
+                            <p className="text-xs text-slate-400 mt-2">
+                              Open the job to read the full posting.
+                            </p>
+                          </div>
                         </div>
                       )}
-                    </div>
+                    </>
                   )}
 
 

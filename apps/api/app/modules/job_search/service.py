@@ -20,7 +20,7 @@ from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import settings
-from app.services.cache import acquire_lock, check_burst_limit, check_rate_limit, get_cached, set_cached
+from app.services.cache import acquire_lock, check_burst_limit, check_rate_limit, get_cached, jittered_ttl, set_cached
 from app.shared.utils import row_to_dict
 from app.modules.job_search import dedup, scoring
 from app.modules.job_search.providers import (
@@ -130,18 +130,6 @@ def _response_cache_key(payload: dict) -> str:
     # Not namespaced to a single provider - the cached value can be a
     # multi-provider combined result set.
     return f"job_search:{digest}"
-
-
-def _jittered_ttl(base_seconds: int, jitter_fraction: float = 0.15) -> int:
-    """Randomize a cache TTL by +/-jitter_fraction so entries written around
-    the same time (e.g. everyone's response cache filling up during a burst
-    of traffic on a popular query) don't all expire at the same instant -
-    reduces the odds of a stampede forming in the first place. The
-    single-flight lock in search_recent_jobs already handles a stampede
-    gracefully if one forms anyway; this is a cheap complement, not a
-    replacement for it."""
-    jitter = base_seconds * jitter_fraction
-    return max(1, int(base_seconds + random.uniform(-jitter, jitter)))
 
 
 async def _upsert_jobs_cache(db: AsyncSession, raw_jobs: list[dict], *, origin_tool: str = "recent_job_search") -> None:
@@ -501,7 +489,7 @@ async def search_recent_jobs(db: AsyncSession, user_id: str, body: JobSearchRequ
 
     combined_raw = db_raw_jobs + fresh_raw_jobs
     try:
-        await set_cached(cache_key, json.dumps(combined_raw), _jittered_ttl(settings.job_search_response_cache_ttl_seconds))
+        await set_cached(cache_key, json.dumps(combined_raw), jittered_ttl(settings.job_search_response_cache_ttl_seconds))
     except Exception:
         pass
 

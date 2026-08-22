@@ -6,6 +6,7 @@ which works correctly in Railway's serverless-style environment.
 
 import hashlib
 import json
+import random
 import httpx
 from datetime import datetime, timezone
 from typing import Any, Awaitable, Callable
@@ -136,6 +137,18 @@ async def get_cached(key: str) -> str | None:
 async def set_cached(key: str, value: str, ttl_seconds: int) -> None:
     redis = _get_redis()
     await redis.set(key, value, ex=ttl_seconds)
+
+
+def jittered_ttl(base_seconds: int, jitter_fraction: float = 0.15) -> int:
+    """Randomize a cache TTL by +/-jitter_fraction so entries written around
+    the same time (e.g. everyone's response cache filling up during a burst
+    of traffic on a popular query) don't all expire at the same instant -
+    reduces the odds of a stampede forming in the first place. Any caller
+    with its own single-flight lock (acquire_lock below) already handles a
+    stampede gracefully if one forms anyway; this is a cheap complement, not
+    a replacement for it."""
+    jitter = base_seconds * jitter_fraction
+    return max(1, int(base_seconds + random.uniform(-jitter, jitter)))
 
 
 async def delete_cached(key: str) -> None:

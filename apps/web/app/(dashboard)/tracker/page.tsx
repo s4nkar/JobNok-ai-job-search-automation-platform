@@ -759,7 +759,7 @@ function TrackerPageInner() {
                             </Select>
                           </TableCell>
                           <TableCell>
-                            <span className="text-xs font-semibold text-indigo-600">{lead.score_total.toFixed(1)}</span>
+                            <span className="text-xs font-semibold text-indigo-600">{lead.score_total.toFixed(1)}%</span>
                           </TableCell>
                           <TableCell>
                             <button
