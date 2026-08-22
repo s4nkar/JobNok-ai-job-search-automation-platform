@@ -15,6 +15,7 @@ from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 from typing import Any
 
+from arq.connections import ArqRedis
 from fastapi import HTTPException
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -26,6 +27,7 @@ from app.shared.utils import row_to_dict
 from app.modules.job_search.models import Job, query_job_cache_candidates, touch_job_cache_rows
 from app.modules.job_search.service import _upsert_jobs_cache
 from app.modules.job_search.providers.adzuna import adzuna_country_code
+from app.modules.startup_hunt import resolver
 from app.modules.startup_hunt.engine import (
     StartupHuntSourceConfig,
     _dedupe_opportunities,
@@ -410,12 +412,16 @@ async def search_startup_hunt_opportunities(db: AsyncSession, user_id: str, body
                 except json.JSONDecodeError:
                     break
 
-    # Global curated sources stay gated behind include_seeded_sources + the
-    # "crawler" bucket toggle (unchanged). A user's own sources are always
-    # searched when present — there's no reason to hide something they
-    # explicitly added behind an unrelated flag.
+    # Both the global curated list AND a user's own added sources are gated
+    # behind include_seeded_sources - turning that toggle off means NEITHER
+    # gets searched, full stop (see engine.py's search_startup_hunt, which
+    # is the actual enforcement point for the live-fetch path below).
+    # list_user_startup_hunt_sources returns every status (the
+    # source-management UI needs pending/failed rows too) - only 'resolved'
+    # ones are actually searchable.
     global_sources = build_seeded_sources(await list_global_startup_hunt_sources(db))
-    user_sources = build_seeded_sources(await list_user_startup_hunt_sources(db, user_id))
+    resolved_user_sources = [s for s in await list_user_startup_hunt_sources(db, user_id) if s.get("status") == "resolved"]
+    user_sources = build_seeded_sources(resolved_user_sources)
 
     strategy = await parse_strategy_prompt(payload.get("strategy_prompt"))
 
@@ -427,7 +433,15 @@ async def search_startup_hunt_opportunities(db: AsyncSession, user_id: str, body
     # _fetch_ats_db_candidates). Whichever sources have a fresh-enough cache
     # hit get pulled out of global_sources/user_sources here, so they don't
     # ALSO get live-fetched a few lines down inside search_startup_hunt().
-    if settings.startup_hunt_greenhouse_enabled or settings.startup_hunt_lever_enabled or settings.startup_hunt_ashby_enabled:
+    #
+    # Gated on include_seeded_sources too, same as the live path - without
+    # this, a source with a cache hit from an earlier search (toggle on)
+    # would keep surfacing here on every later search even with the toggle
+    # off, since this check runs against global_sources/user_sources
+    # directly and never goes through search_startup_hunt()'s own gate.
+    if payload.get("include_seeded_sources") and (
+        settings.startup_hunt_greenhouse_enabled or settings.startup_hunt_lever_enabled or settings.startup_hunt_ashby_enabled
+    ):
         global_ats_scored, global_sources, global_ats_row_ids = await _fetch_ats_db_candidates(
             db, global_sources, payload, strategy, existing
         )
@@ -807,19 +821,31 @@ class StartupHuntSourceRepository(UserScopedRepository[StartupHuntSource]):
 
 async def list_global_startup_hunt_sources(db: AsyncSession) -> list[dict]:
     """The curated source list visible to every user (user_id IS NULL) — still
-    gated behind include_seeded_sources + the "crawler" bucket toggle."""
-    stmt = select(StartupHuntSource).where(StartupHuntSource.user_id.is_(None))
+    gated behind include_seeded_sources + the "crawler" bucket toggle.
+    status='resolved' only - a 'pending'/'failed' row has no usable
+    type/slug yet (build_seeded_sources would silently drop it anyway
+    since type=None never matches ALLOWED_SOURCE_TYPES, but filtering here
+    is the actual documented intent, not an incidental side effect)."""
+    stmt = select(StartupHuntSource).where(
+        StartupHuntSource.user_id.is_(None), StartupHuntSource.status == "resolved"
+    )
     rows = (await db.execute(stmt)).scalars().all()
     return [row_to_dict(r) for r in rows]
 
 
 async def list_user_startup_hunt_sources(db: AsyncSession, user_id: str) -> list[dict]:
-    """This user's own sources only — for the source-management UI."""
+    """This user's own sources, every status - the source-management UI
+    needs to show pending/failed rows too (status badge, poll-until-done),
+    not just resolved ones. search_startup_hunt_opportunities filters this
+    down to 'resolved' itself before feeding it into the search pipeline."""
     rows = await StartupHuntSourceRepository(db).list(user_id, order_by=StartupHuntSource.created_at.desc())
     return [row_to_dict(r) for r in rows]
 
 
 async def create_startup_hunt_source(db: AsyncSession, user_id: str, body: StartupHuntSourceIn) -> dict:
+    """Manual entry - the fallback path when the 'smart add' resolve flow
+    (see resolve_startup_hunt_source below) can't find a company on its own.
+    Whatever the caller passes here is trusted as already-resolved."""
     obj = await StartupHuntSourceRepository(db).create(
         user_id,
         type=body.type,
@@ -830,6 +856,85 @@ async def create_startup_hunt_source(db: AsyncSession, user_id: str, body: Start
         metadata_=body.metadata,
     )
     return row_to_dict(obj)
+
+
+async def resolve_startup_hunt_source(
+    db: AsyncSession, user_id: str, company_input: str, arq_pool: ArqRedis
+) -> dict:
+    """Entry point for My Sources' "smart add" flow - the user types a
+    company name or pastes a careers URL, this figures out the rest (see
+    resolver.py). Three tiers, fastest first:
+
+    1. Reuse: some user (any user - a resolved ATS type/slug is a fact
+       about the company, not about who added it) already resolved a
+       matching name. Instant, no external calls.
+    2. Fast sync resolve: one direct slug guess (or a pasted URL's own
+       pattern/page scan) against Greenhouse/Lever/Ashby, bounded to
+       ~startup_hunt_resolve_sync_timeout_seconds. Typically 1-2s.
+    3. Async fallback: doesn't land in step 2 -> create a 'pending' row
+       immediately and hand it to a background ARQ job (tasks.py) that
+       tries harder. The frontend polls the sources list until it flips to
+       'resolved' or 'failed'.
+    """
+    company_input = company_input.strip()
+    if not company_input:
+        raise HTTPException(status_code=400, detail="Enter a company name or careers URL.")
+
+    normalized = company_input.lower()
+    reusable = (
+        await db.execute(
+            select(StartupHuntSource)
+            .where(StartupHuntSource.status == "resolved", func.lower(StartupHuntSource.name) == normalized)
+            .limit(1)
+        )
+    ).scalars().first()
+
+    if reusable is not None:
+        obj = await StartupHuntSourceRepository(db).create(
+            user_id,
+            type=reusable.type,
+            name=company_input,
+            company=reusable.company,
+            slug=reusable.slug,
+            url=reusable.url,
+            metadata_={},
+            status="resolved",
+        )
+        return row_to_dict(obj)
+
+    try:
+        resolved = await asyncio.wait_for(
+            resolver.try_direct_resolve(company_input),
+            timeout=settings.startup_hunt_resolve_sync_timeout_seconds,
+        )
+    except (asyncio.TimeoutError, TimeoutError):
+        resolved = None
+
+    if resolved is not None:
+        obj = await StartupHuntSourceRepository(db).create(
+            user_id,
+            type=resolved.type,
+            name=company_input,
+            company=company_input,
+            slug=resolved.slug,
+            url=resolved.url,
+            metadata_={},
+            status="resolved",
+        )
+        return row_to_dict(obj)
+
+    pending = await StartupHuntSourceRepository(db).create(
+        user_id,
+        type=None,
+        name=company_input,
+        company=company_input,
+        slug=None,
+        url=company_input if company_input.lower().startswith(("http://", "https://")) else None,
+        metadata_={},
+        status="pending",
+    )
+    await arq_pool.enqueue_job("resolve_startup_hunt_source_task", source_id=str(pending.id))
+    return row_to_dict(pending)
 
 
 async def delete_startup_hunt_source(db: AsyncSession, user_id: str, source_id: str) -> None:

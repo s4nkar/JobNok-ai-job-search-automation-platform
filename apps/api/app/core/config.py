@@ -171,6 +171,12 @@ class Settings(BaseSettings):
     # trusted as "fresh enough to skip a live call," which needs to be much
     # tighter given a company can post/close a role within hours.
     startup_hunt_ats_cache_freshness_hours: int = 6
+    # How long the "smart add" My Sources flow tries to resolve a company
+    # name/URL synchronously before falling back to a background ARQ job
+    # (see resolver.py + tasks.py). Kept short - a direct slug guess against
+    # 3 ATS APIs normally lands in 1-2s; anything slower goes async instead
+    # of leaving the user staring at a spinner.
+    startup_hunt_resolve_sync_timeout_seconds: float = 3.0
 
     # ── Startup Hunt — providers ─────────────────────────────────────────────
     # Per-provider kill switch, server-side only - there is no per-request

@@ -8,7 +8,16 @@ from arq.connections import ArqRedis, RedisSettings
 from fastapi import Request
 
 from app.core.config import settings
+from app.shared import model_registry  # noqa: F401 — registers every table on Base.metadata.
+# The worker runs as its own process (see module docstring below), separate
+# from the FastAPI app - it never imports app/main.py, so without this any
+# task whose ORM operations need cross-module FK resolution (e.g.
+# StartupHuntSource.user_id -> profiles.id) fails with NoReferencedTableError
+# the moment SQLAlchemy configures mappers, since `profiles`' model class was
+# never imported anywhere in this process. Same reason alembic/env.py imports
+# this too - see model_registry.py's own docstring.
 from app.modules.bulk_email.tasks import send_campaign_email
+from app.modules.startup_hunt.tasks import resolve_startup_hunt_source_task
 
 
 def get_arq_pool(request: Request) -> ArqRedis:
@@ -21,7 +30,7 @@ def get_arq_pool(request: Request) -> ArqRedis:
 
 
 class WorkerSettings:
-    functions = [send_campaign_email]
+    functions = [send_campaign_email, resolve_startup_hunt_source_task]
     redis_settings = RedisSettings.from_dsn(settings.redis_url)
     max_jobs = 10       # concurrent jobs this worker process runs; Resend pacing is
                          # enforced separately by the token bucket in rate_limiter.py

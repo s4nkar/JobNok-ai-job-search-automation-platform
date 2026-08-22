@@ -492,12 +492,45 @@ async def search_startup_hunt(
         if scored_item is not None:
             scored.append(scored_item)
         elif filter_reason:
+            # Kept close to the full raw item, not just a name/reason
+            # summary - a filtered-out result is often a false negative
+            # (the heuristic filters here are approximate: keyword match,
+            # location, freshness, seniority, etc.), so the frontend can
+            # offer the same Open/Save actions a normal result gets instead
+            # of only explaining why it was hidden. score_total/labels/
+            # reasons are omitted (left at neutral defaults on the frontend)
+            # since _score_opportunity returned before computing them for a
+            # filtered item - there's no real score to show.
+            canonical_key = item.get("canonical_job_url") or (
+                f'{normalize_text(str(item.get("company_name") or ""))}|'
+                f'{normalize_text(str(item.get("role_title") or ""))}|'
+                f'{normalize_text(str(item.get("location") or ""))}'
+            )
+            existing = existing_opportunities.get(canonical_key)
+            posted_at = item.get("posted_at")
             filtered_out.append(
                 {
                     "company_name": item.get("company_name"),
+                    "company_domain": item.get("company_domain"),
+                    "company_website_url": item.get("company_website_url"),
+                    "company_careers_url": item.get("company_careers_url"),
                     "role_title": item.get("role_title"),
+                    "location": item.get("location"),
+                    "country": item.get("country"),
                     "source_name": item.get("source_name"),
+                    "source_type": item.get("source_type"),
                     "source_bucket": _result_source_bucket(item),
+                    "direct_apply_url": item.get("direct_apply_url"),
+                    "canonical_job_url": item.get("canonical_job_url"),
+                    "portal_job_url": item.get("portal_job_url"),
+                    "posted_at": posted_at.isoformat() if isinstance(posted_at, datetime) else posted_at,
+                    "opportunity_kind": item.get("opportunity_kind", "job"),
+                    "citation": item.get("citation") or {},
+                    "company": item.get("company_payload") or {},
+                    "contacts": item.get("contacts") or [],
+                    "saved": bool(existing),
+                    "saved_status": existing.get("opportunity_status") if existing else None,
+                    "saved_opportunity_id": existing.get("id") if existing else None,
                     "reason": filter_reason,
                 }
             )

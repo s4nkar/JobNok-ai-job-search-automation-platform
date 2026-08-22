@@ -376,15 +376,19 @@ export type StartupHuntSourceType =
   | 'greenhouse' | 'lever' | 'ashby' | 'startup_company' | 'startup_directory'
   | 'google_web' | 'web_search' | 'ats_discovery' | 'apify_actor' | 'indeed_search' | 'theirstack_search'
 
+export type StartupHuntSourceStatus = 'resolved' | 'pending' | 'failed'
+
 export interface StartupHuntSource {
   id: string
   user_id: string | null
-  type: StartupHuntSourceType
+  type: StartupHuntSourceType | null
   name: string
   company: string
   slug: string | null
   url: string | null
   metadata: Record<string, unknown>
+  status: StartupHuntSourceStatus
+  resolution_error: string | null
   created_at: string
 }
 
@@ -477,16 +481,20 @@ export interface ScoutContact {
   created_at: string
 }
 
+// A filtered-out result carries the same Open/Save-relevant fields as a
+// normal result - the filters that excluded it (keyword match, location,
+// freshness, seniority, etc.) are heuristics, not certainties, so the UI
+// offers the same actions rather than only explaining why it was hidden.
+// No score fields - _score_opportunity returns before computing them for
+// anything it filters out, so there's no real score to show.
+export interface StartupHuntFilteredOutResult extends Omit<StartupHuntResult, 'score_total' | 'score_labels' | 'score_reasons' | 'cache_hit' | 'description_text'> {
+  reason: string
+}
+
 export interface StartupHuntResponse {
   results: StartupHuntResult[]
   overflow_results: StartupHuntResult[]
-  filtered_out: Array<{
-    company_name: string
-    role_title: string
-    source_name: string
-    source_bucket: string
-    reason: string
-  }>
+  filtered_out: StartupHuntFilteredOutResult[]
   parsed_strategy: {
     keywords: string[]
     languages: string[]

@@ -177,3 +177,23 @@ class StartupHuntSourceIn(BaseModel):
     @classmethod
     def normalize_slug(cls, v: str | None) -> str | None:
         return v.strip() if v and v.strip() else None
+
+
+class StartupHuntSourceResolveRequest(BaseModel):
+    """Smart-add input for My Sources - just a company name or a pasted
+    careers URL. See resolver.py/service.py's resolve_startup_hunt_source
+    for how this gets turned into a type/slug automatically. The old
+    explicit type/name/slug/url form (StartupHuntSourceIn above) stays as
+    the manual-entry fallback for when this can't find a match."""
+
+    company_input: str
+
+    @field_validator("company_input")
+    @classmethod
+    def validate_company_input(cls, v: str) -> str:
+        value = v.strip()
+        if len(value) < 2:
+            raise ValueError("Enter a company name or careers URL")
+        if len(value) > 300:
+            raise ValueError("Keep it under 300 characters")
+        return value

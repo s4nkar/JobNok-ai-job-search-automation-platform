@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from arq.connections import ArqRedis
 from fastapi import APIRouter, Depends, HTTPException, Request
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -14,9 +15,11 @@ from app.modules.startup_hunt.schemas import (
     StartupHuntOpportunityUpdateRequest,
     StartupHuntSearchRequest,
     StartupHuntSourceIn,
+    StartupHuntSourceResolveRequest,
 )
 from app.modules.startup_hunt import service
 from app.modules.usage.service import record_event as record_tool_usage
+from app.workers.arq_worker import get_arq_pool
 
 router = APIRouter()
 
@@ -123,8 +126,24 @@ async def list_startup_hunt_sources(request: Request, db: AsyncSession = Depends
 async def create_startup_hunt_source(
     request: Request, body: StartupHuntSourceIn, db: AsyncSession = Depends(get_db)
 ):
+    """Manual entry - the fallback path, kept for when the smart-add resolve
+    flow below can't find a company on its own."""
     user_id = await get_current_user_id(request, db)
     return await service.create_startup_hunt_source(db, user_id, body)
+
+
+@router.post("/sources/resolve", status_code=201)
+async def resolve_startup_hunt_source(
+    request: Request,
+    body: StartupHuntSourceResolveRequest,
+    db: AsyncSession = Depends(get_db),
+    arq_pool: ArqRedis = Depends(get_arq_pool),
+):
+    """Smart-add entry point - a company name or careers URL, nothing else.
+    See service.py's resolve_startup_hunt_source for the reuse/fast-sync/
+    async-fallback flow this drives."""
+    user_id = await get_current_user_id(request, db)
+    return await service.resolve_startup_hunt_source(db, user_id, body.company_input, arq_pool)
 
 
 @router.delete("/sources/{source_id}", status_code=204)

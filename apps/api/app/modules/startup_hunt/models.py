@@ -137,22 +137,48 @@ class StartupHuntSource(Base, UUIDPKMixin, CreatedAtMixin):
     user_id NULL = globally curated, visible to every user (replaces the old
     STARTUP_HUNT_SOURCES_JSON env var). user_id set = one user's own private
     addition, only ever merged into that user's own searches.
+
+    A row starts life via the resolve flow (see resolver.py) - the user
+    types a company name or pastes a careers URL, and type/slug/url get
+    filled in automatically instead of the user configuring them by hand.
+    status tracks where that resolution is: 'resolved' rows are searchable
+    immediately (type/slug always set); 'pending' ones are still being
+    worked on by the background resolver (type/slug still null, not yet
+    included in any search - see build_seeded_sources); 'failed' ones
+    surface resolution_error so the UI can offer manual entry as a
+    fallback. Rows added via the old manual type/slug/url form (kept as
+    that fallback) are created 'resolved' directly, skipping this pipeline
+    entirely - they're already exactly what a resolution would produce.
     """
 
     __tablename__ = "startup_hunt_sources"
     __table_args__ = (
+        CheckConstraint(
+            "status in ('resolved', 'pending', 'failed')",
+            name="startup_hunt_sources_status_check",
+        ),
         Index("startup_hunt_sources_user_id_idx", "user_id"),
+        Index("startup_hunt_sources_status_idx", "status"),
+        # Backs the cross-user "has anyone already resolved this company"
+        # reuse lookup in resolver.py (a case-insensitive match on `name`,
+        # done in Python via func.lower() in the query - this table stays
+        # small (curated companies, not raw listings), so a plain index is
+        # enough rather than a dedicated functional index).
+        Index("startup_hunt_sources_name_idx", "name"),
     )
 
     user_id: Mapped[uuid.UUID | None] = mapped_column(
         PG_UUID(as_uuid=True), ForeignKey("profiles.id", ondelete="CASCADE"), nullable=True
     )
-    type: Mapped[str] = mapped_column(Text, nullable=False)
+    # Nullable now - a 'pending' row doesn't know its ATS type yet.
+    type: Mapped[str | None] = mapped_column(Text, nullable=True)
     name: Mapped[str] = mapped_column(Text, nullable=False)
     company: Mapped[str] = mapped_column(Text, nullable=False)
     slug: Mapped[str | None] = mapped_column(Text, nullable=True)
     url: Mapped[str | None] = mapped_column(Text, nullable=True)
     metadata_: Mapped[dict] = mapped_column("metadata", JSONB, server_default="{}", nullable=False)
+    status: Mapped[str] = mapped_column(Text, server_default="resolved", nullable=False)
+    resolution_error: Mapped[str | None] = mapped_column(Text, nullable=True)
 
 
 class OpportunityArtifact(Base, UUIDPKMixin, CreatedAtMixin):

@@ -17,8 +17,9 @@ import { apiFetch, apiGet } from '@/lib/api'
 import { queryKeys } from '@/lib/queryKeys'
 import { config } from '@/lib/config'
 import { formatDate } from '@jobnok/ui'
-import { StartupHuntResponse, StartupHuntResult, StartupHuntSource, StartupHuntSourceType } from '@/lib/types'
+import { StartupHuntFilteredOutResult, StartupHuntResponse, StartupHuntResult, StartupHuntSource, StartupHuntSourceStatus, StartupHuntSourceType } from '@/lib/types'
 import {
+  AlertCircle,
   Building2,
   CheckCircle2,
   ChevronDown,
@@ -26,11 +27,13 @@ import {
   Compass,
   ExternalLink,
   HelpCircle,
+  Info,
   ListPlus,
   Loader2,
   Mail,
   MapPin,
   Plus,
+  Search,
   SlidersHorizontal,
   Trash2,
   UserRound,
@@ -127,6 +130,17 @@ const sourceSchema = z.object({
 })
 type SourceFormData = z.infer<typeof sourceSchema>
 
+const resolveSchema = z.object({
+  company_input: z.string().min(2, 'Enter a company name or careers URL'),
+})
+type ResolveFormData = z.infer<typeof resolveSchema>
+
+const SOURCE_STATUS_META: Record<StartupHuntSourceStatus, { label: string; className: string }> = {
+  resolved: { label: 'Watching', className: 'bg-emerald-50 text-emerald-700 border-emerald-100' },
+  pending: { label: 'Resolving…', className: 'bg-amber-50 text-amber-700 border-amber-100' },
+  failed: { label: 'Not found', className: 'bg-red-50 text-red-700 border-red-100' },
+}
+
 function compactReasons(reasons: string[]) {
   return reasons.slice(0, 2)
 }
@@ -139,6 +153,11 @@ export default function StartupHuntPage() {
   const [filteredOut, setFilteredOut] = useState<StartupHuntResponse['filtered_out']>([])
   const [parsedStrategy, setParsedStrategy] = useState<StartupHuntResponse['parsed_strategy'] | null>(null)
   const [expandedCards, setExpandedCards] = useState<Record<string, boolean>>({})
+  // Captured at search time, not read reactively from the form - the toggle
+  // could change after a search completes but before the next one runs, and
+  // this banner should describe the search that produced the results on
+  // screen right now, not whatever the form currently says.
+  const [seededSourcesIncluded, setSeededSourcesIncluded] = useState(false)
   const [error, setError] = useState<string | null>(null)
   // Mobile/tablet-only: filters start collapsed so results are reachable
   // without scrolling past every field first. Ignored at lg+ (always expanded).
@@ -161,9 +180,30 @@ export default function StartupHuntPage() {
     queryKey: queryKeys.startupHuntSources,
     queryFn: () => apiGet<StartupHuntSource[]>('/api/startup-hunt/sources'),
     enabled: sourcesOpen,
+    // Poll while anything is still resolving in the background (see
+    // resolve_startup_hunt_source_task) - stops on its own once every row
+    // has settled to resolved/failed, no need to track this separately.
+    refetchInterval: (query) => {
+      const data = query.state.data as StartupHuntSource[] | undefined
+      return data?.some((s) => s.status === 'pending') ? 3000 : false
+    },
   })
+  const [resolvingSource, setResolvingSource] = useState(false)
   const [addingSource, setAddingSource] = useState(false)
   const [deletingSourceId, setDeletingSourceId] = useState<string | null>(null)
+  // Manual entry stays collapsed by default - only surfaced as a fallback
+  // when the smart-add resolve flow can't find a company on its own.
+  const [manualFormOpen, setManualFormOpen] = useState(false)
+
+  const {
+    register: registerResolve,
+    handleSubmit: handleSubmitResolve,
+    reset: resetResolveForm,
+    formState: { errors: resolveErrors },
+  } = useForm<ResolveFormData>({
+    resolver: zodResolver(resolveSchema),
+    defaultValues: { company_input: '' },
+  })
 
   const {
     register: registerSource,
@@ -179,6 +219,35 @@ export default function StartupHuntPage() {
 
   function openSources() {
     setSourcesOpen(true)
+  }
+
+  function openManualEntry(prefillName?: string) {
+    setManualFormOpen(true)
+    if (prefillName) setSourceValue('name', prefillName)
+  }
+
+  async function onResolveSource(data: ResolveFormData) {
+    setResolvingSource(true)
+    const res = await apiFetch('/api/startup-hunt/sources/resolve', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ company_input: data.company_input.trim() }),
+    })
+    const json = await res.json()
+    if (!res.ok) {
+      toast({ title: 'Could not add company', description: json.detail || 'Please try again.', variant: 'destructive' })
+      setResolvingSource(false)
+      return
+    }
+    const source = json as StartupHuntSource
+    queryClient.setQueryData<StartupHuntSource[]>(queryKeys.startupHuntSources, (prev) => [source, ...(prev || [])])
+    resetResolveForm({ company_input: '' })
+    toast(
+      source.status === 'resolved'
+        ? { title: 'Company added', description: `Found on ${source.type}. It will be included in your next search.` }
+        : { title: 'Still looking...', description: "Finding this company's job board in the background - it'll appear here once found." }
+    )
+    setResolvingSource(false)
   }
 
   async function onAddSource(data: SourceFormData) {
@@ -251,6 +320,7 @@ export default function StartupHuntPage() {
       setFilteredOut(payload.filtered_out || [])
       setParsedStrategy(payload.parsed_strategy)
       setExpandedCards({})
+      setSeededSourcesIncluded(data.include_seeded_sources === 'true')
     } catch {
       setError('Network error. Please try again.')
     } finally {
@@ -258,7 +328,7 @@ export default function StartupHuntPage() {
     }
   }
 
-  async function saveOpportunity(job: StartupHuntResult, status: 'saved' | 'applied' | 'contacted') {
+  async function saveOpportunity(job: StartupHuntResult | StartupHuntFilteredOutResult, status: 'saved' | 'applied' | 'contacted') {
     const key = job.canonical_job_url || `${job.company_name}-${job.role_title}-${job.location}`
     setSavingId(key)
     try {
@@ -282,9 +352,12 @@ export default function StartupHuntPage() {
           discovered_at: new Date().toISOString(),
           opportunity_kind: job.opportunity_kind,
           opportunity_status: status,
-          score_total: job.score_total,
-          score_labels: job.score_labels,
-          score_reasons: job.score_reasons,
+          // Filtered-out items never went through scoring (the filter that
+          // excluded them ran before score_total/labels/reasons were ever
+          // computed - see engine.py) - neutral defaults for those.
+          score_total: 'score_total' in job ? job.score_total : 0,
+          score_labels: 'score_labels' in job ? job.score_labels : [],
+          score_reasons: 'score_reasons' in job ? job.score_reasons : [],
           citation_payload: job.citation,
           company_payload: job.company,
           search_context: {
@@ -316,6 +389,16 @@ export default function StartupHuntPage() {
         }
       }))
       setOverflowResults((prev) => prev.map((item) => {
+        const itemKey = item.canonical_job_url || `${item.company_name}-${item.role_title}-${item.location}`
+        if (itemKey !== key) return item
+        return {
+          ...item,
+          saved: true,
+          saved_status: status,
+          saved_opportunity_id: json.id,
+        }
+      }))
+      setFilteredOut((prev) => prev.map((item) => {
         const itemKey = item.canonical_job_url || `${item.company_name}-${item.role_title}-${item.location}`
         if (itemKey !== key) return item
         return {
@@ -555,6 +638,13 @@ export default function StartupHuntPage() {
           {error && (
             <div className="bg-red-50 border border-red-100 text-red-700 rounded-xl px-4 py-3 text-sm">
               {error}
+            </div>
+          )}
+
+          {seededSourcesIncluded && !loading && (results.length > 0 || overflowResults.length > 0) && (
+            <div className="flex items-start gap-2 bg-indigo-50 border border-indigo-100 text-indigo-700 rounded-xl px-4 py-2.5 text-xs">
+              <Info className="h-3.5 w-3.5 flex-shrink-0 mt-0.5" />
+              <span>Results may include companies that aren&apos;t startups - your curated watchlist is on, so companies you&apos;ve personally added are included regardless of size or stage.</span>
             </div>
           )}
 
@@ -849,18 +939,50 @@ export default function StartupHuntPage() {
               </div>
 
               <div className="space-y-3">
-                {filteredOut.map((item, index) => (
-                  <div key={`${item.company_name}-${item.role_title}-${item.source_name}-${index}`} className="rounded-xl border border-slate-100 bg-slate-50 p-4">
-                    <div className="flex items-center gap-2 flex-wrap mb-1">
-                      <p className="text-sm font-semibold text-slate-900">{item.role_title}</p>
-                      <span className="inline-flex items-center px-2 py-0.5 rounded-md text-[10px] font-semibold bg-slate-50 text-slate-600 border border-slate-200">
-                        {bucketLabel(item.source_bucket || 'crawler')}
-                      </span>
+                {filteredOut.map((item) => {
+                  const resultKey = item.canonical_job_url || `${item.company_name}-${item.role_title}-${item.location}`
+                  const primaryLink = item.direct_apply_url || item.company_careers_url || item.portal_job_url || item.company_website_url
+                  return (
+                    <div key={resultKey} className="rounded-xl border border-slate-100 bg-slate-50 p-4">
+                      <div className="flex items-start justify-between gap-4">
+                        <div className="min-w-0">
+                          <div className="flex items-center gap-2 flex-wrap mb-1">
+                            <p className="text-sm font-semibold text-slate-900">{item.role_title}</p>
+                            <span className="inline-flex items-center px-2 py-0.5 rounded-md text-[10px] font-semibold bg-slate-50 text-slate-600 border border-slate-200">
+                              {bucketLabel(item.source_bucket || 'crawler')}
+                            </span>
+                            {item.saved && (
+                              <span className="inline-flex items-center px-2 py-0.5 rounded-md text-[10px] font-semibold bg-emerald-50 text-emerald-700 border border-emerald-100">
+                                <CheckCircle2 className="h-2.5 w-2.5 mr-1" />
+                                {item.saved_status}
+                              </span>
+                            )}
+                          </div>
+                          <p className="text-xs text-slate-700">{item.company_name} · {item.source_name}</p>
+                          <p className="text-xs text-slate-500 mt-1">Reason: {item.reason}</p>
+                        </div>
+                        <div className="flex gap-2 flex-shrink-0">
+                          {primaryLink && (
+                            <Button variant="outline" asChild className="rounded-xl h-8 text-xs">
+                              <Link href={primaryLink} target="_blank">
+                                <ExternalLink className="h-3.5 w-3.5 mr-1.5" />
+                                Open
+                              </Link>
+                            </Button>
+                          )}
+                          <Button
+                            disabled={item.saved || savingId === resultKey}
+                            onClick={() => saveOpportunity(item, 'saved')}
+                            className={`rounded-xl h-8 text-xs ${item.saved ? 'bg-emerald-500 text-white hover:bg-emerald-600' : 'gradient-brand text-white border-0 hover:opacity-90'}`}
+                          >
+                            {savingId === resultKey && <Loader2 className="h-3.5 w-3.5 mr-1.5 animate-spin" />}
+                            {item.saved ? 'Saved' : 'Save'}
+                          </Button>
+                        </div>
+                      </div>
                     </div>
-                    <p className="text-xs text-slate-700">{item.company_name} · {item.source_name}</p>
-                    <p className="text-xs text-slate-500 mt-1">Reason: {item.reason}</p>
-                  </div>
-                ))}
+                  )
+                })}
               </div>
             </div>
           )}
@@ -869,84 +991,149 @@ export default function StartupHuntPage() {
 
       {/* My Sources dialog */}
       <Dialog open={sourcesOpen} onOpenChange={setSourcesOpen}>
-        <DialogContent className="max-w-lg rounded-2xl">
-          <DialogHeader>
-            <DialogTitle className="text-lg font-bold">My Sources</DialogTitle>
-          </DialogHeader>
-          <p className="text-sm text-muted-foreground -mt-2">
-            ATS boards or companies you want searched. Included whenever &quot;Use curated watchlist&quot; is turned on for a hunt.
-          </p>
-
-          <form onSubmit={handleSubmitSource(onAddSource)} className="space-y-3 border-b border-slate-100 pb-4">
-            <div className="grid grid-cols-2 gap-3">
-              <div className="space-y-1.5">
-                <Label className="text-xs font-medium">Type</Label>
-                <Select value={watchSource('type')} onValueChange={(v) => setSourceValue('type', v as SourceFormData['type'])}>
-                  <SelectTrigger className="rounded-xl h-9"><SelectValue /></SelectTrigger>
-                  <SelectContent>
-                    {USER_SOURCE_TYPES.map((t) => (
-                      <SelectItem key={t.value} value={t.value}>{t.label}</SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-              </div>
-              <div className="space-y-1.5">
-                <Label className="text-xs font-medium">Name</Label>
-                <Input placeholder="Acme Corp" className="rounded-xl h-9" {...registerSource('name')} />
-                {sourceErrors.name && <p className="text-xs text-destructive">{sourceErrors.name.message}</p>}
-              </div>
-            </div>
-            <p className="text-[11px] text-muted-foreground">
-              {USER_SOURCE_TYPES.find((t) => t.value === watchSource('type'))?.hint}
+        <DialogContent className="max-w-lg max-h-[90vh] p-0 gap-0 flex flex-col overflow-hidden rounded-2xl">
+          <div className="p-6 pb-4 flex-shrink-0">
+            <DialogHeader>
+              <DialogTitle className="text-lg font-bold">My Sources</DialogTitle>
+            </DialogHeader>
+            <p className="text-sm text-muted-foreground mt-1">
+              Add companies you never want JobNok to miss. Included whenever &quot;Use curated watchlist&quot; is turned on for a hunt.
             </p>
-            <div className="grid grid-cols-2 gap-3">
-              <div className="space-y-1.5">
-                <Label className="text-xs font-medium">Board slug</Label>
-                <Input placeholder="acme" className="rounded-xl h-9" {...registerSource('slug')} />
-              </div>
-              <div className="space-y-1.5">
-                <Label className="text-xs font-medium">Careers/company URL</Label>
-                <Input placeholder="https://acme.com/careers" className="rounded-xl h-9" {...registerSource('url')} />
-              </div>
-            </div>
-            <Button type="submit" disabled={addingSource} className="w-full rounded-xl h-9 gradient-brand text-white border-0">
-              {addingSource ? <Loader2 className="h-3.5 w-3.5 mr-2 animate-spin" /> : <Plus className="h-3.5 w-3.5 mr-2" />}
-              Add source
-            </Button>
-          </form>
-
-          <div className="space-y-2 max-h-64 overflow-y-auto">
-            {sourcesLoading ? (
-              <div className="flex items-center gap-2 text-sm text-slate-400 py-4 justify-center">
-                <Loader2 className="h-4 w-4 animate-spin" /> Loading…
-              </div>
-            ) : sources.length === 0 ? (
-              <p className="text-sm text-slate-400 text-center py-4">No sources added yet.</p>
-            ) : (
-              sources.map((s) => (
-                <div key={s.id} className="flex items-center justify-between gap-3 rounded-xl border border-slate-100 px-3 py-2">
-                  <div className="min-w-0">
-                    <p className="text-sm font-semibold text-slate-800 truncate">{s.name}</p>
-                    <p className="text-xs text-slate-500 truncate">
-                      {USER_SOURCE_TYPES.find((t) => t.value === s.type)?.label || s.type}
-                      {s.slug ? ` · ${s.slug}` : ''}
-                    </p>
-                  </div>
-                  <button
-                    onClick={() => deleteSource(s.id)}
-                    disabled={deletingSourceId === s.id}
-                    className="h-7 w-7 rounded-lg flex items-center justify-center text-slate-400 hover:text-red-500 hover:bg-red-50 transition-colors flex-shrink-0"
-                  >
-                    {deletingSourceId === s.id ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Trash2 className="h-3.5 w-3.5" />}
-                  </button>
-                </div>
-              ))
-            )}
           </div>
 
-          <DialogFooter>
-            <Button type="button" variant="outline" onClick={() => setSourcesOpen(false)} className="rounded-xl">Done</Button>
-          </DialogFooter>
+          <div className="flex-1 min-h-0 overflow-y-auto px-6 space-y-4">
+            <form onSubmit={handleSubmitResolve(onResolveSource)} className="flex items-start gap-2 border-b border-slate-100 pb-4">
+              <div className="flex-1 space-y-1.5">
+                <div className="relative">
+                  <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-slate-400" />
+                  <Input
+                    placeholder="Search company or paste careers URL"
+                    className="rounded-xl h-9 pl-8 text-sm"
+                    {...registerResolve('company_input')}
+                  />
+                </div>
+                {resolveErrors.company_input && <p className="text-xs text-destructive">{resolveErrors.company_input.message}</p>}
+              </div>
+              <Button type="submit" disabled={resolvingSource} className="rounded-xl h-9 gradient-brand text-white border-0 flex-shrink-0">
+                {resolvingSource ? <Loader2 className="h-3.5 w-3.5 mr-1.5 animate-spin" /> : <Plus className="h-3.5 w-3.5 mr-1.5" />}
+                Add
+              </Button>
+            </form>
+
+            {manualFormOpen && (
+              <form onSubmit={handleSubmitSource(onAddSource)} className="space-y-3 rounded-xl border border-slate-100 bg-slate-50 p-3">
+                <div className="flex items-center justify-between">
+                  <p className="text-xs font-semibold text-slate-600">Add manually</p>
+                  <button type="button" onClick={() => setManualFormOpen(false)} className="text-xs text-slate-400 hover:text-slate-600">Cancel</button>
+                </div>
+                <div className="grid grid-cols-2 gap-3">
+                  <div className="space-y-1.5">
+                    <Label className="text-xs font-medium">Type</Label>
+                    <Select value={watchSource('type')} onValueChange={(v) => setSourceValue('type', v as SourceFormData['type'])}>
+                      <SelectTrigger className="rounded-xl h-9 bg-white"><SelectValue /></SelectTrigger>
+                      <SelectContent>
+                        {USER_SOURCE_TYPES.map((t) => (
+                          <SelectItem key={t.value} value={t.value}>{t.label}</SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                  </div>
+                  <div className="space-y-1.5">
+                    <Label className="text-xs font-medium">Name</Label>
+                    <Input placeholder="Acme Corp" className="rounded-xl h-9 bg-white" {...registerSource('name')} />
+                    {sourceErrors.name && <p className="text-xs text-destructive">{sourceErrors.name.message}</p>}
+                  </div>
+                </div>
+                <p className="text-[11px] text-muted-foreground">
+                  {USER_SOURCE_TYPES.find((t) => t.value === watchSource('type'))?.hint}
+                </p>
+                <div className="grid grid-cols-2 gap-3">
+                  <div className="space-y-1.5">
+                    <Label className="text-xs font-medium">Board slug</Label>
+                    <Input placeholder="acme" className="rounded-xl h-9 bg-white" {...registerSource('slug')} />
+                  </div>
+                  <div className="space-y-1.5">
+                    <Label className="text-xs font-medium">Careers/company URL</Label>
+                    <Input placeholder="https://acme.com/careers" className="rounded-xl h-9 bg-white" {...registerSource('url')} />
+                  </div>
+                </div>
+                <Button type="submit" disabled={addingSource} className="w-full rounded-xl h-9 gradient-brand text-white border-0">
+                  {addingSource ? <Loader2 className="h-3.5 w-3.5 mr-2 animate-spin" /> : <Plus className="h-3.5 w-3.5 mr-2" />}
+                  Add source
+                </Button>
+              </form>
+            )}
+
+            <div className="space-y-2 pb-4">
+              {sourcesLoading ? (
+                <div className="flex items-center gap-2 text-sm text-slate-400 py-4 justify-center">
+                  <Loader2 className="h-4 w-4 animate-spin" /> Loading…
+                </div>
+              ) : sources.length === 0 ? (
+                <p className="text-sm text-slate-400 text-center py-4">No companies added yet.</p>
+              ) : (
+                sources.map((s) => {
+                  const statusMeta = SOURCE_STATUS_META[s.status]
+                  return (
+                    <div key={s.id} className="flex items-center justify-between gap-3 rounded-xl border border-slate-100 px-3 py-2">
+                      <div className="min-w-0">
+                        <p className="text-sm font-semibold text-slate-800 truncate">{s.name}</p>
+                        <div className="flex items-center gap-1.5 mt-0.5 flex-wrap">
+                          <span className={`inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-medium border ${statusMeta.className}`}>
+                            {s.status === 'pending' && <Loader2 className="h-2.5 w-2.5 mr-1 animate-spin" />}
+                            {statusMeta.label}
+                          </span>
+                          {s.status === 'resolved' && (
+                            <span className="text-xs text-slate-500 truncate">
+                              {USER_SOURCE_TYPES.find((t) => t.value === s.type)?.label || s.type}
+                              {s.slug ? ` · ${s.slug}` : ''}
+                            </span>
+                          )}
+                          {s.status === 'failed' && (
+                            <button
+                              type="button"
+                              onClick={() => openManualEntry(s.name)}
+                              className="text-xs text-indigo-600 hover:underline"
+                            >
+                              Add manually
+                            </button>
+                          )}
+                        </div>
+                        {s.status === 'failed' && s.resolution_error && (
+                          <p className="text-[11px] text-slate-400 mt-1 flex items-start gap-1">
+                            <AlertCircle className="h-3 w-3 flex-shrink-0 mt-0.5" />
+                            <span>{s.resolution_error}</span>
+                          </p>
+                        )}
+                      </div>
+                      <button
+                        onClick={() => deleteSource(s.id)}
+                        disabled={deletingSourceId === s.id}
+                        className="h-7 w-7 rounded-lg flex items-center justify-center text-slate-400 hover:text-red-500 hover:bg-red-50 transition-colors flex-shrink-0"
+                      >
+                        {deletingSourceId === s.id ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Trash2 className="h-3.5 w-3.5" />}
+                      </button>
+                    </div>
+                  )
+                })
+              )}
+            </div>
+          </div>
+
+          <div className="p-6 pt-4 border-t border-slate-100 flex-shrink-0">
+            <DialogFooter>
+              {!manualFormOpen && (
+                <button
+                  type="button"
+                  onClick={() => openManualEntry()}
+                  className="text-xs text-slate-400 hover:text-slate-600 mr-auto"
+                >
+                  Add manually instead
+                </button>
+              )}
+              <Button type="button" variant="outline" onClick={() => setSourcesOpen(false)} className="rounded-xl">Done</Button>
+            </DialogFooter>
+          </div>
         </DialogContent>
       </Dialog>
     </div>
