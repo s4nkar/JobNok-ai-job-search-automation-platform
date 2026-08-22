@@ -18,21 +18,14 @@ class StartupHuntSearchRequest(BaseModel):
     english_friendly_only: bool = False
     company_stage: str | None = None
     strategy_prompt: str | None = None
-    crawler_enabled: bool = False
-    startupmap_enabled: bool = False
-    web_enabled: bool = False
-    indeed_enabled: bool = False
-    theirstack_enabled: bool = True
-    apify_enabled: bool = False
-    ats_enabled: bool = True
+    # Per-provider enabled/limit toggles used to live here (crawler_enabled,
+    # theirstack_limit, etc.) - removed. Every provider's on/off state and
+    # result cap is server-side config now (see config.py's "Startup Hunt —
+    # providers" section and app/modules/startup_hunt/providers/), not a
+    # per-request choice. include_seeded_sources/seeded_limit stay - that's
+    # a real per-search data-scope choice ("include my own watchlist"), not
+    # a provider availability toggle.
     seeded_limit: int = 0
-    crawler_limit: int = 0
-    startupmap_limit: int = 0
-    web_limit: int = 0
-    indeed_limit: int = 0
-    theirstack_limit: int = 15
-    apify_limit: int = 0
-    ats_limit: int = 15
 
     @field_validator("query", "location")
     @classmethod
@@ -61,7 +54,7 @@ class StartupHuntSearchRequest(BaseModel):
             raise ValueError("result_limit must be between 1 and 50")
         return v
 
-    @field_validator("seeded_limit", "crawler_limit", "startupmap_limit", "web_limit", "indeed_limit", "theirstack_limit", "apify_limit", "ats_limit")
+    @field_validator("seeded_limit")
     @classmethod
     def validate_source_limit(cls, v: int) -> int:
         if v < 0 or v > 50:

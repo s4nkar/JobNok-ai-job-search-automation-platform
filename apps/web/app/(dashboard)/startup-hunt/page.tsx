@@ -48,21 +48,12 @@ const schema = z.object({
   english_friendly_only: z.enum(['false', 'true']).default('false'),
   company_stage: z.string().optional(),
   strategy_prompt: z.string().optional(),
-  crawler_enabled: z.enum(['false', 'true']).default('false'),
-  startupmap_enabled: z.enum(['false', 'true']).default('false'),
-  web_enabled: z.enum(['false', 'true']).default('false'),
-  indeed_enabled: z.enum(['false', 'true']).default('false'),
-  theirstack_enabled: z.enum(['false', 'true']).default('true'),
-  apify_enabled: z.enum(['false', 'true']).default('false'),
-  ats_enabled: z.enum(['false', 'true']).default('true'),
+  // Per-provider enabled/limit toggles used to live here (crawler_enabled,
+  // theirstack_limit, etc.) - removed. Every provider's on/off state and
+  // result cap is server-side config now, not a per-search choice.
+  // seeded_limit stays - that's a real data-scope choice ("include my own
+  // watchlist"), not a provider toggle.
   seeded_limit: z.coerce.number().int().min(0).max(50),
-  crawler_limit: z.coerce.number().int().min(0).max(50),
-  startupmap_limit: z.coerce.number().int().min(0).max(50),
-  web_limit: z.coerce.number().int().min(0).max(50),
-  indeed_limit: z.coerce.number().int().min(0).max(50),
-  theirstack_limit: z.coerce.number().int().min(0).max(50),
-  apify_limit: z.coerce.number().int().min(0).max(50),
-  ats_limit: z.coerce.number().int().min(0).max(50),
 })
 
 type FormData = z.infer<typeof schema>
@@ -80,21 +71,7 @@ const DEFAULT_VALUES: FormData = {
   english_friendly_only: 'false',
   company_stage: '',
   strategy_prompt: 'applied ai engineer, mid-level, 3+ years experience, not senior/staff/principal, early-stage, founder-led, english friendly, relocation friendly, modern AI stack (LLMs, RAG, agents, FastAPI, MLOps), fresh hiring momentum, avoid recruiters and large enterprises.',
-  crawler_enabled: 'false',
-  startupmap_enabled: 'false',
-  web_enabled: 'false',
-  indeed_enabled: 'false',
-  theirstack_enabled: 'true',
-  apify_enabled: 'false',
-  ats_enabled: 'true',
   seeded_limit: 0,
-  crawler_limit: 0,
-  startupmap_limit: 0,
-  web_limit: 0,
-  indeed_limit: 0,
-  theirstack_limit: 15,
-  apify_limit: 0,
-  ats_limit: 15,
 }
 
 // Score labels are informational tags, not status — several can appear at
@@ -111,18 +88,18 @@ const labelClasses: Record<string, string> = {
 
 const SOURCE_DIAGNOSTIC_ORDER: ProviderBucket[] = ['ats', 'theirstack']
 
-const PROVIDER_META: Record<ProviderBucket, { label: string; enabledField: keyof FormData; limitField: keyof FormData; hint: string }> = {
-  crawler: { label: 'Crawler', enabledField: 'crawler_enabled', limitField: 'crawler_limit', hint: 'Curated watchlist and seeded startup sources.' },
-  startupmap: { label: 'StartupMap', enabledField: 'startupmap_enabled', limitField: 'startupmap_limit', hint: 'Directory-style startup discovery for the chosen city.' },
-  web: { label: 'Web', enabledField: 'web_enabled', limitField: 'web_limit', hint: 'Search-based discovery and company-page fallback leads.' },
-  indeed: { label: 'Indeed', enabledField: 'indeed_enabled', limitField: 'indeed_limit', hint: 'Apify-powered Indeed role discovery.' },
-  theirstack: { label: 'TheirStack', enabledField: 'theirstack_enabled', limitField: 'theirstack_limit', hint: 'Credit-capped API search for startup hiring results.' },
-  apify: { label: 'Apify', enabledField: 'apify_enabled', limitField: 'apify_limit', hint: 'Optional startup actor for extra discovery breadth.' },
-  ats: { label: 'ATS', enabledField: 'ats_enabled', limitField: 'ats_limit', hint: 'Direct ATS board and careers-page discovery.' },
+const PROVIDER_LABELS: Record<ProviderBucket, string> = {
+  crawler: 'Crawler',
+  startupmap: 'StartupMap',
+  web: 'Web',
+  indeed: 'Indeed',
+  theirstack: 'TheirStack',
+  apify: 'Apify',
+  ats: 'ATS',
 }
 
 function bucketLabel(bucket: string) {
-  return PROVIDER_META[bucket as ProviderBucket]?.label || bucket
+  return PROVIDER_LABELS[bucket as ProviderBucket] || bucket
 }
 
 const USER_SOURCE_TYPES: { value: StartupHuntSourceType; label: string; hint: string }[] = [
@@ -244,13 +221,6 @@ export default function StartupHuntPage() {
           direct_links_only: data.direct_links_only === 'true',
           english_friendly_only: data.english_friendly_only === 'true',
           strategy_prompt: data.strategy_prompt?.trim() || null,
-          crawler_enabled: data.crawler_enabled === 'true',
-          startupmap_enabled: data.startupmap_enabled === 'true',
-          web_enabled: data.web_enabled === 'true',
-          indeed_enabled: data.indeed_enabled === 'true',
-          theirstack_enabled: data.theirstack_enabled === 'true',
-          apify_enabled: data.apify_enabled === 'true',
-          ats_enabled: data.ats_enabled === 'true',
         }),
       })
       const json = await res.json()
@@ -323,21 +293,7 @@ export default function StartupHuntPage() {
             english_friendly_only: watch('english_friendly_only') === 'true',
             company_stage: watch('company_stage') || null,
             strategy_prompt: watch('strategy_prompt') || null,
-            crawler_enabled: watch('crawler_enabled') === 'true',
-            startupmap_enabled: watch('startupmap_enabled') === 'true',
-            web_enabled: watch('web_enabled') === 'true',
-            indeed_enabled: watch('indeed_enabled') === 'true',
-            theirstack_enabled: watch('theirstack_enabled') === 'true',
-            apify_enabled: watch('apify_enabled') === 'true',
-            ats_enabled: watch('ats_enabled') === 'true',
             seeded_limit: watch('seeded_limit'),
-            crawler_limit: watch('crawler_limit'),
-            startupmap_limit: watch('startupmap_limit'),
-            web_limit: watch('web_limit'),
-            indeed_limit: watch('indeed_limit'),
-            theirstack_limit: watch('theirstack_limit'),
-            apify_limit: watch('apify_limit'),
-            ats_limit: watch('ats_limit'),
           },
           contacts: job.contacts,
         }),
@@ -516,6 +472,18 @@ export default function StartupHuntPage() {
           </div>
 
           <div className="space-y-1.5">
+            <Label className="text-xs font-medium text-slate-600">Watchlist cap</Label>
+            <Input
+              type="number"
+              min={0}
+              max={50}
+              className="rounded-xl h-9 text-sm border-slate-200 focus:border-indigo-300 focus:ring-1 focus:ring-indigo-200"
+              {...register('seeded_limit')}
+              disabled={watch('include_seeded_sources') !== 'true'}
+            />
+          </div>
+
+          <div className="space-y-1.5">
             <Label className="text-xs font-medium text-slate-600">Remote only</Label>
             <Select value={watch('remote_only')} onValueChange={(v) => setValue('remote_only', v as 'false' | 'true')}>
               <SelectTrigger className="rounded-xl h-9 text-sm border-slate-200"><SelectValue /></SelectTrigger>
@@ -556,66 +524,6 @@ export default function StartupHuntPage() {
               className="rounded-xl text-sm border-slate-200 focus:border-indigo-300 focus:ring-1 focus:ring-indigo-200"
               {...register('strategy_prompt')}
             />
-          </div>
-
-          <div className="space-y-2.5 pt-1 border-t border-slate-100">
-            <Label className="text-xs font-medium text-slate-600">Provider controls</Label>
-            <div className="space-y-2.5">
-              {SOURCE_DIAGNOSTIC_ORDER.map((bucket) => {
-                const meta = PROVIDER_META[bucket]
-                return (
-                  <div key={bucket} className="rounded-xl border border-slate-100 bg-slate-50 p-3">
-                    <div className="flex items-start justify-between gap-3">
-                      <div className="min-w-0">
-                        <p className="text-[13px] font-semibold text-slate-700">{meta.label}</p>
-                        <p className="text-[11px] text-slate-500 mt-0.5">{meta.hint}</p>
-                      </div>
-                      <div className="w-[104px] flex-shrink-0">
-                        <Select value={watch(meta.enabledField) as string} onValueChange={(v) => setValue(meta.enabledField, v as never)}>
-                          <SelectTrigger className="rounded-lg h-8 text-xs border-slate-200"><SelectValue /></SelectTrigger>
-                          <SelectContent>
-                            <SelectItem value="true" className="text-sm">Enabled</SelectItem>
-                            <SelectItem value="false" className="text-sm">Disabled</SelectItem>
-                          </SelectContent>
-                        </Select>
-                      </div>
-                    </div>
-                    <div className="grid grid-cols-2 gap-2.5 mt-2.5">
-                      <div className="space-y-1">
-                        <Label className="text-[10px] text-slate-500">Cap</Label>
-                        <Input
-                          type="number"
-                          min={0}
-                          max={50}
-                          className="rounded-lg h-8 text-xs border-slate-200 bg-white"
-                          {...register(meta.limitField)}
-                        />
-                      </div>
-                      {bucket === 'crawler' ? (
-                        <div className="space-y-1">
-                          <Label className="text-[10px] text-slate-500">Watchlist cap</Label>
-                          <Input
-                            type="number"
-                            min={0}
-                            max={50}
-                            className="rounded-lg h-8 text-xs border-slate-200 bg-white"
-                            {...register('seeded_limit')}
-                            disabled={watch('include_seeded_sources') !== 'true'}
-                          />
-                        </div>
-                      ) : (
-                        <div className="space-y-1">
-                          <Label className="text-[10px] text-slate-500">Status</Label>
-                          <div className="h-8 rounded-lg border border-slate-200 bg-white px-2.5 flex items-center text-[11px] text-slate-500 truncate">
-                            {watch(meta.enabledField) === 'true' ? 'Will run if available' : 'Skipped for this hunt'}
-                          </div>
-                        </div>
-                      )}
-                    </div>
-                  </div>
-                )
-              })}
-            </div>
           </div>
 
           <Button

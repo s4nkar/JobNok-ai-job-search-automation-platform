@@ -161,6 +161,29 @@ class Settings(BaseSettings):
     startup_hunt_timeout_seconds: int = 20
     startup_hunt_apify_poll_seconds: int = 60
     startup_hunt_total_budget_seconds: int = 30
+
+    # ── Startup Hunt — providers ─────────────────────────────────────────────
+    # Per-provider kill switch, server-side only - there is no per-request
+    # "provider enabled" toggle anymore (removed from StartupHuntSearchRequest
+    # along with the old "Provider controls" UI section). Greenhouse/Lever/Ashby
+    # need no credentials (public ATS APIs); TheirStack/Google-web also need
+    # their respective keys configured below to actually run even if enabled.
+    startup_hunt_greenhouse_enabled: bool = True
+    startup_hunt_lever_enabled: bool = True
+    startup_hunt_ashby_enabled: bool = True
+    # Combined result cap across greenhouse+lever+ashby for one hunt - mirrors
+    # the old request-level ats_limit's default (15), now fixed server-side.
+    startup_hunt_ats_result_limit: int = 15
+    startup_hunt_theirstack_enabled: bool = True
+    # Mirrors the old request-level theirstack_limit's default (15).
+    startup_hunt_theirstack_result_limit: int = 15
+    # Off by default - CSE-only web discovery (see providers/google_web.py for
+    # why the scrape-fallback other web-discovery code paths have was dropped
+    # rather than ported). Flip on once Google CSE credentials are configured
+    # and you actually want this source contributing results.
+    startup_hunt_google_web_enabled: bool = False
+    startup_hunt_google_web_result_limit: int = 15
+
     google_cse_api_key: str = ""
     google_cse_cx: str = ""
     apify_api_token: str = ""

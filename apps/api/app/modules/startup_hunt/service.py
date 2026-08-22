@@ -163,7 +163,7 @@ async def _fetch_theirstack_db_candidates(
     if not country_code:
         return [], []
 
-    theirstack_limit = int(payload.get("theirstack_limit") or payload.get("result_limit") or 15)
+    theirstack_limit = int(payload.get("theirstack_limit") or settings.startup_hunt_theirstack_result_limit)
     rows = await query_job_cache_candidates(
         db,
         country_code=country_code,
@@ -196,12 +196,21 @@ async def search_startup_hunt_opportunities(db: AsyncSession, user_id: str, body
 
     # DB-first shortfall check — theirstack bucket only (see plan). The other
     # 6 buckets run exactly as they always have, fully live, every search.
+    # theirstack_enabled/theirstack_limit are no longer real request fields
+    # (removed along with the old per-request provider toggles) - written
+    # into adjusted_payload here purely as an internal signal for
+    # engine.py's _bucket_enabled()/theirstack.py's fetch(), which both
+    # check payload FIRST before falling back to the
+    # startup_hunt_theirstack_enabled/_result_limit config defaults. That's
+    # what lets this shortfall-driven skip/shrink still work: config decides
+    # whether theirstack is allowed to run at all, this decides whether IT
+    # needs to for this specific search.
     db_scored: list[dict[str, Any]] = []
     db_job_ids: list[uuid.UUID] = []
     adjusted_payload = payload
-    if payload.get("theirstack_enabled", True):
+    if settings.startup_hunt_theirstack_enabled:
         db_scored, db_job_ids = await _fetch_theirstack_db_candidates(db, payload, strategy, existing)
-        theirstack_limit = int(payload.get("theirstack_limit") or payload.get("result_limit") or 15)
+        theirstack_limit = int(payload.get("theirstack_limit") or settings.startup_hunt_theirstack_result_limit)
         shortfall = theirstack_limit - len(db_scored)
         adjusted_payload = dict(payload)
         if shortfall <= 0:
