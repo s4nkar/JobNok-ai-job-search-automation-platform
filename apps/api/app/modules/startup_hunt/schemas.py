@@ -26,18 +26,55 @@ class StartupHuntSearchRequest(BaseModel):
     # per-search data-scope choice ("include my own watchlist"), not a
     # provider availability toggle.
 
-    @field_validator("query", "location")
+    @field_validator("query")
     @classmethod
-    def validate_required_text(cls, v: str) -> str:
+    def validate_query(cls, v: str) -> str:
         value = v.strip()
         if len(value) < 2:
             raise ValueError("Must be at least 2 characters")
+        if len(value) > 200:
+            raise ValueError("query must be at most 200 characters")
         return value
 
-    @field_validator("country", "company_stage", "strategy_prompt")
+    @field_validator("location")
     @classmethod
-    def normalize_optional_text(cls, v: str | None) -> str | None:
-        return v.strip() if v and v.strip() else None
+    def validate_location(cls, v: str) -> str:
+        # Multi-city, comma-separated ("Berlin, Munich, Remote") - wider cap
+        # than job_search's single-location field, same floor.
+        value = v.strip()
+        if len(value) < 2:
+            raise ValueError("Must be at least 2 characters")
+        if len(value) > 300:
+            raise ValueError("location must be at most 300 characters")
+        return value
+
+    @field_validator("country")
+    @classmethod
+    def normalize_country(cls, v: str | None) -> str | None:
+        value = v.strip() if v and v.strip() else None
+        if value and len(value) > 100:
+            raise ValueError("country must be at most 100 characters")
+        return value
+
+    @field_validator("company_stage")
+    @classmethod
+    def normalize_company_stage(cls, v: str | None) -> str | None:
+        value = v.strip() if v and v.strip() else None
+        if value and len(value) > 50:
+            raise ValueError("company_stage must be at most 50 characters")
+        return value
+
+    @field_validator("strategy_prompt")
+    @classmethod
+    def normalize_strategy_prompt(cls, v: str | None) -> str | None:
+        # Same 500-char cap as job_search's preferences_prompt - this text
+        # flows straight into an LLM call (parse_strategy_prompt), so an
+        # unbounded value is both a cost/DoS vector and a real risk of
+        # blowing the extraction prompt's own token budget.
+        value = v.strip() if v and v.strip() else None
+        if value and len(value) > 500:
+            raise ValueError("strategy_prompt must be at most 500 characters")
+        return value
 
     @field_validator("posted_within_hours")
     @classmethod
@@ -90,15 +127,24 @@ class StartupHuntOpportunityCreateRequest(BaseModel):
     )
     @classmethod
     def validate_non_empty_text(cls, v: str) -> str:
+        # 300-char cap matches job_search's identical fields
+        # (source_name/company/role/location) - this endpoint is populated
+        # from search results in practice, but is still a real write
+        # endpoint a client could POST to directly with an arbitrary payload.
         value = v.strip()
         if not value:
             raise ValueError("Field is required")
+        if len(value) > 300:
+            raise ValueError("Field must be at most 300 characters")
         return value
 
     @field_validator("country", "company_domain")
     @classmethod
     def normalize_nullable_text(cls, v: str | None) -> str | None:
-        return v.strip() if v and v.strip() else None
+        value = v.strip() if v and v.strip() else None
+        if value and len(value) > 300:
+            raise ValueError("Field must be at most 300 characters")
+        return value
 
     @field_validator("posted_at", "discovered_at")
     @classmethod
@@ -166,17 +212,27 @@ class StartupHuntSourceIn(BaseModel):
         value = v.strip()
         if not value:
             raise ValueError("name is required")
+        if len(value) > 300:
+            raise ValueError("name must be at most 300 characters")
         return value
 
     @field_validator("company")
     @classmethod
     def normalize_company(cls, v: str | None) -> str | None:
-        return v.strip() if v and v.strip() else None
+        value = v.strip() if v and v.strip() else None
+        if value and len(value) > 300:
+            raise ValueError("company must be at most 300 characters")
+        return value
 
     @field_validator("slug")
     @classmethod
     def normalize_slug(cls, v: str | None) -> str | None:
-        return v.strip() if v and v.strip() else None
+        # ATS board slugs are always short (a company's own URL path segment)
+        # - 100 is generous headroom, not a tight fit.
+        value = v.strip() if v and v.strip() else None
+        if value and len(value) > 100:
+            raise ValueError("slug must be at most 100 characters")
+        return value
 
 
 class StartupHuntSourceResolveRequest(BaseModel):

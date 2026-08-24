@@ -454,44 +454,89 @@ async def search_startup_hunt_opportunities(db: AsyncSession, user_id: str, body
     # DB-first shortfall check — theirstack bucket only (see plan). The other
     # 6 buckets run exactly as they always have, fully live, every search.
     # theirstack_enabled/theirstack_limit are no longer real request fields
-    # (removed along with the old per-request provider toggles) - written
-    # into adjusted_payload here purely as an internal signal for
-    # engine.py's _bucket_enabled()/theirstack.py's fetch(), which both
-    # check payload FIRST before falling back to the
-    # startup_hunt_theirstack_enabled/_result_limit config defaults. That's
-    # what lets this shortfall-driven skip/shrink still work: config decides
-    # whether theirstack is allowed to run at all, this decides whether IT
-    # needs to for this specific search.
-    adjusted_payload = payload
+    # (removed along with the old per-request provider toggles) - this is
+    # purely an internal signal for engine.py's _bucket_enabled()/
+    # theirstack.py's fetch(), which both check payload FIRST before falling
+    # back to the startup_hunt_theirstack_enabled/_result_limit config
+    # defaults.
+    theirstack_db_shortfall = 0
+    theirstack_live_limit = 0
     if settings.startup_hunt_theirstack_enabled:
         theirstack_scored, theirstack_row_ids = await _fetch_theirstack_db_candidates(db, payload, strategy, existing)
         db_scored.extend(theirstack_scored)
         db_job_ids.extend(theirstack_row_ids)
         theirstack_limit = int(payload.get("theirstack_limit") or settings.startup_hunt_theirstack_result_limit)
-        shortfall = theirstack_limit - len(theirstack_scored)
-        adjusted_payload = dict(payload)
-        if shortfall <= 0:
-            adjusted_payload["theirstack_enabled"] = False
-        else:
-            adjusted_payload["theirstack_limit"] = min(settings.theirstack_max_page_size, shortfall * 2)
+        theirstack_db_shortfall = theirstack_limit - len(theirstack_scored)
+        theirstack_live_limit = min(settings.theirstack_max_page_size, max(1, theirstack_db_shortfall) * 2)
 
+    # Cost-aware fetch ordering, phase 1: every enabled bucket EXCEPT
+    # TheirStack, the only metered/paid Startup Hunt source. Mirrors
+    # job_search's free-providers-before-metered pattern - instead of firing
+    # TheirStack in parallel with the free ATS/web buckets regardless of
+    # whether they'd have covered the request alone, fetch the free buckets
+    # first and only pay for a live TheirStack call (phase 2 below) for
+    # whatever shortfall remains after seeing their actual live yield, not
+    # just the DB-cache shortfall computed above.
+    phase1_payload = dict(payload)
+    phase1_payload["theirstack_enabled"] = False
     (
         results, overflow_results, filtered_out, parsed_strategy,
-        configured_source_count, source_result_counts, source_diagnostics,
-    ) = await search_startup_hunt(adjusted_payload, existing, global_sources, user_sources, strategy=strategy)
+        configured_source_count, source_result_counts, source_diagnostics, raw_fetched,
+    ) = await search_startup_hunt(phase1_payload, existing, global_sources, user_sources, strategy=strategy)
 
-    # Upsert freshly-fetched theirstack + ATS (greenhouse/lever/ashby)
-    # results into the shared cache, so a repeat search covering the same
-    # companies/roles can be served from the DB instead of hitting those
-    # providers live again — same pattern job_search's search_recent_jobs
-    # uses. Scans overflow too, not just the ranked cutoff: any live-fetched
-    # result is equally reusable regardless of where it landed in this
-    # search's own ranking. Runs before the db_scored merge below, so this
-    # only ever sees fresh live results, never re-upserts a cache hit.
-    fresh_cacheable_rows = [
-        row for item in results + overflow_results if item.get("source_type") in _CACHEABLE_SOURCE_TYPES
-        if (row := _opportunity_to_job_cache_row(item)) is not None
-    ]
+    if theirstack_db_shortfall > 0:
+        result_limit = int(payload.get("result_limit") or 25)
+        covered_so_far = len(_dedupe_opportunities(db_scored + results + overflow_results))
+        if covered_so_far < result_limit:
+            # Phase 2: TheirStack only - global_sources/user_sources passed
+            # empty (those are what feed the ATS bucket; already fetched in
+            # phase 1, no reason to fetch them again) and web_enabled forced
+            # off (google_web is off by default, but if it's ever turned on,
+            # phase 1 already covered it too).
+            phase2_payload = dict(payload)
+            phase2_payload["theirstack_enabled"] = True
+            phase2_payload["theirstack_limit"] = theirstack_live_limit
+            phase2_payload["web_enabled"] = False
+            (
+                ts_results, ts_overflow, ts_filtered_out, _phase2_strategy,
+                ts_configured_count, ts_source_result_counts, ts_source_diagnostics, ts_raw_fetched,
+            ) = await search_startup_hunt(phase2_payload, existing, [], [], strategy=strategy)
+            results = results + ts_results
+            overflow_results = overflow_results + ts_overflow
+            filtered_out = filtered_out + ts_filtered_out
+            configured_source_count += ts_configured_count
+            source_result_counts["theirstack"] = ts_source_result_counts.get("theirstack", 0)
+            if ts_source_diagnostics.get("theirstack"):
+                source_diagnostics["theirstack"] = ts_source_diagnostics["theirstack"]
+            raw_fetched = raw_fetched + ts_raw_fetched
+
+    # Upsert every raw theirstack + ATS (greenhouse/lever/ashby) item this
+    # search actually fetched live into the shared cache, so a repeat search
+    # covering the same companies/roles can be served from the DB instead of
+    # hitting those providers live again - same pattern job_search's
+    # search_recent_jobs uses (cache the full raw fetch, filter at read
+    # time). Uses raw_fetched, not results/overflow_results - those are the
+    # post-filter survivors only, so caching just them would mean an item
+    # hard-excluded by THIS search's own filters (wrong seniority, no
+    # keyword match, etc.) - which may well match a later, differently-
+    # filtered search - gets thrown away and re-fetched live next time
+    # instead of being reused. Runs before the db_scored merge below, so
+    # this only ever sees fresh live results, never re-upserts a cache hit.
+    fresh_cacheable_rows_by_key: dict[tuple[str, str], dict[str, Any]] = {}
+    for item in raw_fetched:
+        if item.get("source_type") not in _CACHEABLE_SOURCE_TYPES:
+            continue
+        row = _opportunity_to_job_cache_row(item)
+        if row is None:
+            continue
+        # raw_fetched isn't deduped (unlike results/overflow_results, which
+        # went through _dedupe_opportunities) - the same job can legitimately
+        # appear twice here (e.g. a company that's both globally curated and
+        # in a user's own sources). A single upsert statement with the same
+        # (source, source_job_id) key twice would error, so dedupe on that
+        # key here rather than relying on the upsert to handle it.
+        fresh_cacheable_rows_by_key[(row["provider_type"], row["external_job_id"])] = row
+    fresh_cacheable_rows = list(fresh_cacheable_rows_by_key.values())
     if fresh_cacheable_rows:
         await _upsert_jobs_cache(db, fresh_cacheable_rows, origin_tool="startup_hunt")
     if db_job_ids:

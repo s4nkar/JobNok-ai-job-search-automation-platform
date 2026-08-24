@@ -193,6 +193,17 @@ class Settings(BaseSettings):
     startup_hunt_theirstack_enabled: bool = True
     # Mirrors the old request-level theirstack_limit's default (15).
     startup_hunt_theirstack_result_limit: int = 15
+    # TheirStack is the only metered/paid Startup Hunt source - global daily
+    # call cap shared across every user, protects its own account-level quota
+    # from aggregate exhaustion the same way adzuna_daily_call_budget does
+    # for job_search. PLACEHOLDER - tune from real usage/plan data once
+    # available, same caveat as job_search's provider budgets.
+    startup_hunt_theirstack_daily_budget: int = 150
+    # Whole-tool external-call budget, combined across every Startup Hunt
+    # source (not just TheirStack) - a cost-governance ceiling distinct from
+    # any single source's own quota, mirrors job_search_tool_daily_budget.
+    # PLACEHOLDER, same caveat.
+    startup_hunt_tool_daily_budget: int = 500
     # Off by default - CSE-only web discovery (see providers/google_web.py for
     # why the scrape-fallback other web-discovery code paths have was dropped
     # rather than ported). Flip on once Google CSE credentials are configured

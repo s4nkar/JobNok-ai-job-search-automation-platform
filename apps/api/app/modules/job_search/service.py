@@ -20,7 +20,18 @@ from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import settings
-from app.services.cache import acquire_lock, check_burst_limit, check_rate_limit, get_cached, jittered_ttl, set_cached
+from app.services.cache import (
+    acquire_lock,
+    check_burst_limit,
+    check_provider_budget,
+    check_rate_limit,
+    check_tool_budget,
+    circuit_is_open,
+    get_cached,
+    jittered_ttl,
+    record_provider_result,
+    set_cached,
+)
 from app.shared.utils import row_to_dict
 from app.modules.job_search import dedup, scoring
 from app.modules.job_search.providers import (
@@ -28,10 +39,6 @@ from app.modules.job_search.providers import (
     ProviderError,
     ProviderSpec,
     applicable_providers,
-    check_provider_budget,
-    check_tool_budget,
-    circuit_is_open,
-    record_provider_result,
 )
 from app.modules.job_search.providers import arbeitnow
 from app.modules.job_search.providers.adzuna import adzuna_country_code
@@ -290,29 +297,29 @@ async def _fetch_provider_safe(provider: ProviderSpec, payload: dict) -> tuple[l
     would (e.g. a provider with no hard external quota still costs real
     compute at volume).
     """
-    if await circuit_is_open(provider.name):
+    if await circuit_is_open("job_search", provider.name):
         logger.info("Skipping %s - circuit open (repeated recent failures)", provider.name)
         return [], None
 
-    if not await check_provider_budget(provider):
+    if not await check_provider_budget("job_search", provider.name, provider.daily_budget):
         logger.info("Skipping %s - global daily call budget exhausted", provider.name)
         return [], None
 
-    if not await check_tool_budget():
+    if not await check_tool_budget("job_search", settings.job_search_tool_daily_budget):
         logger.info("Skipping %s - whole-tool daily call budget exhausted", provider.name)
         return [], None
 
     try:
         jobs = await provider.fetch(payload)
-        await record_provider_result(provider.name, ok=True)
+        await record_provider_result("job_search", provider.name, ok=True)
         return jobs, None
     except ProviderError as exc:
         logger.warning("Provider %s failed: %s", provider.name, exc)
-        await record_provider_result(provider.name, ok=False)
+        await record_provider_result("job_search", provider.name, ok=False)
         return [], str(exc)
     except Exception:
         logger.exception("Provider %s raised an unexpected error", provider.name)
-        await record_provider_result(provider.name, ok=False)
+        await record_provider_result("job_search", provider.name, ok=False)
         return [], None
 
 
@@ -331,15 +338,15 @@ async def _fetch_bonus_jobs_raw(payload: dict) -> list[dict]:
     budget counter would add on top."""
     if not arbeitnow.is_available():
         return []
-    if await circuit_is_open("arbeitnow"):
+    if await circuit_is_open("job_search", "arbeitnow"):
         return []
     try:
         jobs = await arbeitnow.fetch(payload)
-        await record_provider_result("arbeitnow", ok=True)
+        await record_provider_result("job_search", "arbeitnow", ok=True)
         return jobs
     except Exception:
         logger.exception("Arbeitnow bonus-jobs fetch raised an unexpected error")
-        await record_provider_result("arbeitnow", ok=False)
+        await record_provider_result("job_search", "arbeitnow", ok=False)
         return []
 
 

@@ -130,7 +130,12 @@ async def fetch(
         "posted_at_max_age_days": max(1, int((payload.get("posted_within_hours") or 168) / 24)),
         "job_title_pattern_or": _title_patterns(payload["query"]),
         "job_country_code_or": [_country_code_for_indeed(payload.get("country")).upper()],
-        "company_country_code_or": [_country_code_for_indeed(payload.get("country")).upper()],
+        # Deliberately NOT also constraining company_country_code_or - a
+        # startup can be incorporated abroad (common for US/UK-parent or
+        # YC-style companies) while genuinely hiring for a Germany-based
+        # role. Requiring both the job AND the company's registered country
+        # to match excluded exactly this kind of real, relevant listing;
+        # job_country_code_or alone already targets where the role is.
     }
 
     if payload.get("remote_only"):

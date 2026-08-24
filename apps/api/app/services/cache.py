@@ -7,6 +7,8 @@ which works correctly in Railway's serverless-style environment.
 import hashlib
 import json
 import random
+import time
+import uuid
 import httpx
 from datetime import datetime, timezone
 from typing import Any, Awaitable, Callable
@@ -76,6 +78,16 @@ class UpstashRedis:
         result = await self._cmd("SET", key, value, "NX", "EX", ex)
         return result.get("result") is not None
 
+    async def zadd(self, key: str, score: float, member: str) -> None:
+        await self._cmd("ZADD", key, score, member)
+
+    async def zremrangebyscore(self, key: str, min_score: str, max_score: str) -> None:
+        await self._cmd("ZREMRANGEBYSCORE", key, min_score, max_score)
+
+    async def zcard(self, key: str) -> int:
+        result = await self._cmd("ZCARD", key)
+        return result.get("result", 0)
+
 
 def _get_redis() -> UpstashRedis:
     return UpstashRedis(
@@ -118,15 +130,133 @@ async def check_rate_limit(user_id: str, tool: str, limit: int) -> tuple[bool, i
 
 
 async def check_burst_limit(user_id: str, tool: str, limit: int, window_seconds: int) -> bool:
-    """Short fixed-window burst limit, separate from check_rate_limit's daily
-    quota - protects against rapid-fire requests (double-click, a retry loop,
-    a search box with no debounce) within the same day's allowance, which the
+    """Short burst limit, separate from check_rate_limit's daily quota -
+    protects against rapid-fire requests (double-click, a retry loop, a
+    search box with no debounce) within the same day's allowance, which the
     daily quota alone doesn't address since it only caps total volume, not
-    arrival rate. Same INCR-first pattern as check_rate_limit, just a much
-    shorter window (e.g. 3 requests / 10 seconds instead of N / day)."""
-    key = f"rl_burst:{user_id}:{tool}:{window_seconds}"
-    count = await increment_with_ttl(key, window_seconds)
+    arrival rate.
+
+    A sliding-window LOG (a sorted set keyed by each request's own
+    timestamp), not a fixed window - a fixed window (INCR+EXPIRE on one
+    window-aligned key, what this used to do) lets `limit` requests through
+    right before a window boundary and `limit` more right after, doubling
+    the effective burst exactly at the boundary a retry loop is likely to
+    straddle. This prunes anything older than window_seconds, adds the
+    current request, then counts what's left - an exact trailing-window
+    count, not a boundary-aligned approximation.
+
+    The prune/add/count calls aren't atomic (Upstash's REST API has no
+    multi-command transaction here), so there's a small race under true
+    concurrency - acceptable for a guard this low-volume (3 req/10s) and
+    this coarse by design (stop obvious retry storms, not a hard security
+    boundary), same fail-open philosophy as every other limiter in this
+    file.
+    """
+    redis = _get_redis()
+    key = f"rl_burst:{user_id}:{tool}"
+    now_ms = time.time() * 1000
+    cutoff_ms = now_ms - (window_seconds * 1000)
+    await redis.zremrangebyscore(key, "-inf", f"{cutoff_ms:.3f}")
+    await redis.zadd(key, now_ms, f"{now_ms:.3f}:{uuid.uuid4().hex}")
+    await redis.expire(key, window_seconds)
+    count = await redis.zcard(key)
     return count <= limit
+
+
+# ── Per-provider circuit breaker ────────────────────────────────────────
+# If a provider starts hard-failing repeatedly (e.g. an unofficial API
+# breaking shape), every affected search would otherwise still pay the full
+# request timeout on a call that's essentially guaranteed to fail, until
+# someone notices and flips the provider's kill switch by hand. This trips
+# automatically instead. Originally job_search-only (job_search/providers/
+# __init__.py); moved here and given a `scope` param (e.g. "job_search",
+# "startup_hunt") when startup_hunt needed the same protection too, so two
+# tools' providers of the same name (unlikely, but not impossible) never
+# share circuit-breaker state.
+_CIRCUIT_FAILURE_THRESHOLD = 3
+_CIRCUIT_FAILURE_WINDOW_SECONDS = 300  # rolling window failures are counted in
+_CIRCUIT_OPEN_COOLDOWN_SECONDS = 180  # once tripped, skip live calls for this long
+
+
+def _circuit_open_key(scope: str, provider_name: str) -> str:
+    return f"{scope}:circuit:{provider_name}:open"
+
+
+def _circuit_fail_key(scope: str, provider_name: str) -> str:
+    return f"{scope}:circuit:{provider_name}:fail_count"
+
+
+async def circuit_is_open(scope: str, provider_name: str) -> bool:
+    """True if this provider has failed repeatedly recently and should be
+    skipped without a network call. Fails open (False) on a Redis error - a
+    broken circuit breaker must never block a provider that might be healthy."""
+    try:
+        return bool(await get_cached(_circuit_open_key(scope, provider_name)))
+    except Exception:
+        return False
+
+
+async def record_provider_result(scope: str, provider_name: str, *, ok: bool) -> None:
+    """Feed a live fetch's outcome into the provider's circuit breaker. A
+    success resets the failure count immediately - one good response is
+    enough to trust the provider again, no need to wait out the window.
+    Best-effort throughout: a tracking failure must never break the search."""
+    try:
+        if ok:
+            await delete_cached(_circuit_fail_key(scope, provider_name))
+            return
+        count = await increment_with_ttl(_circuit_fail_key(scope, provider_name), _CIRCUIT_FAILURE_WINDOW_SECONDS)
+        if count >= _CIRCUIT_FAILURE_THRESHOLD:
+            await set_cached(_circuit_open_key(scope, provider_name), "1", _CIRCUIT_OPEN_COOLDOWN_SECONDS)
+    except Exception:
+        pass
+
+
+# ── Per-provider global daily budget + whole-tool daily budget ─────────
+# Distinct from the circuit breaker (reacts to failures) and any per-user
+# daily quota (doesn't aggregate across users) - this protects a metered
+# provider's own account-level quota (check_provider_budget) and a tool's
+# overall external-call volume (check_tool_budget) from being exhausted by
+# the aggregate of many individually-compliant users. Same move/genericize
+# history as the circuit breaker above.
+
+
+def _budget_key(scope: str, provider_name: str) -> str:
+    return f"{scope}:provider_budget:{provider_name}"
+
+
+async def check_provider_budget(scope: str, provider_name: str, daily_budget: int | None) -> bool:
+    """True if this provider is still within its global daily call budget.
+    None budget = unmetered, always True (and skips Redis entirely). Resets
+    at midnight UTC, matching the per-user daily quota's reset convention.
+    INCR-first (same race-avoidance reasoning as check_rate_limit) - this
+    must be called immediately before an actual fetch attempt, once per
+    attempt, not speculatively. Fails open on a Redis error - a broken
+    budget tracker must never block a provider that might have budget left."""
+    if daily_budget is None:
+        return True
+    try:
+        count = await increment_with_ttl(_budget_key(scope, provider_name), _midnight_utc_seconds())
+        return count <= daily_budget
+    except Exception:
+        return True
+
+
+async def check_tool_budget(scope: str, daily_budget: int) -> bool:
+    """Whole-tool external-call budget, combined across every provider - a
+    cost-governance ceiling distinct from any single provider's own quota.
+    Catches aggregate cost growth that no per-provider budget would (e.g. a
+    provider with no hard external quota of its own still costs real
+    bandwidth/DB writes/compute at volume). Checked alongside each
+    provider's own circuit breaker/budget, so a call only proceeds once it
+    clears its own provider's gates AND this shared tool-wide one. Resets
+    midnight UTC. Fails open on a Redis error - a broken budget tracker must
+    never block a call that might be fine."""
+    try:
+        count = await increment_with_ttl(f"{scope}:tool_budget", _midnight_utc_seconds())
+        return count <= daily_budget
+    except Exception:
+        return True
 
 
 async def get_cached(key: str) -> str | None:

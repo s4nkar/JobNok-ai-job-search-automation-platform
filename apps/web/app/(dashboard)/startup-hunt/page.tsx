@@ -56,17 +56,42 @@ function formatRelativeTime(dateStr: string): string | null {
   return `${Math.floor(days / 30)}mo`
 }
 
+// Backend-recognized country codes only (apps/api/.../startup_hunt/engine.py's
+// COUNTRY_CODE_OVERRIDES) - a free-text field let someone type "UK" and
+// silently break the TheirStack call (not a valid ISO code, the API 400s on
+// it; the correct code is "gb"). A dropdown makes that class of typo
+// impossible instead of relying on the backend to normalize every variant.
+const STARTUP_HUNT_COUNTRIES: { value: string; label: string }[] = [
+  { value: 'de', label: 'Germany' },
+  { value: 'gb', label: 'United Kingdom' },
+  { value: 'us', label: 'United States' },
+  { value: 'fr', label: 'France' },
+  { value: 'es', label: 'Spain' },
+  { value: 'it', label: 'Italy' },
+  { value: 'nl', label: 'Netherlands' },
+  { value: 'be', label: 'Belgium' },
+  { value: 'at', label: 'Austria' },
+  { value: 'ch', label: 'Switzerland' },
+  { value: 'pl', label: 'Poland' },
+  { value: 'pt', label: 'Portugal' },
+  { value: 'ie', label: 'Ireland' },
+  { value: 'ca', label: 'Canada' },
+  { value: 'au', label: 'Australia' },
+  { value: 'in', label: 'India' },
+  { value: 'nz', label: 'New Zealand' },
+]
+
 const schema = z.object({
-  query: z.string().min(2, 'Enter a target AI/ML role'),
-  location: z.string().min(2, 'Enter a target location'),
-  country: z.string().optional(),
+  query: z.string().min(2, 'Enter a target AI/ML role').max(200, 'Keep it under 200 characters'),
+  location: z.string().min(2, 'Enter a target location').max(300, 'Keep it under 300 characters'),
+  country: z.string().max(100, 'Keep it under 100 characters').optional(),
   posted_within_hours: z.coerce.number().int().min(1).max(1440),
   result_limit: z.coerce.number().int().min(1).max(50),
   include_seeded_sources: z.enum(['false', 'true']).default('false'),
   remote_only: z.enum(['false', 'true']).default('false'),
   english_friendly_only: z.enum(['false', 'true']).default('false'),
-  company_stage: z.string().optional(),
-  strategy_prompt: z.string().optional(),
+  company_stage: z.string().max(50, 'Keep it under 50 characters').optional(),
+  strategy_prompt: z.string().max(500, 'Keep it under 500 characters').optional(),
   // Per-provider enabled/limit toggles used to live here (crawler_enabled,
   // theirstack_limit, etc.) - removed. Every provider's on/off state and
   // result cap is server-side config now, not a per-search choice.
@@ -78,7 +103,7 @@ type ProviderBucket = 'crawler' | 'startupmap' | 'web' | 'indeed' | 'theirstack'
 const DEFAULT_VALUES: FormData = {
   query: 'AI/ML Engineer',
   location: 'Berlin, Munich, Hamburg, Frankfurt, Cologne, Remote',
-  country: 'Germany',
+  country: 'de',
   posted_within_hours: 168,
   result_limit: 30,
   include_seeded_sources: 'false',
@@ -123,15 +148,15 @@ const USER_SOURCE_TYPES: { value: StartupHuntSourceType; label: string; hint: st
 
 const sourceSchema = z.object({
   type: z.enum(['greenhouse', 'lever', 'ashby', 'startup_company']),
-  name: z.string().min(1, 'Required'),
-  company: z.string().optional(),
-  slug: z.string().optional(),
+  name: z.string().min(1, 'Required').max(300, 'Keep it under 300 characters'),
+  company: z.string().max(300, 'Keep it under 300 characters').optional(),
+  slug: z.string().max(100, 'Keep it under 100 characters').optional(),
   url: z.string().optional(),
 })
 type SourceFormData = z.infer<typeof sourceSchema>
 
 const resolveSchema = z.object({
-  company_input: z.string().min(2, 'Enter a company name or careers URL'),
+  company_input: z.string().min(2, 'Enter a company name or careers URL').max(300, 'Keep it under 300 characters'),
 })
 type ResolveFormData = z.infer<typeof resolveSchema>
 
@@ -159,6 +184,10 @@ export default function StartupHuntPage() {
   // screen right now, not whatever the form currently says.
   const [seededSourcesIncluded, setSeededSourcesIncluded] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  // Distinguishes "hasn't searched yet" from "searched, found nothing" -
+  // both render zero results, but they need different messaging (a generic
+  // placeholder vs. an actionable "widen your filters" prompt).
+  const [hasSearched, setHasSearched] = useState(false)
   // Mobile/tablet-only: filters start collapsed so results are reachable
   // without scrolling past every field first. Ignored at lg+ (always expanded).
   const [filtersOpen, setFiltersOpen] = useState(false)
@@ -290,6 +319,7 @@ export default function StartupHuntPage() {
   async function onSubmit(data: FormData) {
     setLoading(true)
     setError(null)
+    setHasSearched(true)
     try {
       const res = await apiFetch('/api/startup-hunt/search', {
         method: 'POST',
@@ -427,26 +457,26 @@ export default function StartupHuntPage() {
 
   return (
     <div className="animate-fade-in">
-      <div className="flex items-start justify-between gap-4 mb-6">
-        <div className="flex items-center gap-4">
-          <div className="page-header-icon bg-indigo-100">
-            <Compass className="h-5 w-5 text-indigo-600" />
-          </div>
-          <div>
-            <h1 className="text-2xl font-bold text-slate-900 tracking-tight">Startup Hunt</h1>
-            <p className="text-slate-500 text-sm mt-0.5">
-              Hunt AI/ML startup roles in Germany, surface hidden gems, and save founder-friendly outreach leads
-            </p>
-          </div>
+      <div className="flex items-center gap-4 mb-6">
+        <div className="hidden sm:flex page-header-icon bg-indigo-100">
+          <Compass className="h-5 w-5 text-indigo-600" />
         </div>
-        <Button
-          type="button"
-          variant="outline"
-          onClick={openSources}
-          className="h-9 px-3.5 rounded-xl text-sm border-slate-200 text-slate-600 hover:text-slate-900 hover:border-slate-300 gap-1.5 flex-shrink-0"
-        >
-          <ListPlus className="h-3.5 w-3.5" /> My Sources
-        </Button>
+        <div className="min-w-0 flex-1">
+          <div className="flex items-center justify-between gap-3">
+            <h1 className="text-2xl font-bold text-slate-900 tracking-tight">Startup Hunt</h1>
+            <Button
+              type="button"
+              variant="outline"
+              onClick={openSources}
+              className="h-9 px-3.5 rounded-xl text-sm border-slate-200 text-slate-600 hover:text-slate-900 hover:border-slate-300 gap-1.5 flex-shrink-0"
+            >
+              <ListPlus className="h-3.5 w-3.5" /> My Sources
+            </Button>
+          </div>
+          <p className="text-slate-500 text-sm mt-0.5">
+            Hunt AI/ML startup roles in Germany, surface hidden gems, and save founder-friendly outreach leads
+          </p>
+        </div>
       </div>
 
       {/* lg:, not md: - at md (768px, iPad portrait) a fixed 320px sidebar
@@ -501,17 +531,20 @@ export default function StartupHuntPage() {
                 className="rounded-xl text-sm border-slate-200 focus:border-indigo-300 focus:ring-1 focus:ring-indigo-200"
                 {...register('location')}
               />
-              <p className="text-[10px] text-slate-400 leading-relaxed">Comma-separated. Each city runs in parallel; add &quot;Remote&quot; to include remote roles.</p>
+              <p className="text-[10px] text-slate-400 leading-relaxed">Comma-separated. A result matching any listed city (or &quot;Remote&quot;) is included.</p>
               {errors.location && <p className="text-xs text-destructive">{errors.location.message}</p>}
             </div>
 
             <div className="space-y-1.5">
               <Label className="text-xs font-medium text-slate-600">Country</Label>
-              <Input
-                placeholder="Germany"
-                className="rounded-xl h-9 text-sm border-slate-200 focus:border-indigo-300 focus:ring-1 focus:ring-indigo-200"
-                {...register('country')}
-              />
+              <Select value={watch('country') || 'de'} onValueChange={(v) => setValue('country', v)}>
+                <SelectTrigger className="rounded-xl h-9 text-sm border-slate-200"><SelectValue /></SelectTrigger>
+                <SelectContent>
+                  {STARTUP_HUNT_COUNTRIES.map(({ value, label }) => (
+                    <SelectItem key={value} value={value} className="text-sm">{label}</SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
             </div>
 
             <div className="grid grid-cols-2 gap-3">
@@ -652,7 +685,7 @@ export default function StartupHuntPage() {
             <div className="space-y-4">
               {Array.from({ length: 6 }).map((_, i) => (
                 <div key={i} className="bg-white rounded-2xl border border-slate-100 shadow-sm p-5 animate-pulse">
-                  <div className="flex items-start justify-between gap-4">
+                  <div className="flex flex-col sm:flex-row sm:items-start sm:justify-between gap-4">
                     <div className="min-w-0 flex-1 space-y-3">
                       <div className="flex items-center gap-2">
                         <div className="h-4 bg-slate-200 rounded w-48" />
@@ -670,7 +703,7 @@ export default function StartupHuntPage() {
                         <div className="h-5 bg-slate-100 rounded-md w-20" />
                       </div>
                     </div>
-                    <div className="flex gap-2 flex-shrink-0">
+                    <div className="flex gap-2 flex-wrap sm:flex-nowrap sm:flex-shrink-0">
                       <div className="h-9 w-20 bg-slate-100 rounded-xl" />
                       <div className="h-9 w-14 bg-slate-200 rounded-xl" />
                       <div className="h-9 w-28 bg-slate-100 rounded-xl" />
@@ -693,15 +726,25 @@ export default function StartupHuntPage() {
             </div>
           )}
 
-          {!loading && results.length === 0 && !error && (
+          {!loading && !error && results.length === 0 && overflowResults.length === 0 && filteredOut.length === 0 && (
             <div className="bg-white rounded-2xl border border-slate-100 shadow-sm min-h-[480px] flex items-center justify-center p-8">
-              <div className="text-center space-y-2">
-                <div className="w-14 h-14 rounded-2xl bg-slate-50 flex items-center justify-center mx-auto">
-                  <Compass className="h-7 w-7 text-slate-300" />
+              {hasSearched ? (
+                <div className="text-center space-y-2">
+                  <div className="w-14 h-14 rounded-2xl bg-slate-50 flex items-center justify-center mx-auto">
+                    <Search className="h-7 w-7 text-slate-300" />
+                  </div>
+                  <p className="font-semibold text-slate-500">No results found for this search</p>
+                  <p className="text-sm text-slate-400">Try a broader role title, a longer freshness window, or turn on your curated watchlist</p>
                 </div>
-                <p className="font-semibold text-slate-500">Ranked startup opportunities will appear here</p>
-                <p className="text-sm text-slate-400">Use Startup Hunt when you want deeper discovery than the standard recent jobs tool</p>
-              </div>
+              ) : (
+                <div className="text-center space-y-2">
+                  <div className="w-14 h-14 rounded-2xl bg-slate-50 flex items-center justify-center mx-auto">
+                    <Compass className="h-7 w-7 text-slate-300" />
+                  </div>
+                  <p className="font-semibold text-slate-500">Ranked startup opportunities will appear here</p>
+                  <p className="text-sm text-slate-400">Use Startup Hunt when you want deeper discovery than the standard recent jobs tool</p>
+                </div>
+              )}
             </div>
           )}
 
@@ -721,7 +764,7 @@ export default function StartupHuntPage() {
                 return (
                   <div key={resultKey} className="space-y-3">
                     <div className="bg-white rounded-2xl border border-slate-100 shadow-sm p-5">
-                      <div className="flex items-start justify-between gap-4">
+                      <div className="flex flex-col sm:flex-row sm:items-start sm:justify-between gap-4">
                         <div className="min-w-0">
                           <div className="flex items-center gap-2 flex-wrap mb-1">
                             <h3 className="text-base font-bold text-slate-900">{job.role_title}</h3>
@@ -776,7 +819,7 @@ export default function StartupHuntPage() {
                           </div>
                         </div>
 
-                        <div className="flex gap-2 flex-shrink-0">
+                        <div className="flex gap-2 flex-wrap sm:flex-nowrap sm:flex-shrink-0">
                           {primaryLink && (
                             <Button variant="outline" asChild className="rounded-xl h-9 text-xs">
                               <Link href={primaryLink} target="_blank">
@@ -889,7 +932,7 @@ export default function StartupHuntPage() {
                         : 'Open Website'
                   return (
                     <div key={resultKey} className="rounded-xl border border-slate-100 bg-slate-50 p-4">
-                      <div className="flex items-start justify-between gap-4">
+                      <div className="flex flex-col sm:flex-row sm:items-start sm:justify-between gap-4">
                         <div className="min-w-0">
                           <div className="flex items-center gap-2 flex-wrap mb-1">
                             <p className="text-sm font-semibold text-slate-900">{job.role_title}</p>
@@ -944,7 +987,7 @@ export default function StartupHuntPage() {
                   const primaryLink = item.direct_apply_url || item.company_careers_url || item.portal_job_url || item.company_website_url
                   return (
                     <div key={resultKey} className="rounded-xl border border-slate-100 bg-slate-50 p-4">
-                      <div className="flex items-start justify-between gap-4">
+                      <div className="flex flex-col sm:flex-row sm:items-start sm:justify-between gap-4">
                         <div className="min-w-0">
                           <div className="flex items-center gap-2 flex-wrap mb-1">
                             <p className="text-sm font-semibold text-slate-900">{item.role_title}</p>
@@ -961,7 +1004,7 @@ export default function StartupHuntPage() {
                           <p className="text-xs text-slate-700">{item.company_name} · {item.source_name}</p>
                           <p className="text-xs text-slate-500 mt-1">Reason: {item.reason}</p>
                         </div>
-                        <div className="flex gap-2 flex-shrink-0">
+                        <div className="flex gap-2 flex-wrap sm:flex-nowrap sm:flex-shrink-0">
                           {primaryLink && (
                             <Button variant="outline" asChild className="rounded-xl h-8 text-xs">
                               <Link href={primaryLink} target="_blank">

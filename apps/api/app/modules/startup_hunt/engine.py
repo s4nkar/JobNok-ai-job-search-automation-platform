@@ -14,7 +14,13 @@ import httpx
 
 from app.ai.llm import provider as ai_provider
 from app.core.config import settings
-from app.services.cache import cached_prompt_parse
+from app.services.cache import (
+    cached_prompt_parse,
+    check_provider_budget,
+    check_tool_budget,
+    circuit_is_open,
+    record_provider_result,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -101,9 +107,9 @@ COUNTRY_CODE_OVERRIDES = {
     "deutschland": "de",
     "united states": "us",
     "usa": "us",
-    "united kingdom": "uk",
-    "uk": "uk",
-    "great britain": "uk",
+    "united kingdom": "gb",
+    "uk": "gb",
+    "great britain": "gb",
     "france": "fr",
     "spain": "es",
     "italy": "it",
@@ -116,6 +122,8 @@ COUNTRY_CODE_OVERRIDES = {
     "ireland": "ie",
     "canada": "ca",
     "australia": "au",
+    "india": "in",
+    "new zealand": "nz",
 }
 
 
@@ -367,7 +375,7 @@ async def search_startup_hunt(
     global_sources: list[StartupHuntSourceConfig] | None = None,
     user_sources: list[StartupHuntSourceConfig] | None = None,
     strategy: dict[str, Any] | None = None,
-) -> tuple[list[dict[str, Any]], list[dict[str, Any]], list[dict[str, Any]], dict[str, Any], int, dict[str, int], dict[str, dict[str, Any]]]:
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]], list[dict[str, Any]], dict[str, Any], int, dict[str, int], dict[str, dict[str, Any]], list[dict[str, Any]]]:
     sources: list[StartupHuntSourceConfig] = []
     # Previously also required _bucket_enabled(payload, "crawler") - a
     # per-request bucket toggle that had no UI control and always defaulted
@@ -384,8 +392,17 @@ async def search_startup_hunt(
     # and that should cover their own added companies just as much as the
     # shared curated list, not bypass it.
     if payload.get("include_seeded_sources"):
-        sources.extend(global_sources or [])
-        sources.extend(user_sources or [])
+        # The "crawler" bucket (startup_company/startup_directory sources)
+        # is permanently disabled - see _bucket_enabled's flag_map, which
+        # never includes "crawler" - so anything routed there is fetched
+        # (real HTTP scrape + contact extraction + an LLM metadata call,
+        # see _fetch_startup_company) only to be discarded later by
+        # _apply_bucket_caps's 0 cap. Skip it here instead of paying that
+        # cost for a guaranteed-zero result. Re-enabling this bucket would
+        # also reintroduce contact-page scraping, which product explicitly
+        # doesn't want for Startup Hunt.
+        sources.extend(s for s in (global_sources or []) if _source_bucket(s) != "crawler")
+        sources.extend(s for s in (user_sources or []) if _source_bucket(s) != "crawler")
     sources.extend(_auto_sources_from_integrations(payload))
     sources.extend(_auto_dynamic_sources(payload))
     # Callers that already parsed strategy_prompt (e.g. to score DB-cache
@@ -394,7 +411,7 @@ async def search_startup_hunt(
     if strategy is None:
         strategy = await parse_strategy_prompt(payload.get("strategy_prompt"))
     if not sources:
-        return [], [], [], strategy, 0, {bucket: 0 for bucket in SOURCE_BUCKETS}, _build_source_diagnostics(payload, [], [])
+        return [], [], [], strategy, 0, {bucket: 0 for bucket in SOURCE_BUCKETS}, _build_source_diagnostics(payload, [], []), []
 
     total_budget = float(getattr(settings, "startup_hunt_total_budget_seconds", 150))
     bucket_fatal: dict[str, str] = {}
@@ -484,6 +501,15 @@ async def search_startup_hunt(
         results.extend(items)
 
     results = await _enrich_opportunities_contacts(results)
+    # Every raw item this search actually fetched live, before scoring/
+    # filtering/bucket-capping - the caller (service.py) caches this
+    # wholesale (for cacheable source types) so a job we already paid a
+    # provider for is reusable by a LATER search with different filters,
+    # not just this one. Caching only `results`/`overflow_results` (the
+    # post-filter survivors) would mean a hard-excluded item (wrong
+    # seniority, no keyword match, etc.) - which may well match some other
+    # search - gets thrown away and re-fetched live next time.
+    raw_items = list(results)
 
     scored: list[dict[str, Any]] = []
     filtered_out: list[dict[str, Any]] = []
@@ -555,7 +581,7 @@ async def search_startup_hunt(
     effective_limit = _effective_result_limit(payload, sources)
     primary_results = capped[:effective_limit]
     overflow_results = capped[effective_limit:]
-    return primary_results, overflow_results, filtered_out[:50], strategy, len(sources), source_result_counts, source_diagnostics
+    return primary_results, overflow_results, filtered_out[:50], strategy, len(sources), source_result_counts, source_diagnostics, raw_items
 
 
 def _apply_bucket_caps(
@@ -688,6 +714,18 @@ def _classify_bucket_fatal(exc: Exception) -> tuple[int | None, str | None]:
     return None, None
 
 
+# Only theirstack_search has a real external usage cost - everyone else
+# (greenhouse/lever/ashby's public boards, google_web's CSE free tier, and
+# the untouched legacy source types) passes None here, which makes
+# check_provider_budget a no-op that skips Redis entirely. Kept as a dict
+# rather than an inline if/else so a future metered addition is a one-line
+# change here, not a new branch in _fetch_source_safe.
+def _provider_daily_budget(provider_name: str) -> int | None:
+    if provider_name == "theirstack_search":
+        return settings.startup_hunt_theirstack_daily_budget
+    return None
+
+
 async def _fetch_source_safe(
     client: httpx.AsyncClient,
     source: StartupHuntSourceConfig,
@@ -698,10 +736,28 @@ async def _fetch_source_safe(
     bucket = _source_bucket(source)
     if bucket_fatal is not None and bucket in bucket_fatal:
         return {"items": [], "error": bucket_fatal[bucket]}
+
+    provider_name = source.type
+    # Circuit breaker + budget gates, same pattern as job_search's
+    # _fetch_provider_safe - if a source starts hard-failing repeatedly, skip
+    # it without paying the full request timeout on a call that's essentially
+    # guaranteed to fail; if a metered source (theirstack) is out of budget
+    # for the day, skip it rather than burning real external spend. Silent
+    # skip (no error surfaced), matching job_search's own choice not to alarm
+    # the user over a deliberate self-protective pause.
+    if await circuit_is_open("startup_hunt", provider_name):
+        return {"items": [], "error": None}
+    if not await check_provider_budget("startup_hunt", provider_name, _provider_daily_budget(provider_name)):
+        return {"items": [], "error": None}
+    if not await check_tool_budget("startup_hunt", settings.startup_hunt_tool_daily_budget):
+        return {"items": [], "error": None}
+
     try:
         items = await _fetch_source(client, source, payload, strategy)
+        await record_provider_result("startup_hunt", provider_name, ok=True)
         return {"items": items, "error": None}
     except Exception as exc:
+        await record_provider_result("startup_hunt", provider_name, ok=False)
         status, friendly = _classify_bucket_fatal(exc)
         if status and bucket_fatal is not None:
             reason = friendly or "This source is temporarily unavailable."
@@ -951,9 +1007,16 @@ def _bucket_enabled(payload: dict[str, Any], bucket: str) -> bool:
     # of the config gate, not instead of it.
     if bucket == "theirstack":
         return settings.startup_hunt_theirstack_enabled and bool(payload.get("theirstack_enabled", True))
+    # web gets the same payload-override treatment as theirstack, for the
+    # same reason: service.py's cost-aware fetch ordering (phase
+    # 1 = every free bucket incl. web, phase 2 = TheirStack only) writes
+    # payload["web_enabled"] = False into phase 2's payload so google_web
+    # (if it's ever turned on) doesn't get fetched a second time - it was
+    # already covered in phase 1.
+    if bucket == "web":
+        return settings.startup_hunt_google_web_enabled and bool(payload.get("web_enabled", True))
     flag_map = {
         "ats": settings.startup_hunt_greenhouse_enabled or settings.startup_hunt_lever_enabled or settings.startup_hunt_ashby_enabled,
-        "web": settings.startup_hunt_google_web_enabled,
     }
     return flag_map.get(bucket, False)
 
@@ -2351,9 +2414,18 @@ def _country_code_for_indeed(country: str | None) -> str:
     if not country:
         return "de"
     normalized = normalize_text(country)
+    # Check the override table before the raw-2-letter passthrough below -
+    # some common inputs (e.g. "UK") are themselves 2 letters but not a
+    # valid ISO 3166-1 code (that's "GB"), so returning them verbatim would
+    # silently skip the override entirely and send an invalid code to
+    # providers that require real ISO codes (TheirStack's API 400s on "UK",
+    # confirmed live - the correct code is "GB").
+    override = COUNTRY_CODE_OVERRIDES.get(normalized)
+    if override:
+        return override
     if len(normalized) == 2:
         return normalized
-    return COUNTRY_CODE_OVERRIDES.get(normalized, "de")
+    return "de"
 
 
 def _role_title_from_search_result(title: str, fallback_query: str) -> str:
