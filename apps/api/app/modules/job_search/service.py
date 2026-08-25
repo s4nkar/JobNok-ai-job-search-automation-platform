@@ -12,6 +12,7 @@ import hashlib
 import json
 import logging
 import random
+import uuid
 from datetime import datetime, timedelta, timezone
 
 from fastapi import HTTPException
@@ -139,15 +140,40 @@ def _response_cache_key(payload: dict) -> str:
     return f"job_search:{digest}"
 
 
-async def _upsert_jobs_cache(db: AsyncSession, raw_jobs: list[dict], *, origin_tool: str = "recent_job_search") -> None:
+async def _upsert_jobs_cache(
+    db: AsyncSession,
+    raw_jobs: list[dict],
+    *,
+    origin_tool: str = "recent_job_search",
+    ttl_hours: int | None = None,
+    company_id: uuid.UUID | None = None,
+) -> None:
     """Upsert every fetched listing into the shared `jobs` cache table, keyed
     by (source, source_job_id), refreshes last_seen_at/expires_at on repeat
-    sightings instead of inserting duplicates."""
+    sightings instead of inserting duplicates.
+
+    ttl_hours: overrides the default job_search_cache_ttl_days-based expiry
+    with a shorter, caller-supplied window - used by startup_hunt's
+    background sync worker (see modules/startup_hunt/ingestion/job_sync.py),
+    where a company's own crawl_frequency_hours already bounds how soon a
+    stale posting should naturally age out of query results, much tighter
+    than the 14-day general default. None (the default) keeps the original
+    days-based behavior for every other caller.
+
+    company_id: stamped onto every row in this batch - only ever passed by
+    startup_hunt's sync worker, which always upserts one company's jobs per
+    call. None (the default) leaves it unset, correct for every other caller
+    (job_search's own providers have no company_registry concept at all).
+    """
     if not raw_jobs:
         return
 
     now = datetime.now(timezone.utc)
-    expires_at = now + timedelta(days=settings.job_search_cache_ttl_days)
+    expires_at = (
+        now + timedelta(hours=ttl_hours)
+        if ttl_hours is not None
+        else now + timedelta(days=settings.job_search_cache_ttl_days)
+    )
 
     rows = []
     for job in raw_jobs:
@@ -159,6 +185,7 @@ async def _upsert_jobs_cache(db: AsyncSession, raw_jobs: list[dict], *, origin_t
                 "source": job["provider_type"],
                 "source_job_id": job["external_job_id"],
                 "origin_tool": origin_tool,
+                "company_id": company_id,
                 "title": job["role"],
                 "company": job["company"],
                 "location": job["location"],
@@ -182,6 +209,7 @@ async def _upsert_jobs_cache(db: AsyncSession, raw_jobs: list[dict], *, origin_t
         index_elements=["source", "source_job_id"],
         set_={
             "origin_tool": stmt.excluded.origin_tool,
+            "company_id": stmt.excluded.company_id,
             "title": stmt.excluded.title,
             "company": stmt.excluded.company,
             "location": stmt.excluded.location,

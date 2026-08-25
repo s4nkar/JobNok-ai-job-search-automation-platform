@@ -40,6 +40,7 @@ class Job(Base, UUIDPKMixin, CreatedAtMixin):
             postgresql_using="gin",
             postgresql_ops={"description": "gin_trgm_ops"},
         ),
+        Index("jobs_company_id_idx", "company_id"),
     )
 
     source: Mapped[str] = mapped_column(Text, nullable=False)
@@ -49,6 +50,14 @@ class Job(Base, UUIDPKMixin, CreatedAtMixin):
     # provider (e.g. "adzuna"). Lets multiple tools share this cache without
     # losing track of where a row came from.
     origin_tool: Mapped[str] = mapped_column(Text, nullable=False, server_default="recent_job_search")
+    # Cross-module FK to startup_hunt's crawler company registry - plain FK
+    # column only, no ORM relationship() across module boundaries (see
+    # startup_hunt/models.py's CompanyRegistry and the plan notes). Populated
+    # only for rows the startup_hunt background crawler wrote; every other
+    # origin_tool leaves this null.
+    company_id: Mapped[uuid.UUID | None] = mapped_column(
+        PG_UUID(as_uuid=True), ForeignKey("company_registry.id", ondelete="SET NULL"), nullable=True
+    )
     title: Mapped[str] = mapped_column(Text, nullable=False)
     company: Mapped[str] = mapped_column(Text, nullable=False)
     location: Mapped[str] = mapped_column(Text, nullable=False)

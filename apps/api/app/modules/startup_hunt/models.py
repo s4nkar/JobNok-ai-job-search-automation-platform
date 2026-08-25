@@ -1,7 +1,7 @@
 import uuid
 from datetime import datetime
 
-from sqlalchemy import ARRAY, Boolean, CheckConstraint, ForeignKey, Index, Numeric, Text, func
+from sqlalchemy import ARRAY, Boolean, CheckConstraint, ForeignKey, Index, Integer, Numeric, Text, func, text
 from sqlalchemy.dialects.postgresql import JSONB, TIMESTAMP, UUID as PG_UUID
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -30,6 +30,13 @@ class StartupHuntCompany(Base, UUIDPKMixin, CreatedAtMixin):
     english_friendly: Mapped[bool] = mapped_column(Boolean, server_default="false", nullable=False)
     relocation_support: Mapped[str | None] = mapped_column(Text, nullable=True)
     source_payload: Mapped[dict] = mapped_column(JSONB, server_default="{}", nullable=False)
+    # Best-effort link back to the global crawler registry (see CompanyRegistry
+    # below) when this user's saved company matches a canonical crawled record
+    # by domain. Nullable and never required - this table keeps its own
+    # per-user snapshot regardless (see _upsert_company in service.py).
+    registry_company_id: Mapped[uuid.UUID | None] = mapped_column(
+        PG_UUID(as_uuid=True), ForeignKey("company_registry.id", ondelete="SET NULL"), nullable=True
+    )
     # Trigger-managed (set_updated_at()) — no ORM onupdate, see shared/models.py note.
     updated_at: Mapped[datetime] = mapped_column(
         TIMESTAMP(timezone=True), server_default=func.now(), nullable=False
@@ -205,4 +212,84 @@ class OpportunityArtifact(Base, UUIDPKMixin, CreatedAtMixin):
     content: Mapped[str] = mapped_column(Text, nullable=False)
     metadata_: Mapped[dict] = mapped_column(
         "metadata", JSONB, server_default="{}", nullable=False
+    )
+
+
+class CompanyRegistry(Base, UUIDPKMixin, CreatedAtMixin):
+    """Global, deduplicated registry of startups discovered by the background
+    crawler pipeline (see discovery/, ingestion/, workers/) - one row per
+    real-world company, never per-user. Distinct from StartupHuntSource
+    (a user-facing "My Sources" ATS board a person explicitly added) and from
+    StartupHuntCompany (a per-user snapshot tied to that user's saved
+    opportunities/contacts) - this table is the crawler's own bookkeeping,
+    never read directly by any user-facing endpoint.
+
+    Lifecycle: discovered -> resolving -> resolved -> active, with
+    no_careers_page/no_jobs/failed/disabled as terminal-ish states a company
+    can fall into at the resolution or sync stage. See workers/ for the state
+    transitions.
+    """
+
+    __tablename__ = "company_registry"
+    __table_args__ = (
+        CheckConstraint(
+            "status in ('discovered', 'resolving', 'resolved', 'active', "
+            "'no_careers_page', 'no_jobs', 'failed', 'disabled')",
+            name="company_registry_status_check",
+        ),
+        CheckConstraint(
+            "crawl_priority in ('high', 'normal', 'low')",
+            name="company_registry_crawl_priority_check",
+        ),
+        # Partial unique indexes, not table-level UNIQUE constraints - both
+        # dedup keys are optional (a row can start life with neither, e.g.
+        # domain unknown until resolution), so a plain UNIQUE constraint
+        # would reject every second NULL-domain row as a duplicate of the
+        # first (NULL <> NULL is the only case Postgres exempts from a table
+        # constraint's rejection, but partial indexes make the "when does
+        # uniqueness apply" condition explicit instead of relying on that).
+        Index(
+            "company_registry_domain_key", "domain", unique=True,
+            postgresql_where=text("domain IS NOT NULL"),
+        ),
+        Index(
+            "company_registry_discovery_source_id_key", "discovery_source", "discovery_source_id", unique=True,
+            postgresql_where=text("discovery_source_id IS NOT NULL"),
+        ),
+        Index("company_registry_normalized_name_idx", "normalized_name"),
+        Index("company_registry_status_idx", "status"),
+        Index(
+            "company_registry_next_crawl_idx", "next_crawl_at",
+            postgresql_where=Text("status = 'active'"),
+        ),
+    )
+
+    name: Mapped[str] = mapped_column(Text, nullable=False)
+    normalized_name: Mapped[str] = mapped_column(Text, nullable=False)
+    domain: Mapped[str | None] = mapped_column(Text, nullable=True)
+    website_url: Mapped[str | None] = mapped_column(Text, nullable=True)
+    country: Mapped[str | None] = mapped_column(Text, nullable=True)
+    city: Mapped[str | None] = mapped_column(Text, nullable=True)
+    discovery_source: Mapped[str] = mapped_column(Text, nullable=False)
+    discovery_source_url: Mapped[str | None] = mapped_column(Text, nullable=True)
+    discovery_source_id: Mapped[str | None] = mapped_column(Text, nullable=True)
+    career_url: Mapped[str | None] = mapped_column(Text, nullable=True)
+    ats_provider: Mapped[str | None] = mapped_column(Text, nullable=True)
+    ats_identifier: Mapped[str | None] = mapped_column(Text, nullable=True)
+    status: Mapped[str] = mapped_column(Text, server_default="discovered", nullable=False)
+    crawl_frequency_hours: Mapped[int] = mapped_column(Integer, server_default="48", nullable=False)
+    crawl_priority: Mapped[str] = mapped_column(Text, server_default="normal", nullable=False)
+    last_discovered_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True), server_default=func.now(), nullable=False
+    )
+    last_resolved_at: Mapped[datetime | None] = mapped_column(TIMESTAMP(timezone=True), nullable=True)
+    last_synced_at: Mapped[datetime | None] = mapped_column(TIMESTAMP(timezone=True), nullable=True)
+    next_crawl_at: Mapped[datetime | None] = mapped_column(TIMESTAMP(timezone=True), nullable=True)
+    last_job_found_at: Mapped[datetime | None] = mapped_column(TIMESTAMP(timezone=True), nullable=True)
+    last_job_change_at: Mapped[datetime | None] = mapped_column(TIMESTAMP(timezone=True), nullable=True)
+    consecutive_failures: Mapped[int] = mapped_column(Integer, server_default="0", nullable=False)
+    last_error: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # Trigger-managed (set_updated_at()) — no ORM onupdate, see shared/models.py note.
+    updated_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True), server_default=func.now(), nullable=False
     )

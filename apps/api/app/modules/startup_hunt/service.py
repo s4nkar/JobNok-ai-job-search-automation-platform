@@ -40,6 +40,7 @@ from app.modules.startup_hunt.engine import (
     tokenize,
 )
 from app.modules.startup_hunt.models import (
+    CompanyRegistry,
     OpportunityArtifact,
     StartupHuntCompany,
     StartupHuntContact,
@@ -650,6 +651,21 @@ async def delete_opportunity_artifact(db: AsyncSession, user_id: str, opportunit
     await db.flush()
 
 
+async def _find_registry_company_id(db: AsyncSession, domain: str | None) -> str | None:
+    """Best-effort link from a user's saved StartupHuntCompany back to the
+    global crawler registry (see models.py::CompanyRegistry), by domain only
+    - the one dedup key both tables actually agree on. None (no match, or no
+    domain to match on) is a normal, expected outcome, not an error: most
+    saved companies today come from live search sources the crawler hasn't
+    (yet) discovered independently."""
+    if not domain:
+        return None
+    row_id = (
+        await db.execute(select(CompanyRegistry.id).where(CompanyRegistry.domain == domain))
+    ).scalar_one_or_none()
+    return str(row_id) if row_id is not None else None
+
+
 async def _upsert_company(db: AsyncSession, user_id: str, payload: dict) -> str:
     company_payload = payload.get("company_payload") or {}
     existing = (
@@ -659,6 +675,8 @@ async def _upsert_company(db: AsyncSession, user_id: str, payload: dict) -> str:
             )
         )
     ).scalar_one_or_none()
+
+    registry_company_id = await _find_registry_company_id(db, payload.get("company_domain"))
 
     fields = dict(
         company_name=payload["company_name"],
@@ -673,6 +691,7 @@ async def _upsert_company(db: AsyncSession, user_id: str, payload: dict) -> str:
         english_friendly=bool(company_payload.get("english_friendly")),
         relocation_support=company_payload.get("relocation_support"),
         source_payload=company_payload,
+        registry_company_id=registry_company_id,
     )
 
     if existing:

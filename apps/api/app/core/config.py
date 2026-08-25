@@ -211,6 +211,33 @@ class Settings(BaseSettings):
     startup_hunt_google_web_enabled: bool = False
     startup_hunt_google_web_result_limit: int = 15
 
+    # ── Startup Hunt — automated discovery/resolution/sync crawler pipeline ──
+    # Off by default - StartupMap scraping needs a ToS/robots.txt/legal review
+    # before it runs against the real site (see docs/startup_hunt/
+    # startup_hunt_crawler_prd.md section 39). Flip on once that review is done.
+    startup_hunt_startupmap_enabled: bool = False
+    startup_hunt_startupmap_url: str = ""
+    # How many new startups the discovery worker upserts into company_registry
+    # per run - bounded so one discovery pass can't flood the resolution queue.
+    startup_hunt_discovery_batch_size: int = 200
+    # How many due companies the scheduler dispatches to the sync queue per
+    # tick - small and continuous (PRD section 26), not one giant daily batch.
+    startup_hunt_sync_batch_size: int = 50
+    # Default crawl_frequency_hours for a newly-resolved company (PRD section 24).
+    startup_hunt_crawl_frequency_default_hours: int = 48
+    # SSRF guard limits for the generic career-page crawler and (once enabled)
+    # StartupMap discovery - both fetch arbitrary third-party URLs.
+    startup_hunt_ssrf_max_redirects: int = 3
+    startup_hunt_ssrf_max_response_bytes: int = 2_000_000
+    startup_hunt_ssrf_timeout_seconds: float = 10.0
+    # Stuck-resolution sweep (ingestion/scheduler.py::sweep_stuck_resolutions) -
+    # catches companies left in status='resolving' by a resolve_company_task
+    # that crashed/was killed mid-job, which ARQ's own retry mechanism does
+    # not cover (it only retries jobs that explicitly raise arq.Retry).
+    startup_hunt_resolution_stuck_after_minutes: int = 30
+    startup_hunt_resolution_max_attempts: int = 5
+    startup_hunt_resolution_sweep_batch_size: int = 100
+
     google_cse_api_key: str = ""
     google_cse_cx: str = ""
     apify_api_token: str = ""
