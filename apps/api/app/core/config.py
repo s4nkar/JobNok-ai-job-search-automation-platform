@@ -264,6 +264,11 @@ class Settings(BaseSettings):
     bulk_email_min_delay_seconds: int = 20
     # Worker-side token-bucket cap on Resend sends across all campaigns combined
     bulk_email_sends_per_second: int = 5
+    # Stuck-'sending' sweep (bulk_email/tasks.py::sweep_stuck_email_sends) -
+    # catches recipients left mid-send by a worker crash, which neither
+    # send_campaign_email's own Retry nor ARQ's max_tries covers on its own.
+    bulk_email_stuck_sending_after_minutes: int = 10
+    bulk_email_sweep_batch_size: int = 200
 
     # ── Cloudinary (CV photo storage) ───────────────────────────────────────
     # Get from Cloudinary dashboard's Account Details page.

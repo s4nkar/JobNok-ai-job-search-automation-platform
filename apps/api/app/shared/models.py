@@ -32,8 +32,11 @@ class CreatedAtMixin:
 
 # NOTE: deliberately no UpdatedAtMixin with an ORM `onupdate=`. Several tables
 # (job_applications, job_search_applications, startup_hunt_companies,
-# startup_hunt_opportunities, startup_scout_companies) have a Postgres
-# `BEFORE UPDATE` trigger (set_updated_at()) that unconditionally overwrites
-# updated_at server-side. Declare `updated_at` on those models as a plain
-# server-defaulted column with no ORM `onupdate`, and call
-# `await session.refresh(obj)` after an UPDATE to pick up the trigger-set value.
+# startup_hunt_opportunities, startup_scout_companies, company_registry,
+# email_recipients) have a Postgres `BEFORE UPDATE` trigger (set_updated_at())
+# that unconditionally overwrites updated_at server-side. Declare `updated_at`
+# on those models as a plain server-defaulted column with no ORM `onupdate`,
+# and call `await session.refresh(obj)` after an UPDATE to pick up the
+# trigger-set value. Adding a table to this list means adding its trigger too
+# (see alembic/versions/a1f5c9e3b7d2_fix_updated_at_triggers.py) - the column
+# alone does nothing.

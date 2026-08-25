@@ -17,7 +17,7 @@ from app.shared import model_registry  # noqa: F401 — registers every table on
 # the moment SQLAlchemy configures mappers, since `profiles`' model class was
 # never imported anywhere in this process. Same reason alembic/env.py imports
 # this too - see model_registry.py's own docstring.
-from app.modules.bulk_email.tasks import send_campaign_email
+from app.modules.bulk_email.tasks import send_campaign_email, sweep_stuck_email_sends
 from app.modules.startup_hunt.tasks import resolve_startup_hunt_source_task
 from app.modules.startup_hunt.ingestion.scheduler import dispatch_due_companies, sweep_stuck_resolutions
 from app.modules.startup_hunt.workers.discovery_worker import run_discovery
@@ -37,6 +37,7 @@ def get_arq_pool(request: Request) -> ArqRedis:
 class WorkerSettings:
     functions = [
         send_campaign_email,
+        sweep_stuck_email_sends,
         resolve_startup_hunt_source_task,
         run_discovery,
         resolve_company_task,
@@ -54,6 +55,9 @@ class WorkerSettings:
         # resolve_company_task - see scheduler.py's docstring for why ARQ's
         # own retry mechanism doesn't cover this on its own.
         cron(sweep_stuck_resolutions, minute={0, 30}),
+        # Same class of gap, for bulk email sends - see
+        # bulk_email/tasks.py::sweep_stuck_email_sends's docstring.
+        cron(sweep_stuck_email_sends, minute={0, 10, 20, 30, 40, 50}),
     ]
     redis_settings = RedisSettings.from_dsn(settings.redis_url)
     max_jobs = 10       # concurrent jobs this worker process runs; Resend pacing is
