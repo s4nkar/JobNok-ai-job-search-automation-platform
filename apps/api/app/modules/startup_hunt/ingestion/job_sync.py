@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass
+from datetime import datetime, timedelta, timezone
 
 import httpx
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -19,7 +20,7 @@ from app.modules.startup_hunt.engine import StartupHuntSourceConfig
 from app.modules.startup_hunt.ingestion import generic_crawler
 from app.modules.startup_hunt.models import CompanyRegistry
 from app.modules.startup_hunt.providers import ashby, greenhouse, lever
-from app.modules.startup_hunt.service import _opportunity_to_job_cache_row
+from app.modules.startup_hunt.service import _opportunity_to_job_cache_row, _parse_dt
 
 logger = logging.getLogger(__name__)
 
@@ -88,6 +89,29 @@ async def sync_company(db: AsyncSession, company: CompanyRegistry) -> SyncResult
         if row is not None:
             rows_by_key[(row["provider_type"], row["external_job_id"])] = row
     rows = list(rows_by_key.values())
+
+    # Drop postings older than startup_hunt_job_max_age_days (posted_at is
+    # each provider's freshest signal - greenhouse's updated_at moves on
+    # reposts, so a reposted-but-old listing still passes). Rows with no
+    # posted_at (generic_crawler, mostly) are kept - unknown age isn't
+    # evidence of staleness. A row that stops qualifying simply stops being
+    # upserted, so its existing expires_at (set on an earlier sync) is never
+    # refreshed again and it ages out on its own - see config.py's comment.
+    max_age_cutoff = datetime.now(timezone.utc) - timedelta(days=settings.startup_hunt_job_max_age_days)
+    fresh_rows = []
+    stale_count = 0
+    for row in rows:
+        posted_at = _parse_dt(row.get("posted_at"))
+        if posted_at is not None and posted_at < max_age_cutoff:
+            stale_count += 1
+            continue
+        fresh_rows.append(row)
+    if stale_count:
+        logger.info(
+            "Skipped %d stale posting(s) (older than %d days) for company %s",
+            stale_count, settings.startup_hunt_job_max_age_days, company.name,
+        )
+    rows = fresh_rows
 
     if rows:
         ttl_hours = max(2 * company.crawl_frequency_hours, 48)

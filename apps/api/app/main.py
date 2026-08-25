@@ -33,6 +33,7 @@ from app.modules.startup_scout.routes import router as startup_scout_router
 from app.modules.profile.routes import router as profile_router
 from app.modules.auth.routes import router as auth_router
 from app.modules.usage.routes import router as usage_router
+from app.modules.admin.routes import router as admin_router
 
 setup_logging(settings)
 
@@ -73,6 +74,7 @@ app.include_router(startup_scout_router,   prefix="/api/startup-scout",tags=["st
 app.include_router(profile_router,         prefix="/api/profile",      tags=["profile"])
 app.include_router(auth_router,            prefix="/api/auth",         tags=["auth"])
 app.include_router(usage_router,           prefix="/api/usage",        tags=["usage"])
+app.include_router(admin_router,           prefix="/api/admin",        tags=["admin"])
 
 
 @app.get("/api/health", tags=["health"])

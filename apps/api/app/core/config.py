@@ -217,15 +217,16 @@ class Settings(BaseSettings):
     # be located (checked the sitemap, llms.txt, and the homepage's static
     # HTML - see discovery/startupmap.py's module docstring). Flip on only
     # once that gap has been explicitly accepted or resolved.
-    startup_hunt_startupmap_enabled: bool = False
+    startup_hunt_startupmap_enabled: bool = True
     # How many /startup/{slug} detail pages discovery/startupmap.py fetches
-    # per run - kept small deliberately (unlike other batch sizes in this
-    # file): each one is a real page fetch against startupmap.one's server,
-    # and this whole call has to fit inside the ARQ job_timeout (30s) too.
-    # At 25/run x 4 runs/day this is a slow, deliberately conservative first
-    # pass across the ~4,500 startups they list - tune upward once this is
-    # live and its real-world impact/timing is observed.
-    startup_hunt_discovery_batch_size: int = 25
+    # per run - each one is a real page fetch against startupmap.one's
+    # server, and this whole call has to fit inside the ARQ job_timeout
+    # (30s) too. Measured live: 50 pages at concurrency=5 takes ~12s, well
+    # within budget. At 50/run x 8 runs/day (see arq_worker.py's cron_jobs)
+    # that's a full first pass across the ~4,500 listed startups in ~11
+    # days - tune further once this is live and its real-world impact is
+    # observed.
+    startup_hunt_discovery_batch_size: int = 50
     # How many /startup/{slug} pages are fetched concurrently within one
     # discovery run - bounded so this never opens more than a handful of
     # simultaneous connections to their server at once.
@@ -247,6 +248,15 @@ class Settings(BaseSettings):
     startup_hunt_resolution_stuck_after_minutes: int = 30
     startup_hunt_resolution_max_attempts: int = 5
     startup_hunt_resolution_sweep_batch_size: int = 100
+    # ATS boards (esp. Lever, which only exposes createdAt - no repost/update
+    # timestamp) can list postings well over a year old that are still
+    # technically "open". Sync skips writing/refreshing any posting older
+    # than this - postings with no posted_at at all (generic_crawler, mostly)
+    # are kept, since "unknown age" isn't evidence of staleness. A posting
+    # that stops qualifying just stops being refreshed and ages out via the
+    # existing expires_at TTL (see job_search/tasks.py::sweep_expired_jobs) -
+    # no separate cleanup pass needed.
+    startup_hunt_job_max_age_days: int = 30
 
     google_cse_api_key: str = ""
     google_cse_cx: str = ""
@@ -294,6 +304,32 @@ class Settings(BaseSettings):
     clerk_issuer: str = ""
     # Svix signing secret for verifying inbound webhooks (app/modules/auth/routes.py).
     clerk_webhook_secret: str = ""
+    # A Clerk session's `azp` claim reflects whichever origin it was actually
+    # issued from - apps/admin is a separate Next.js app/origin from apps/web
+    # (app_url), so its tokens carry a different azp and would otherwise fail
+    # core/security.py's audience check outright. Empty (default) = admin app
+    # not deployed yet, behavior is unchanged (only app_url is ever accepted).
+    # Must exactly match apps/admin's own NEXT_PUBLIC_APP_URL. If Clerk's
+    # "Allowed Subdomains" restriction is enabled on the dashboard (Configure
+    # -> Domains), the admin origin also needs adding there - by default
+    # every subdomain of the primary domain already works without that.
+    admin_app_url: str = ""
+    # Only used by scripts/promote_admin.py to find which profiles row to
+    # set role='admin' on - see that script's docstring. The Clerk account
+    # itself is created separately (dashboard or the app's own sign-up), not
+    # by this app; nothing here ever handles a credential. clerk_user_id
+    # takes precedence over email when both are set - see promote_admin.py's
+    # docstring for why email alone doesn't work in local dev (no publicly
+    # reachable webhook endpoint means profiles get a placeholder email).
+    admin_email: str = ""
+    admin_clerk_user_id: str = ""
+
+    @property
+    def clerk_allowed_origins(self) -> set[str]:
+        origins = {self.app_url}
+        if self.admin_app_url:
+            origins.add(self.admin_app_url)
+        return origins
 
     # ── Database (SQLAlchemy) ────────────────────────────────────────────────
     # Direct Postgres connection string to the same Supabase project, e.g.

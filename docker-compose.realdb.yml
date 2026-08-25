@@ -1,0 +1,39 @@
+# Optional overlay - layer on top of the dev overlay to point api/worker at
+# the REAL database for this run, instead of local throwaway Postgres, while
+# keeping every other dev convenience (hot reload, bind mounts, etc.):
+#
+#   docker compose -f docker-compose.yml -f docker-compose.dev.yml -f docker-compose.realdb.yml up --build
+#   (or just `pnpm dev:realdb`)
+#
+# Why a whole-database toggle, not a per-table split: company_registry isn't
+# an isolated write target - resolution_worker/sync_worker/scheduler.py all
+# continuously read AND write it as part of normal pipeline operation, and
+# jobs.company_id is a real foreign key into it. Splitting "just discovery's
+# writes" to one database while the rest of the pipeline reads a different
+# one would mean resolution/sync never see what discovery just found, and a
+# cross-database foreign key isn't something Postgres can enforce at all.
+# So this switches the WHOLE database target for these two services - use it
+# only when you deliberately want a run to count for real (e.g. testing the
+# StartupMap crawl once it's actually enabled), and plain `pnpm dev` the
+# rest of the time for everyday iteration.
+#
+# Requires DATABASE_URL and MIGRATIONS_DATABASE_URL in the REPO ROOT's own
+# .env file (not apps/api/.env - that one only feeds the container's runtime
+# env via env_file:, Compose's own ${...} interpolation in THIS file reads
+# from the root .env instead). Copy the real values over from apps/api/.env
+# once; nothing keeps them in sync beyond that, so update both if the real
+# connection string ever changes.
+#
+# REDIS_URL is deliberately left alone (still local Redis, from the dev
+# overlay) - no reason to spend real Upstash quota on ARQ's queue/rate-limit
+# traffic just because this run's Postgres target changed.
+
+services:
+  api:
+    environment:
+      - DATABASE_URL=${DATABASE_URL}
+      - MIGRATIONS_DATABASE_URL=${MIGRATIONS_DATABASE_URL}
+
+  worker:
+    environment:
+      - DATABASE_URL=${DATABASE_URL}

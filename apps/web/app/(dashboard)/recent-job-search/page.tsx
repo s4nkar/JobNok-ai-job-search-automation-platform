@@ -403,6 +403,7 @@ export default function RecentJobSearchPage() {
                     <SelectItem value="24" className="text-sm">24 hours</SelectItem>
                     <SelectItem value="72" className="text-sm">72 hours</SelectItem>
                     <SelectItem value="168" className="text-sm">7 days</SelectItem>
+                    <SelectItem value="720" className="text-sm">30 days</SelectItem>
                   </SelectContent>
                 </Select>
               </div>

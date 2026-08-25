@@ -16,23 +16,36 @@ _NO_CAREERS_PAGE_ERROR = "No website or careers URL to resolve against."
 
 
 async def resolve_company(company: CompanyRegistry) -> None:
-    """Mutates `company` in place (caller flushes/commits). Tries the fast
-    direct-resolve path first (one slug guess per ATS type), falling back to
-    the slower multi-variant resolver only if that misses - mirrors
-    service.py's resolve_startup_hunt_source, minus its cross-user reuse
-    tier (no equivalent here: every company is already a single global row,
-    there's no "has some other user already resolved this" question to ask).
+    """Mutates `company` in place (caller flushes/commits).
 
-    On no ATS match, falls through to the generic career-page crawler as a
-    best-effort fallback (ats_provider='generic') rather than failing
-    outright when there's still a website/careers URL to try - it may find
-    zero jobs (the sync worker marks the company 'no_jobs' then, not a
-    resolution failure - see PRD section 21).
+    Tries company NAME first (slug-guessing against all 3 ATS types via
+    resolver.try_direct_resolve/try_fallback_resolve), only falling through
+    to scanning an actual URL (career_url if known, else the homepage) if
+    that misses. This order matters and isn't arbitrary: resolver.py's
+    try_fallback_resolve explicitly skips its own slug-guessing entirely
+    whenever the input already looks like a URL ("already retried in full
+    just above" - see its own comment), since it was built for the "My
+    Sources" flow where a user provides a name OR a careers URL, never
+    both. Discovery only ever gives us a homepage URL, never a bare name-as-
+    input case that flow expects - passing that URL in first (as an earlier
+    version of this function did) meant slug-guessing never ran at all, and
+    every company fell straight through to the generic fallback regardless
+    of whether it actually had a real, resolvable ATS board.
+
+    On no ATS match either way, falls through to the generic career-page
+    crawler as a best-effort fallback (ats_provider='generic') rather than
+    failing outright when there's still a website/careers URL to try - it
+    may find zero jobs (the sync worker marks the company 'no_jobs' then,
+    not a resolution failure - see PRD section 21).
     """
-    company_input = company.career_url or company.website_url or company.name
-    resolved = await resolver.try_direct_resolve(company_input)
+    resolved = await resolver.try_direct_resolve(company.name)
     if resolved is None:
-        resolved = await resolver.try_fallback_resolve(company_input)
+        resolved = await resolver.try_fallback_resolve(company.name)
+
+    if resolved is None:
+        url_input = company.career_url or company.website_url
+        if url_input:
+            resolved = await resolver.try_direct_resolve(url_input)
 
     company.last_resolved_at = datetime.now(timezone.utc)
 

@@ -98,6 +98,18 @@ def require_role(role: str):
             await db.execute(select(Profile).where(Profile.id == user_id))
         ).scalar_one_or_none()
         if profile is None or profile.role != role:
+            # get_current_user_id may have just created this profile row
+            # (resolve_or_create_profile's fallback path, when the Clerk
+            # webhook hasn't provisioned it yet). Commit that before raising -
+            # get_db's exception handler rolls back on ANY Exception,
+            # HTTPException included, which would otherwise silently discard
+            # a brand-new profile every time an authenticated-but-
+            # unauthorized user hits a role-gated route. "We identified you"
+            # and "you're not authorized for this" are separate facts; one
+            # shouldn't undo the other. Safe here specifically because this
+            # runs as a route-level dependency, before the route body (and
+            # any of its own writes) ever executes.
+            await db.commit()
             raise HTTPException(status_code=403, detail="Insufficient permissions")
         return user_id
 
