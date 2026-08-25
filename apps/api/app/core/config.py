@@ -212,14 +212,24 @@ class Settings(BaseSettings):
     startup_hunt_google_web_result_limit: int = 15
 
     # ── Startup Hunt — automated discovery/resolution/sync crawler pipeline ──
-    # Off by default - StartupMap scraping needs a ToS/robots.txt/legal review
-    # before it runs against the real site (see docs/startup_hunt/
-    # startup_hunt_crawler_prd.md section 39). Flip on once that review is done.
+    # Off by default - robots.txt and llms.txt at startupmap.one both
+    # explicitly welcome crawlers/AI, but no separate Terms of Service could
+    # be located (checked the sitemap, llms.txt, and the homepage's static
+    # HTML - see discovery/startupmap.py's module docstring). Flip on only
+    # once that gap has been explicitly accepted or resolved.
     startup_hunt_startupmap_enabled: bool = False
-    startup_hunt_startupmap_url: str = ""
-    # How many new startups the discovery worker upserts into company_registry
-    # per run - bounded so one discovery pass can't flood the resolution queue.
-    startup_hunt_discovery_batch_size: int = 200
+    # How many /startup/{slug} detail pages discovery/startupmap.py fetches
+    # per run - kept small deliberately (unlike other batch sizes in this
+    # file): each one is a real page fetch against startupmap.one's server,
+    # and this whole call has to fit inside the ARQ job_timeout (30s) too.
+    # At 25/run x 4 runs/day this is a slow, deliberately conservative first
+    # pass across the ~4,500 startups they list - tune upward once this is
+    # live and its real-world impact/timing is observed.
+    startup_hunt_discovery_batch_size: int = 25
+    # How many /startup/{slug} pages are fetched concurrently within one
+    # discovery run - bounded so this never opens more than a handful of
+    # simultaneous connections to their server at once.
+    startup_hunt_startupmap_fetch_concurrency: int = 5
     # How many due companies the scheduler dispatches to the sync queue per
     # tick - small and continuous (PRD section 26), not one giant daily batch.
     startup_hunt_sync_batch_size: int = 50

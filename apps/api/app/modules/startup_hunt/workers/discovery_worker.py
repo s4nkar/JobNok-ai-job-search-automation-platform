@@ -21,8 +21,17 @@ async def run_discovery(ctx: dict) -> None:
     itself checks startup_hunt_startupmap_enabled and returns [] when off
     (default), so this needs no separate gate here. Adding another discovery
     source later (PRD section 10) means running it here too, nothing else
-    changes."""
-    discovered = await StartupMapSource().discover()
+    changes.
+
+    Two short-lived DB sessions, not one held open for the whole call - the
+    discover() call in between does real network I/O (concurrent page
+    fetches against a third-party site), which shouldn't sit on a held DB
+    connection the whole time it's running.
+    """
+    async with AsyncSessionLocal() as db:
+        known_slugs = await discovery_service.known_discovery_source_ids(db, StartupMapSource.name)
+
+    discovered = await StartupMapSource(known_slugs=known_slugs).discover()
     if not discovered:
         return
 

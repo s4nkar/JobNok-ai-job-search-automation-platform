@@ -10,7 +10,7 @@ from __future__ import annotations
 import re
 from datetime import datetime, timezone
 
-from sqlalchemy import literal_column
+from sqlalchemy import literal_column, select
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -20,6 +20,26 @@ from app.modules.startup_hunt.models import CompanyRegistry
 
 def _normalize_name(name: str) -> str:
     return re.sub(r"\s+", " ", name.strip().lower())
+
+
+async def known_discovery_source_ids(db: AsyncSession, discovery_source: str) -> set[str]:
+    """Every discovery_source_id already on record for this source (e.g. every
+    StartupMap slug already discovered). Lets a discovery source exclude
+    already-known items from its own sampling instead of wasting fetches
+    re-covering ground it's already covered - see discovery/startupmap.py,
+    which samples randomly from whatever this leaves out (no persisted
+    "last position" cursor otherwise needed: company_registry itself already
+    *is* the durable record of what's been seen).
+    """
+    rows = (
+        await db.execute(
+            select(CompanyRegistry.discovery_source_id).where(
+                CompanyRegistry.discovery_source == discovery_source,
+                CompanyRegistry.discovery_source_id.isnot(None),
+            )
+        )
+    ).scalars().all()
+    return set(rows)
 
 
 async def upsert_discovered(db: AsyncSession, items: list[DiscoveredStartup]) -> list[str]:

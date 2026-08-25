@@ -9,6 +9,7 @@ from arq.connections import ArqRedis, RedisSettings
 from fastapi import Request
 
 from app.core.config import settings
+from app.core.logging import setup_logging
 from app.shared import model_registry  # noqa: F401 — registers every table on Base.metadata.
 # The worker runs as its own process (see module docstring below), separate
 # from the FastAPI app - it never imports app/main.py, so without this any
@@ -23,6 +24,16 @@ from app.modules.startup_hunt.ingestion.scheduler import dispatch_due_companies,
 from app.modules.startup_hunt.workers.discovery_worker import run_discovery
 from app.modules.startup_hunt.workers.resolution_worker import resolve_company_task
 from app.modules.startup_hunt.workers.sync_worker import sync_company_task
+
+# app/main.py calls this for the FastAPI process; this worker runs as its own
+# separate process (see module docstring above) and never imports main.py, so
+# without this call here too, Sentry was never initialized for it at all -
+# any unhandled exception in a task (a plain Exception, not an arq.Retry) is
+# just logged via logger.exception() and otherwise vanishes (keep_result=0
+# below means arq doesn't even keep a trace of it). Sentry's logging
+# integration is on by default, so this alone is enough to start capturing
+# those - no per-task changes needed.
+setup_logging(settings)
 
 
 def get_arq_pool(request: Request) -> ArqRedis:

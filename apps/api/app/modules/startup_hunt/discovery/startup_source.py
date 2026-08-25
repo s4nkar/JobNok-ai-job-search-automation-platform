@@ -25,6 +25,16 @@ class DiscoveredStartup:
 class StartupSource(Protocol):
     """Anything with an async discover() returning a batch of startups can be
     plugged into discovery_service.py - see startupmap.py for the reference
-    implementation."""
+    implementation.
+
+    Only discover()'s own signature is part of this contract - a concrete
+    source's __init__ is free to take whatever it needs for its own
+    dedup/pagination strategy (e.g. StartupMapSource takes a set of
+    already-known ids to sample around, since it has no natural paging
+    cursor of its own; a future paginated-API source might instead take a
+    `since` cursor). The worker that owns each source's DB access (see
+    workers/discovery_worker.py) is responsible for supplying whatever that
+    particular source asks for before calling discover().
+    """
 
     async def discover(self) -> list[DiscoveredStartup]: ...

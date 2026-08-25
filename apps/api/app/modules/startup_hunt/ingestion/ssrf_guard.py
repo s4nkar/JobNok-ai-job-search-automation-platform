@@ -61,11 +61,17 @@ async def _resolve_and_validate(hostname: str) -> None:
             raise SSRFBlockedError(f"Host {hostname} resolves to a disallowed address: {ip}")
 
 
-async def safe_fetch(url: str, *, max_bytes: int | None = None) -> str:
+async def safe_fetch(url: str, *, max_bytes: int | None = None, headers: dict[str, str] | None = None) -> str:
     """Fetches `url` and returns its response body as text, following
     redirects manually (not httpx's built-in follow_redirects) so every hop's
     target gets the same hostname-resolution + private-IP check as the
     original URL, not just the first one.
+
+    headers: passed through as-is (e.g. an identifying User-Agent - see
+    discovery/startupmap.py, which sends one rather than an anonymous/spoofed
+    default, since the sites this hits have explicitly said crawlers are
+    welcome and a real identity is what lets them selectively rate-limit or
+    block us later if they ever need to, unlike an anonymous default would).
 
     Raises SSRFBlockedError if the URL or any redirect target is disallowed,
     or if the response exceeds the configured size cap.
@@ -74,7 +80,7 @@ async def safe_fetch(url: str, *, max_bytes: int | None = None) -> str:
     current_url = url
 
     async with httpx.AsyncClient(
-        timeout=settings.startup_hunt_ssrf_timeout_seconds, follow_redirects=False
+        timeout=settings.startup_hunt_ssrf_timeout_seconds, follow_redirects=False, headers=headers
     ) as client:
         for _ in range(settings.startup_hunt_ssrf_max_redirects + 1):
             parsed = urlparse(current_url)
