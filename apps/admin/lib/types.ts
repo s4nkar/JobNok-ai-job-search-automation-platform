@@ -52,9 +52,13 @@ export interface CompanyRegistryRow {
   updated_at: string
 }
 
+export interface CompanyListItem extends CompanyRegistryRow {
+  job_count: number
+}
+
 export interface CompanyListResponse {
   total: number
-  items: CompanyRegistryRow[]
+  items: CompanyListItem[]
 }
 
 export interface JobRow {
@@ -80,4 +84,9 @@ export interface CompanyDetailResponse {
   company: CompanyRegistryRow
   jobs: JobRow[]
   job_count: number
+}
+
+export interface JobListResponse {
+  total: number
+  items: JobRow[]
 }

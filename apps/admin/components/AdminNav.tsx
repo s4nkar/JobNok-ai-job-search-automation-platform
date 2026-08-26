@@ -8,6 +8,7 @@ import { cn } from '@jobnok/ui'
 const links = [
   { href: '/', label: 'Overview' },
   { href: '/crawler/companies', label: 'Companies' },
+  { href: '/crawler/jobs', label: 'Jobs' },
 ]
 
 export function AdminNav() {

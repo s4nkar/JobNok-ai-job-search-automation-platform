@@ -34,3 +34,14 @@ async def list_companies(
 @router.get("/crawler/companies/{company_id}")
 async def get_company_detail(company_id: str, db: AsyncSession = Depends(get_db)):
     return await service.get_company_detail(db, company_id)
+
+
+@router.get("/crawler/jobs")
+async def list_jobs(
+    db: AsyncSession = Depends(get_db),
+    search: str | None = None,
+    company_id: str | None = None,
+    limit: int = Query(default=service.DEFAULT_PAGE_SIZE, ge=1, le=service.MAX_PAGE_SIZE),
+    offset: int = Query(default=0, ge=0),
+):
+    return await service.list_jobs(db, search=search, company_id=company_id, limit=limit, offset=offset)

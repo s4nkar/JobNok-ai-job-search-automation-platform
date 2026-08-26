@@ -9,8 +9,11 @@ import {
 } from '@jobnok/ui'
 import { apiGet } from '@/lib/api'
 import { ApiErrorState } from '@/components/ApiErrorState'
+import { Pager } from '@/components/Pager'
 import { formatRelativeTime } from '@/lib/format'
 import type { CompanyListResponse, CompanyStatus } from '@/lib/types'
+
+const PAGE_SIZE = 50
 
 const STATUS_OPTIONS: CompanyStatus[] = [
   'discovered', 'resolving', 'resolved', 'active', 'no_careers_page', 'no_jobs', 'failed', 'disabled',
@@ -30,15 +33,28 @@ const STATUS_VARIANT: Record<CompanyStatus, 'default' | 'secondary' | 'destructi
 export default function CompaniesPage() {
   const [status, setStatus] = useState<string>('all')
   const [search, setSearch] = useState('')
+  const [offset, setOffset] = useState(0)
 
   const params = new URLSearchParams()
   if (status !== 'all') params.set('status', status)
   if (search.trim()) params.set('search', search.trim())
+  params.set('limit', String(PAGE_SIZE))
+  params.set('offset', String(offset))
 
   const { data, error, isLoading } = useQuery({
-    queryKey: ['admin', 'crawler', 'companies', status, search],
+    queryKey: ['admin', 'crawler', 'companies', status, search, offset],
     queryFn: () => apiGet<CompanyListResponse>(`/api/admin/crawler/companies?${params.toString()}`),
   })
+
+  function handleStatusChange(value: string) {
+    setStatus(value)
+    setOffset(0)
+  }
+
+  function handleSearchChange(value: string) {
+    setSearch(value)
+    setOffset(0)
+  }
 
   return (
     <div className="space-y-6">
@@ -53,10 +69,10 @@ export default function CompaniesPage() {
         <Input
           placeholder="Search by name or domain"
           value={search}
-          onChange={(e) => setSearch(e.target.value)}
+          onChange={(e) => handleSearchChange(e.target.value)}
           className="max-w-xs"
         />
-        <Select value={status} onValueChange={setStatus}>
+        <Select value={status} onValueChange={handleStatusChange}>
           <SelectTrigger className="w-48">
             <SelectValue placeholder="All statuses" />
           </SelectTrigger>
@@ -78,6 +94,7 @@ export default function CompaniesPage() {
               <TableHead>Name</TableHead>
               <TableHead>Status</TableHead>
               <TableHead>ATS</TableHead>
+              <TableHead>Jobs</TableHead>
               <TableHead>Failures</TableHead>
               <TableHead>Last synced</TableHead>
               <TableHead>Next crawl</TableHead>
@@ -86,14 +103,14 @@ export default function CompaniesPage() {
           <TableBody>
             {isLoading && (
               <TableRow>
-                <TableCell colSpan={6} className="text-center text-sm text-muted-foreground">
+                <TableCell colSpan={7} className="text-center text-sm text-muted-foreground">
                   Loading...
                 </TableCell>
               </TableRow>
             )}
             {!isLoading && data?.items.length === 0 && (
               <TableRow>
-                <TableCell colSpan={6} className="text-center text-sm text-muted-foreground">
+                <TableCell colSpan={7} className="text-center text-sm text-muted-foreground">
                   No companies match these filters.
                 </TableCell>
               </TableRow>
@@ -112,6 +129,18 @@ export default function CompaniesPage() {
                   <Badge variant={STATUS_VARIANT[company.status]}>{company.status}</Badge>
                 </TableCell>
                 <TableCell className="text-sm">{company.ats_provider || 'Not resolved'}</TableCell>
+                <TableCell className="text-sm">
+                  {company.job_count > 0 ? (
+                    <Link
+                      href={`/crawler/jobs?company_id=${company.id}`}
+                      className="text-primary hover:underline"
+                    >
+                      {company.job_count} job{company.job_count === 1 ? '' : 's'}
+                    </Link>
+                  ) : (
+                    <span className="text-muted-foreground">No jobs</span>
+                  )}
+                </TableCell>
                 <TableCell className="text-sm">{company.consecutive_failures}</TableCell>
                 <TableCell className="text-sm">{formatRelativeTime(company.last_synced_at)}</TableCell>
                 <TableCell className="text-sm">{formatRelativeTime(company.next_crawl_at)}</TableCell>
@@ -119,6 +148,10 @@ export default function CompaniesPage() {
             ))}
           </TableBody>
         </Table>
+      )}
+
+      {data && (
+        <Pager offset={offset} pageSize={PAGE_SIZE} total={data.total} onOffsetChange={setOffset} />
       )}
     </div>
   )

@@ -3262,6 +3262,25 @@ async def _enrich_contact_pdl(
     }
 
 
+def _short_company_signal(text: str, max_chars: int = 160) -> str:
+    """Trims a raw ai_relevance blob down to a citation-sized signal line.
+
+    Most providers already hand back a short search-result snippet here, but
+    TheirStack's ai_relevance is the entire raw job description verbatim
+    (seen in production: 2000+ words of markdown-formatted posting text) -
+    without this, that whole blob was dumped wholesale into a single
+    "Company signal: ..." citation line. Strips the markdown noise
+    (**bold**, # headings) that raw text carries, then cuts at the last word
+    boundary under max_chars rather than mid-word.
+    """
+    cleaned = re.sub(r"[*#]+", "", text)
+    cleaned = re.sub(r"\s+", " ", cleaned).strip()
+    if len(cleaned) <= max_chars:
+        return cleaned
+    truncated = cleaned[:max_chars].rsplit(" ", 1)[0]
+    return f"{truncated}..."
+
+
 def _score_opportunity(
     item: dict[str, Any],
     payload: dict[str, Any],
@@ -3428,7 +3447,9 @@ def _score_opportunity(
         if any(token in ai_relevance for token in ["ai", "ml", "machine learning", "llm", "data", "model"]):
             score += 2
             labels.append("AI/ML Fit")
-            reasons.append(f"Company signal: {company_payload.get('ai_relevance')}")
+            signal_text = _short_company_signal(str(company_payload.get("ai_relevance") or ""))
+            if signal_text:
+                reasons.append(f"Company signal: {signal_text}")
         stack_hits = [signal for signal in stack_signals if signal in ai_relevance or signal in raw_text or signal in normalized_title]
         if stack_hits:
             score += min(len(stack_hits), 2) * 0.75

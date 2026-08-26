@@ -105,7 +105,29 @@ async def list_companies(
         )
     ).scalars().all()
 
-    return {"total": total, "items": [row_to_dict(r) for r in rows]}
+    # One extra query, bounded to this page's companies only (not a per-row
+    # subquery) - counts only live (non-expired) jobs so "job_count" reflects
+    # what a search would actually surface right now, not stale rows waiting
+    # on sweep_expired_jobs to clean them up.
+    job_counts: dict[str, int] = {}
+    if rows:
+        ids = [r.id for r in rows]
+        count_rows = (
+            await db.execute(
+                select(Job.company_id, func.count())
+                .where(Job.company_id.in_(ids), Job.expires_at > datetime.now(timezone.utc))
+                .group_by(Job.company_id)
+            )
+        ).all()
+        job_counts = {str(company_id): count for company_id, count in count_rows}
+
+    items = []
+    for r in rows:
+        item = row_to_dict(r)
+        item["job_count"] = job_counts.get(str(r.id), 0)
+        items.append(item)
+
+    return {"total": total, "items": items}
 
 
 async def get_company_detail(db: AsyncSession, company_id: str) -> dict:
@@ -118,9 +140,51 @@ async def get_company_detail(db: AsyncSession, company_id: str) -> dict:
             select(Job).where(Job.company_id == company_id).order_by(Job.last_seen_at.desc()).limit(100)
         )
     ).scalars().all()
+    # Total across all of this company's jobs, not just the 100-row page
+    # above - len(jobs) undercounted any company with more than 100.
+    job_count = await db.scalar(
+        select(func.count()).select_from(Job).where(Job.company_id == company_id)
+    ) or 0
 
     return {
         "company": row_to_dict(company),
         "jobs": [row_to_dict(j) for j in jobs],
-        "job_count": len(jobs),
+        "job_count": job_count,
     }
+
+
+async def list_jobs(
+    db: AsyncSession,
+    *,
+    search: str | None = None,
+    company_id: str | None = None,
+    limit: int = DEFAULT_PAGE_SIZE,
+    offset: int = 0,
+) -> dict:
+    """Crawler-sourced jobs only (company_id IS NOT NULL) - this admin app is
+    scoped to crawler observability, not a general browser over the shared
+    `jobs` cache (which also holds job_search's own Adzuna/Bundesagentur
+    rows, out of scope here - see get_crawler_overview's identical
+    total_crawler_jobs filter).
+    """
+    conditions = [Job.company_id.isnot(None)]
+    if company_id:
+        conditions.append(Job.company_id == company_id)
+    if search:
+        term = f"%{search.strip()}%"
+        conditions.append(or_(Job.title.ilike(term), Job.company.ilike(term), Job.location.ilike(term)))
+
+    page_size = min(max(limit, 1), MAX_PAGE_SIZE)
+
+    total = await db.scalar(select(func.count()).select_from(Job).where(*conditions)) or 0
+    rows = (
+        await db.execute(
+            select(Job)
+            .where(*conditions)
+            .order_by(Job.last_seen_at.desc())
+            .limit(page_size)
+            .offset(max(offset, 0))
+        )
+    ).scalars().all()
+
+    return {"total": total, "items": [row_to_dict(r) for r in rows]}

@@ -240,23 +240,45 @@ async def _fetch_ats_db_candidates(
     return scored, live_sources, row_ids
 
 
-async def _fetch_theirstack_db_candidates(
+async def _fetch_startup_hunt_db_candidates(
     db: AsyncSession, payload: dict[str, Any], strategy: dict[str, Any], existing: dict[str, dict[str, Any]]
 ) -> tuple[list[dict[str, Any]], list[uuid.UUID]]:
-    """DB-first pre-check for the theirstack bucket only (see plan). Returns
-    already-scored opportunity dicts plus the underlying row ids (for TTL
-    refresh), or ([], []) if the country can't be resolved, in which case
-    the live theirstack fetch's own ProviderError-equivalent handling
-    (settings.theirstack_api_key check) takes over exactly as before.
+    """DB-first pre-check driving the TheirStack shortfall decision (see
+    plan) - deliberately NOT restricted to allowed_sources={"theirstack"}
+    anymore. It used to be, on the reasoning that cached Greenhouse/Lever/
+    Ashby rows "cover a different, unrelated set of companies" - true when
+    every such row came from a user's own "My Sources" (already counted by
+    _fetch_ats_db_candidates below), but false now that the background
+    crawler (ingestion/job_sync.py) writes its own Greenhouse/Lever/Ashby/
+    generic rows for companies nobody added as a source at all. Restricting
+    to theirstack-only meant those crawler-synced rows - the whole point of
+    running a crawler - never counted toward "do we still need to pay for a
+    live TheirStack call," and were never otherwise reachable from search
+    either (engine.py has no company_registry-aware bucket of its own).
+    Dropping the restriction fixes both: crawler rows now surface here, and
+    a company with enough crawler-sourced matches already can skip paying
+    for TheirStack entirely.
 
-    allowed_sources={"theirstack"} keeps this shortfall calculation
-    theirstack-specific - cached Greenhouse/Lever/Ashby rows exist in the
-    same table now (see _opportunity_to_job_cache_row) but cover a
-    different, unrelated set of companies, so they shouldn't count toward
-    "do we still need to call TheirStack live." allowed_origin_tools
-    additionally guards against recent_job_search's own cached rows
+    This does overlap with _fetch_ats_db_candidates for the narrow case of a
+    "My Sources" company that also has a fresh per-source cache hit there -
+    the same row gets scored in both places, inflating this function's
+    return count and thus under-counting theirstack_db_shortfall slightly.
+    Harmless: final results still go through _dedupe_opportunities before
+    display, and skewing the shortfall calculation toward "we already have
+    enough, skip the paid call" is the direction that matches this bucket's
+    whole purpose.
+
+    allowed_origin_tools={"startup_hunt"} is unrelated to the above and
+    unchanged - it's what keeps recent_job_search's own cached rows
     (Adzuna/Bundesagentur/Arbeitnow - general market listings with no
-    startup signal) ever leaking into a startup-focused search."""
+    startup signal) from ever leaking into a startup-focused search.
+
+    Returns already-scored opportunity dicts plus the underlying row ids
+    (for TTL refresh), or ([], []) if the country can't be resolved, in
+    which case the live theirstack fetch's own ProviderError-equivalent
+    handling (settings.theirstack_api_key check) takes over exactly as
+    before.
+    """
     country_code = adzuna_country_code(payload.get("country")) or adzuna_country_code(payload.get("location"))
     if not country_code:
         return [], []
@@ -268,7 +290,6 @@ async def _fetch_theirstack_db_candidates(
         query_tokens=tokenize(str(payload.get("query") or "")),
         posted_within_hours=payload.get("posted_within_hours"),
         limit=max(300, theirstack_limit * 20),
-        allowed_sources={"theirstack"},
         allowed_origin_tools={"startup_hunt"},
     )
 
@@ -452,18 +473,20 @@ async def search_startup_hunt_opportunities(db: AsyncSession, user_id: str, body
         db_scored.extend(global_ats_scored + user_ats_scored)
         db_job_ids.extend(global_ats_row_ids + user_ats_row_ids)
 
-    # DB-first shortfall check — theirstack bucket only (see plan). The other
-    # 6 buckets run exactly as they always have, fully live, every search.
-    # theirstack_enabled/theirstack_limit are no longer real request fields
-    # (removed along with the old per-request provider toggles) - this is
-    # purely an internal signal for engine.py's _bucket_enabled()/
-    # theirstack.py's fetch(), which both check payload FIRST before falling
-    # back to the startup_hunt_theirstack_enabled/_result_limit config
-    # defaults.
+    # DB-first shortfall check driving the theirstack live-call decision (see
+    # plan). Draws on every startup_hunt-origin DB row now, not just
+    # theirstack's own cache - see _fetch_startup_hunt_db_candidates'
+    # docstring for why. The other 6 buckets run exactly as they always
+    # have, fully live, every search. theirstack_enabled/theirstack_limit
+    # are no longer real request fields (removed along with the old
+    # per-request provider toggles) - this is purely an internal signal for
+    # engine.py's _bucket_enabled()/theirstack.py's fetch(), which both
+    # check payload FIRST before falling back to the
+    # startup_hunt_theirstack_enabled/_result_limit config defaults.
     theirstack_db_shortfall = 0
     theirstack_live_limit = 0
     if settings.startup_hunt_theirstack_enabled:
-        theirstack_scored, theirstack_row_ids = await _fetch_theirstack_db_candidates(db, payload, strategy, existing)
+        theirstack_scored, theirstack_row_ids = await _fetch_startup_hunt_db_candidates(db, payload, strategy, existing)
         db_scored.extend(theirstack_scored)
         db_job_ids.extend(theirstack_row_ids)
         theirstack_limit = int(payload.get("theirstack_limit") or settings.startup_hunt_theirstack_result_limit)
