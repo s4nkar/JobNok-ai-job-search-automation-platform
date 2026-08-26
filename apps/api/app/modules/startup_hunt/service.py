@@ -569,7 +569,13 @@ async def search_startup_hunt_opportunities(db: AsyncSession, user_id: str, body
     if db_scored:
         result_limit = int(payload.get("result_limit") or 25)
         combined = _dedupe_opportunities(db_scored + results)
-        combined.sort(key=lambda item: -float(item.get("score_total") or 0))
+        # Same (-score, age, company) tiebreak engine.py's own internal sort
+        # uses (see its line ~573) - without matching it here, this re-sort
+        # dropped the age tiebreak for exactly the case where it matters
+        # most: whenever DB-first candidates got merged in, equal-score ties
+        # silently fell back to list order (db_scored always first, since
+        # it's concatenated first above), not actual recency.
+        combined.sort(key=lambda item: (-float(item.get("score_total") or 0), item.get("rank_age_hours", 999999.0), item.get("company_name", "")))
         results = combined[:result_limit]
         overflow_results = combined[result_limit:] + overflow_results
 
