@@ -328,9 +328,18 @@ export default function RecentJobSearchPage() {
           have. Staying stacked through lg: keeps the column = viewport width
           the whole time those sm: breakpoints are active. */}
       <div className="grid grid-cols-1 lg:grid-cols-[320px_1fr] gap-5 items-start">
+        {/* max-height must clear the layout's own top offset before this
+            form ever becomes "stuck" at lg:top-6 - same fix and reasoning
+            as startup-hunt/page.tsx's identical sidebar (see its comment):
+            the dashboard shell's py-8 (2rem) plus this page's own header
+            block (icon/h1/subtitle row + mb-6, ~4.5rem) push the form's
+            natural pre-scroll position well past what the old
+            calc(100vh-2rem) - sized for the 1.5rem stuck-state gap only -
+            actually left room for, hiding the submit button until the page
+            was scrolled down manually. */}
         <form
           onSubmit={handleSubmit(onSubmit)}
-          className="bg-white rounded-2xl border border-slate-100 shadow-sm lg:sticky lg:top-6 lg:max-h-[calc(100vh-2rem)] lg:flex lg:flex-col overflow-hidden"
+          className="bg-white rounded-2xl border border-slate-100 shadow-sm lg:sticky lg:top-6 lg:max-h-[calc(100vh-8.5rem)] lg:flex lg:flex-col overflow-hidden"
         >
           {/* Mobile/tablet-only collapsible header - filters start closed so
               results are reachable without scrolling past every field first. */}
@@ -349,7 +358,7 @@ export default function RecentJobSearchPage() {
             </span>
           </button>
 
-          <div className={`${filtersOpen ? 'block' : 'hidden'} lg:block lg:flex-1 lg:min-h-0 lg:overflow-y-auto scrollbar-hide lg:scroll-fade-y p-5 lg:pt-5 space-y-5 ${filtersOpen ? 'border-t border-slate-100 lg:border-t-0' : ''}`}>
+          <div className={`${filtersOpen ? 'block' : 'hidden'} lg:block lg:flex-1 lg:min-h-0 lg:overflow-y-auto scrollbar-thin lg:scroll-fade-y p-5 lg:pt-5 space-y-5 ${filtersOpen ? 'border-t border-slate-100 lg:border-t-0' : ''}`}>
             <div className="hidden lg:flex items-center gap-2 pb-1 border-b border-slate-100">
               <SlidersHorizontal className="h-3.5 w-3.5 text-slate-400" />
               <span className="text-xs font-semibold text-slate-500 uppercase tracking-wider">Filters</span>

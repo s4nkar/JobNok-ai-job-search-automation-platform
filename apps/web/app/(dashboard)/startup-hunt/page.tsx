@@ -110,7 +110,7 @@ const DEFAULT_VALUES: FormData = {
   remote_only: 'false',
   english_friendly_only: 'false',
   company_stage: '',
-  strategy_prompt: 'applied ai engineer, mid-level, 3+ years experience, not senior/staff/principal, early-stage, founder-led, english friendly, relocation friendly, modern AI stack (LLMs, RAG, agents, FastAPI, MLOps), fresh hiring momentum, avoid recruiters and large enterprises.',
+  strategy_prompt: '3+ years experience, not senior/staff/principal.',
 }
 
 // Score labels are informational tags, not status — several can appear at
@@ -486,9 +486,22 @@ export default function StartupHuntPage() {
           have. Staying stacked through lg: keeps the column = viewport width
           the whole time those sm: breakpoints are active. */}
       <div className="grid grid-cols-1 lg:grid-cols-[320px_1fr] gap-5 items-start">
+        {/* max-height must clear the layout's own top offset before this
+            form ever becomes "stuck" at lg:top-6, not just the 1.5rem gap
+            it rests at once stuck - `sticky`'s max-height is a fixed cap
+            applied in BOTH states, and pre-scroll (page just loaded, form
+            still in normal flow) it starts well below top-6, pushed down
+            by the dashboard shell's own py-8 (2rem) content padding plus
+            this page's own header block above (icon/h1/subtitle row +
+            mb-6, ~4.5rem) - roughly 6.5-7rem total. Using only the stuck
+            state's 1.5rem here left the form ~5rem taller than the space
+            actually available on initial load, pushing its own submit
+            button off-screen until the page was scrolled down manually.
+            8.5rem leaves a bit of margin above that measured floor; if the
+            header block above grows, this needs to grow with it. */}
         <form
           onSubmit={handleSubmit(onSubmit)}
-          className="bg-white rounded-2xl border border-slate-100 shadow-sm lg:sticky lg:top-6 lg:max-h-[calc(100vh-2rem)] lg:flex lg:flex-col overflow-hidden"
+          className="bg-white rounded-2xl border border-slate-100 shadow-sm lg:sticky lg:top-6 lg:max-h-[calc(100vh-8.5rem)] lg:flex lg:flex-col overflow-hidden"
         >
           {/* Mobile/tablet-only collapsible header - filters start closed so
               results are reachable without scrolling past every field first. */}
@@ -507,7 +520,7 @@ export default function StartupHuntPage() {
             </span>
           </button>
 
-          <div className={`${filtersOpen ? 'block' : 'hidden'} lg:block lg:flex-1 lg:min-h-0 lg:overflow-y-auto scrollbar-hide lg:scroll-fade-y p-5 lg:pt-5 space-y-5 ${filtersOpen ? 'border-t border-slate-100 lg:border-t-0' : ''}`}>
+          <div className={`${filtersOpen ? 'block' : 'hidden'} lg:block lg:flex-1 lg:min-h-0 lg:overflow-y-auto scrollbar-thin lg:scroll-fade-y p-5 lg:pt-5 space-y-5 ${filtersOpen ? 'border-t border-slate-100 lg:border-t-0' : ''}`}>
             <div className="hidden lg:flex items-center gap-2 pb-1 border-b border-slate-100">
               <SlidersHorizontal className="h-3.5 w-3.5 text-slate-400" />
               <span className="text-xs font-semibold text-slate-500 uppercase tracking-wider">Hunt Strategy</span>
@@ -630,7 +643,7 @@ export default function StartupHuntPage() {
               <Label className="text-xs font-medium text-slate-600">Strategy prompt</Label>
               <Textarea
                 rows={4}
-                placeholder="hidden gems, small startups, founder-led teams, low-competition, english-friendly, relocation support"
+                placeholder="3+ years experience, not senior/staff/principal"
                 className="rounded-xl text-sm border-slate-200 focus:border-indigo-300 focus:ring-1 focus:ring-indigo-200 resize-none"
                 {...register('strategy_prompt')}
               />

@@ -61,7 +61,7 @@
 
   .scrollbar-thin {
     scrollbar-width: thin;
-    scrollbar-color: hsl(220 13% 80%) transparent;
+    scrollbar-color: hsl(220 13% 90%) transparent;
   }
   .scrollbar-thin::-webkit-scrollbar {
     width: 4px;
@@ -70,7 +70,7 @@
     background: transparent;
   }
   .scrollbar-thin::-webkit-scrollbar-thumb {
-    background-color: hsl(220 13% 80%);
+    background-color: hsl(220 13% 90%);
     border-radius: 2px;
   }
 
