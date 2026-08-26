@@ -196,6 +196,22 @@ async def circuit_is_open(scope: str, provider_name: str) -> bool:
         return False
 
 
+async def get_circuit_state(scope: str, provider_name: str) -> dict:
+    """Read-only snapshot of a provider's circuit breaker state, for
+    observability display (see app/modules/admin/service.py) - never used in
+    the hot request path, that's circuit_is_open above. Fails open to a
+    healthy-looking default on a Redis error, same as every other function
+    in this file - a broken read here must never make a fine provider look
+    tripped on a dashboard."""
+    try:
+        is_open = bool(await get_cached(_circuit_open_key(scope, provider_name)))
+        fail_count_raw = await get_cached(_circuit_fail_key(scope, provider_name))
+        recent_failures = int(fail_count_raw) if fail_count_raw else 0
+        return {"provider": provider_name, "open": is_open, "recent_failures": recent_failures}
+    except Exception:
+        return {"provider": provider_name, "open": False, "recent_failures": 0}
+
+
 async def record_provider_result(scope: str, provider_name: str, *, ok: bool) -> None:
     """Feed a live fetch's outcome into the provider's circuit breaker. A
     success resets the failure count immediately - one good response is

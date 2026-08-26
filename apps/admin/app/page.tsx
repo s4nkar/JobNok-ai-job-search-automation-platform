@@ -5,7 +5,14 @@ import { Card, CardContent, CardHeader, CardTitle, Badge } from '@jobnok/ui'
 import { apiGet } from '@/lib/api'
 import { ApiErrorState } from '@/components/ApiErrorState'
 import { formatRelativeTime } from '@/lib/format'
-import type { CrawlerOverview, CompanyStatus } from '@/lib/types'
+import type { CrawlerOverview, CompanyStatus, ProviderHealth } from '@/lib/types'
+
+const PROVIDER_LABELS: Record<string, string> = {
+  ashby: 'Ashby',
+  greenhouse: 'Greenhouse',
+  lever: 'Lever',
+  theirstack_search: 'TheirStack',
+}
 
 const STATUS_LABELS: Record<CompanyStatus, string> = {
   discovered: 'Discovered',
@@ -79,6 +86,30 @@ export default function OverviewPage() {
               <div key={status} className="flex items-center gap-2 rounded-lg border px-3 py-2">
                 <Badge variant={STATUS_VARIANT[status]}>{STATUS_LABELS[status]}</Badge>
                 <span className="text-sm font-medium">{data.status_counts[status] ?? 0}</span>
+              </div>
+            ))}
+          </div>
+        </CardContent>
+      </Card>
+
+      <Card>
+        <CardHeader>
+          <CardTitle className="text-base">Provider health</CardTitle>
+        </CardHeader>
+        <CardContent>
+          <div className="flex flex-wrap gap-3">
+            {data.provider_health.map((provider: ProviderHealth) => (
+              <div key={provider.provider} className="flex items-center gap-2 rounded-lg border px-3 py-2">
+                <Badge variant={provider.open ? 'destructive' : 'success'}>
+                  {PROVIDER_LABELS[provider.provider] || provider.provider}
+                </Badge>
+                <span className="text-sm text-muted-foreground">
+                  {provider.open
+                    ? `Circuit open · ${provider.recent_failures} recent failures`
+                    : provider.recent_failures > 0
+                      ? `${provider.recent_failures} recent failure${provider.recent_failures === 1 ? '' : 's'}`
+                      : 'Healthy'}
+                </span>
               </div>
             ))}
           </div>

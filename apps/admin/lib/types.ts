@@ -10,6 +10,12 @@ export type CompanyStatus =
   | 'failed'
   | 'disabled'
 
+export interface ProviderHealth {
+  provider: string
+  open: boolean
+  recent_failures: number
+}
+
 export interface CrawlerOverview {
   status_counts: Partial<Record<CompanyStatus, number>>
   total_companies: number
@@ -18,6 +24,7 @@ export interface CrawlerOverview {
   total_crawler_jobs: number
   last_discovered_at: string | null
   last_synced_at: string | null
+  provider_health: ProviderHealth[]
   discovery_enabled: boolean
   discovery_batch_size: number
   sync_batch_size: number

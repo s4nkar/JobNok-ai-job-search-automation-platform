@@ -13,11 +13,20 @@ from sqlalchemy import func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import settings
+from app.services.cache import get_circuit_state
 from app.shared.utils import row_to_dict
 from app.modules.job_search.models import Job
 from app.modules.startup_hunt.models import CompanyRegistry
 
 MAX_PAGE_SIZE = 200
+
+# The provider names startup_hunt's circuit breaker actually tracks (see
+# engine.py::_fetch_source_safe's provider_name=source.type and
+# ingestion/job_sync.py's company.ats_provider) - google_web/apify/other
+# source types exist but aren't part of the crawler's own resolve/sync path
+# this dashboard is about, so left out rather than showing health for
+# buckets nobody here is watching.
+_TRACKED_PROVIDERS = ["ashby", "greenhouse", "lever", "theirstack_search"]
 DEFAULT_PAGE_SIZE = 50
 
 # Mirrors CompanyRegistry's own CHECK constraint (models.py) - kept here too
@@ -57,6 +66,13 @@ async def get_crawler_overview(db: AsyncSession) -> dict:
     last_discovered_at = await db.scalar(select(func.max(CompanyRegistry.last_discovered_at)))
     last_synced_at = await db.scalar(select(func.max(CompanyRegistry.last_synced_at)))
 
+    # Surfaces state the circuit breaker (app/services/cache.py) already
+    # tracks in Redis for its own decisions but that was otherwise invisible -
+    # this is what actually distinguishes "one company is broken" from "the
+    # whole provider is down" (PRD section 42), without standing up a real
+    # metrics/time-series backend for it.
+    provider_health = [await get_circuit_state("startup_hunt", name) for name in _TRACKED_PROVIDERS]
+
     return {
         "status_counts": status_counts,
         "total_companies": total_companies,
@@ -65,6 +81,7 @@ async def get_crawler_overview(db: AsyncSession) -> dict:
         "total_crawler_jobs": total_crawler_jobs,
         "last_discovered_at": last_discovered_at,
         "last_synced_at": last_synced_at,
+        "provider_health": provider_health,
         # Config visibility, not just DB state - "why is nothing being
         # discovered" is answered right here instead of requiring someone to
         # go check .env separately.
