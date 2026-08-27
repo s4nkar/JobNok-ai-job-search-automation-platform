@@ -22,44 +22,37 @@
 
 ```mermaid
 flowchart TD
-    classDef client fill:#e1f5fe,stroke:#0288d1,stroke-width:2px,color:#01579b,rx:8px,ry:8px;
-    classDef gateway fill:#fff3e0,stroke:#f57c00,stroke-width:2px,color:#e65100,rx:8px,ry:8px;
-    classDef worker fill:#e8f5e9,stroke:#388e3c,stroke-width:2px,color:#1b5e20,rx:8px,ry:8px;
-    classDef db fill:#f3e5f5,stroke:#7b1fa2,stroke-width:2px,color:#4a148c,rx:8px,ry:8px;
-    classDef external fill:#fce4ec,stroke:#c2185b,stroke-width:2px,color:#880e4f,rx:8px,ry:8px;
-    classDef security fill:#ffe0b2,stroke:#f57c00,stroke-width:2px,color:#e65100,rx:8px,ry:8px;
-
-    User[Web Client / React UI] :::client
-    APIRouter[FastAPI Router /api/v1/startup-hunt] :::gateway
+    User["Web Client / React UI"]
+    APIRouter["FastAPI Router (/api/v1/startup-hunt)"]
 
     subgraph DiscoveryLayer ["1. Startup Discovery"]
-        StartupMap["StartupMap Discovery Engine"] :::external
-        GoogleWeb["Google Web / Site Search"] :::external
-        TheirStack["TheirStack Technology Signals"] :::external
+        StartupMap["StartupMap Discovery Engine"]
+        GoogleWeb["Google Web / Site Search"]
+        TheirStack["TheirStack Technology Signals"]
     end
 
     subgraph WorkerPipeline ["2. Distributed Worker Pipeline"]
-        DiscoveryWorker["Discovery Worker\n(Ingests Seed Domains)"] :::worker
-        ResolutionWorker["Resolution Worker\n(Maps ATS & Careers URLs)"] :::worker
-        SyncWorker["Sync Worker\n(Polls ATS Boards & Ingests)"] :::worker
-        BackfillWorker["Backfill Worker\n(Enriches Contact Data)"] :::worker
+        DiscoveryWorker["Discovery Worker (Ingests Seed Domains)"]
+        ResolutionWorker["Resolution Worker (Maps ATS & Careers URLs)"]
+        SyncWorker["Sync Worker (Polls ATS Boards & Ingests)"]
+        BackfillWorker["Backfill Worker (Enriches Contact Data)"]
     end
 
     subgraph SecurityGuard ["3. SSRF & Ingestion Guard"]
-        SSRFGuard["SSRF Guard\n(IP Pinning & Subnet Block)"] :::security
-        GenericCrawler["Generic HTML Crawler\n(Cheerio/HTML Parser)"] :::security
+        SSRFGuard["SSRF Guard (IP Pinning & Subnet Block)"]
+        GenericCrawler["Generic HTML Crawler (DOM Parser)"]
     end
 
     subgraph Connectors ["4. Proprietary ATS Connectors"]
-        Greenhouse["Greenhouse API / Board"] :::external
-        Lever["Lever API / Board"] :::external
-        Ashby["Ashby HQ API"] :::external
+        Greenhouse["Greenhouse API / Board"]
+        Lever["Lever API / Board"]
+        Ashby["Ashby HQ API"]
     end
 
     subgraph Persistence ["5. Storage Layer"]
-        CompanyReg["CompanyRegistry Table\n(Global Startup Index)"] :::db
-        UserSaved["StartupHuntCompany / Opportunities\n(Per-user Snapshot)"] :::db
-        JobsCache["Shared Jobs Table\n(Cached Job Listings)"] :::db
+        CompanyReg["CompanyRegistry Table (Global Index)"]
+        UserSaved["StartupHuntCompany / Opportunities"]
+        JobsCache["Shared Jobs Table (Cached Listings)"]
     end
 
     User --> APIRouter
@@ -77,6 +70,20 @@ flowchart TD
 
     SyncWorker --> JobsCache
     BackfillWorker --> UserSaved
+
+    classDef client fill:#e1f5fe,stroke:#0288d1,stroke-width:2px,color:#01579b;
+    classDef gateway fill:#fff3e0,stroke:#f57c00,stroke-width:2px,color:#e65100;
+    classDef worker fill:#e8f5e9,stroke:#388e3c,stroke-width:2px,color:#1b5e20;
+    classDef db fill:#f3e5f5,stroke:#7b1fa2,stroke-width:2px,color:#4a148c;
+    classDef external fill:#fce4ec,stroke:#c2185b,stroke-width:2px,color:#880e4f;
+    classDef security fill:#ffe0b2,stroke:#f57c00,stroke-width:2px,color:#e65100;
+
+    class User client;
+    class APIRouter gateway;
+    class DiscoveryWorker,ResolutionWorker,SyncWorker,BackfillWorker worker;
+    class CompanyReg,UserSaved,JobsCache db;
+    class StartupMap,GoogleWeb,TheirStack,Greenhouse,Lever,Ashby external;
+    class SSRFGuard,GenericCrawler security;
 ```
 
 ---

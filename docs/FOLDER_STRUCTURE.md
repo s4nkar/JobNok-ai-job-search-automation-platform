@@ -1,147 +1,62 @@
-jobnok/
+# 📁 Repository & Monorepo Structure
+
+```
+quickjob-ai-job-search-automation-platform/
 │
 ├── apps/
-│   │
-│   ├── web/                           # Next.js frontend
-│   │   ├── app/
-│   │   ├── components/
-│   │   ├── lib/
-│   │   ├── public/
+│   ├── web/                          # Next.js 14 Web Frontend Client
+│   │   ├── app/                      # Next.js App Router ((dashboard), (auth), etc.)
+│   │   ├── components/               # React UI components & shadcn/ui Design System
+│   │   ├── lib/                      # API client, state management & custom hooks
 │   │   ├── package.json
 │   │   └── Dockerfile
 │   │
-│   └── api/                           # FastAPI Modular Monolith
-│       │
-│       ├── Dockerfile
-│       ├── pyproject.toml
-│       ├── alembic.ini
-│       ├── .env.example
-│       │
-│       ├── alembic/
-│       │   ├── env.py
-│       │   └── versions/
-│       │
-│       ├── tests/
-│       │
-│       └── app/
-│           │
-│           ├── main.py
-│           │
-│           ├── core/
-│           │   ├── config.py
-│           │   ├── database.py
-│           │   ├── security.py
-│           │   ├── middleware.py
-│           │   ├── logging.py
-│           │   └── exceptions.py
-│           │
-│           ├── shared/
-│           │   ├── models.py
-│           │   ├── pagination.py
-│           │   ├── utils.py
-│           │   └── constants.py
-│           │
-│           ├── modules/
-│           │
-│           │   ├── auth/
-│           │   │   ├── routes.py
-│           │   │   ├── service.py
-│           │   │   ├── schemas.py
-│           │   │   └── dependencies.py
-│           │   │
-│           │   ├── users/
-│           │   │   ├── models.py
-│           │   │   ├── routes.py
-│           │   │   ├── schemas.py
-│           │   │   └── service.py
-│           │   │
-│           │   ├── resumes/
-│           │   │   ├── models.py
-│           │   │   ├── routes.py
-│           │   │   ├── schemas.py
-│           │   │   ├── parser.py
-│           │   │   └── service.py
-│           │   │
-│           │   ├── jobs/
-│           │   │   ├── models.py
-│           │   │   ├── routes.py
-│           │   │   ├── schemas.py
-│           │   │   ├── service.py
-│           │   │   └── filters.py
-│           │   │
-│           │   ├── applications/
-│           │   │   ├── models.py
-│           │   │   ├── routes.py
-│           │   │   ├── schemas.py
-│           │   │   └── service.py
-│           │   │
-│           │   ├── companies/
-│           │   │
-│           │   ├── dashboard/
-│           │   │
-│           │   ├── automation/
-│           │   │   ├── routes.py
-│           │   │   ├── service.py
-│           │   │   └── scheduler.py
-│           │   │
-│           │   └── billing/
-│           │
-│           ├── ai/
-│           │
-│           │   ├── llm/
-│           │   │   ├── prompts/
-│           │   │   ├── provider.py
-│           │   │   ├── ollama.py
-│           │   │   └── openai.py
-│           │   │
-│           │   ├── embeddings/
-│           │   │
-│           │   ├── ranking/
-│           │   │
-│           │   ├── matching/
-│           │   │
-│           │   ├── resume_generation/
-│           │   │
-│           │   └── cover_letter/
-│           │
-│           ├── integrations/
-│           │
-│           │   ├── linkedin/
-│           │   ├── greenhouse/
-│           │   ├── lever/
-│           │   ├── workday/
-│           │   ├── ashby/
-│           │   └── indeed/
-│           │
-│           ├── workers/
-│           │
-│           │   ├── scheduler.py
-│           │   ├── scraping.py
-│           │   ├── autofill.py
-│           │   ├── embeddings.py
-│           │   └── notifications.py
-│           │
-│           └── services/
-│               ├── email.py
-│               ├── storage.py
-│               ├── cache.py
-│               └── browser.py
+│   ├── api/                          # FastAPI Backend (Modular Monolith)
+│   │   ├── alembic/                  # Database migration scripts & versions
+│   │   ├── app/
+│   │   │   ├── main.py               # Application entrypoint & composition root
+│   │   │   ├── core/                 # Config, security (Clerk JWKS), database, rate-limiting
+│   │   │   ├── shared/               # Base models, UserScopedRepository, model_registry
+│   │   │   ├── ai/                   # LLM providers (Groq/OpenRouter), Jina/Cohere embeddings
+│   │   │   ├── services/             # Cache, storage (Cloudinary), email (Resend)
+│   │   │   ├── workers/              # ARQ worker & Celery task runners
+│   │   │   └── modules/              # Feature modules
+│   │   │       ├── auth/             # Clerk webhook handler (/api/auth/webhooks/clerk)
+│   │   │       ├── job_search/       # Recent Job Search module (Adzuna/Bundesagentur/Arbeitnow)
+│   │   │       ├── startup_hunt/     # Startup Hunt discovery & ATS crawler module
+│   │   │       ├── startup_scout/    # Startup Scout AI intelligence module
+│   │   │       ├── tracker/          # Application Follow-Up Tracker module
+│   │   │       ├── bulk_email/       # Bulk email campaign runner module
+│   │   │       ├── profile/          # User CV profile & avatar photo upload
+│   │   │       ├── templates/        # Message templates module
+│   │   │       ├── cover_letter/     # AI Cover Letter generator
+│   │   │       ├── interview_prep/   # AI Interview Prep generator
+│   │   │       ├── salary/           # AI Salary Insights generator
+│   │   │       ├── resume_tailor/    # AI Resume Tailoring engine
+│   │   │       ├── linkedin_fill/    # RapidAPI / PhantomBuster scraper
+│   │   │       ├── usage/            # Feature usage analytics event tracking
+│   │   │       └── admin/            # Admin platform metrics
+│   │   ├── pyproject.toml
+│   │   ├── alembic.ini
+│   │   └── Dockerfile
+│   │
+│   ├── admin/                        # Next.js Admin App
+│   └── marketing/                    # Marketing Site App
 │
-├── packages/
+├── docs/                             # Production Technical Documentation Suite
+│   ├── architecture.md               # Master Platform System Architecture (HLD)
+│   ├── database_schema.md            # Database Architecture & Schema Master Reference
+│   ├── api_workflows.md              # API Architecture & Routing Reference
+│   ├── deployment.md                 # Deployment & Operations Guide
+│   ├── FOLDER_STRUCTURE.md           # Repository Structure Map
+│   │
+│   ├── recent_job_search/            # Recent Job Search Dedicated Docs
+│   ├── startup_hunt/                 # Startup Hunt Dedicated Docs
+│   └── startup_scout/                # Startup Scout Dedicated Docs
 │
-│   ├── ui/
-│
-│   └── api-client/
-│
-├── docker/
-│   ├── nginx/
-│   └── compose/
-│
-├── docs/
-│
-├── scripts/
-│
-├── docker-compose.yml
-├── docker-compose.dev.yml
-├── README.md
-└── .env.example
+├── docker/                           # Nginx configuration
+├── docker-compose.yml                # Base Docker Compose orchestration
+├── docker-compose.dev.yml            # Development hot reload overrides
+├── pnpm-workspace.yaml               # pnpm monorepo workspace configuration
+└── README.md
+```
