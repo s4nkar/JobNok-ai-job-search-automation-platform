@@ -22,36 +22,29 @@
 
 ```mermaid
 flowchart TD
-    classDef client fill:#e1f5fe,stroke:#0288d1,stroke-width:2px,color:#01579b,rx:8px,ry:8px;
-    classDef gateway fill:#fff3e0,stroke:#f57c00,stroke-width:2px,color:#e65100,rx:8px,ry:8px;
-    classDef engine fill:#e8f5e9,stroke:#388e3c,stroke-width:2px,color:#1b5e20,rx:8px,ry:8px;
-    classDef db fill:#f3e5f5,stroke:#7b1fa2,stroke-width:2px,color:#4a148c,rx:8px,ry:8px;
-    classDef ai fill:#fffde7,stroke:#fbc02d,stroke-width:2px,color:#f57f17,rx:8px,ry:8px;
-    classDef ext fill:#fce4ec,stroke:#c2185b,stroke-width:2px,color:#880e4f,rx:8px,ry:8px;
-
-    User[Web Client / React UI] :::client
-    Router[FastAPI Router /api/v1/startup-scout] :::gateway
+    User["Web Client / React UI"]
+    Router["FastAPI Router (/api/v1/startup-scout)"]
 
     subgraph DiscoveryEngine ["Phase A: Company Discovery Engine"]
-        DDGScraper["DuckDuckGo HTML Engine\n(html.duckduckgo.com/html)"] :::ext
-        DirectoryFilter["Curated Directory Selector\n(Location + Funding Stage)"] :::engine
-        DomainBlacklist["Domain & News Filter\n(_NEWS_DOMAINS & Skip Rules)"] :::engine
+        DDGScraper["DuckDuckGo HTML Engine (html.duckduckgo.com)"]
+        DirectoryFilter["Curated Directory Selector (Location + Stage)"]
+        DomainBlacklist["Domain & News Filter (_NEWS_DOMAINS)"]
     end
 
     subgraph ContactEngine ["Phase B: Contact Enrichment"]
-        RegexHarvester["Snippet & Title Contact Extractor"] :::engine
-        ApolloFallback["Apollo People Search API\n(api.apollo.io/v1/mixed_people/search)"] :::ext
+        RegexHarvester["Snippet & Title Contact Extractor"]
+        ApolloFallback["Apollo People Search API (api.apollo.io)"]
     end
 
     subgraph IntelligenceLayer ["Phase C: AI Scorecard & Pitch"]
-        LLMProvider["LLM Engine / Provider\n(Gemini / OpenAI structured prompt)"] :::ai
-        ScorecardGenerator["Analytical Scorecard Generator"] :::ai
+        LLMProvider["LLM Engine / Provider (Gemini / OpenAI)"]
+        ScorecardGenerator["Analytical Scorecard Generator"]
     end
 
     subgraph Storage ["Storage & Cache Layer"]
-        DBCompanies["startup_scout_companies Table"] :::db
-        DBContacts["startup_scout_contacts Table"] :::db
-        RedisCache["Redis Result Cache\n(TTL: 24 Hours)"] :::db
+        DBCompanies["startup_scout_companies Table"]
+        DBContacts["startup_scout_contacts Table"]
+        RedisCache["Redis Result Cache (TTL 24h)"]
     end
 
     User --> Router
@@ -69,6 +62,20 @@ flowchart TD
     ScorecardGenerator --> DBContacts
     ScorecardGenerator --> RedisCache
     RedisCache --> Router
+
+    classDef client fill:#e1f5fe,stroke:#0288d1,stroke-width:2px,color:#01579b;
+    classDef gateway fill:#fff3e0,stroke:#f57c00,stroke-width:2px,color:#e65100;
+    classDef engine fill:#e8f5e9,stroke:#388e3c,stroke-width:2px,color:#1b5e20;
+    classDef db fill:#f3e5f5,stroke:#7b1fa2,stroke-width:2px,color:#4a148c;
+    classDef ai fill:#fffde7,stroke:#fbc02d,stroke-width:2px,color:#f57f17;
+    classDef ext fill:#fce4ec,stroke:#c2185b,stroke-width:2px,color:#880e4f;
+
+    class User client;
+    class Router gateway;
+    class DirectoryFilter,DomainBlacklist,RegexHarvester engine;
+    class DBCompanies,DBContacts,RedisCache db;
+    class LLMProvider,ScorecardGenerator ai;
+    class DDGScraper,ApolloFallback ext;
 ```
 
 ---

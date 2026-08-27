@@ -1,73 +1,136 @@
-# 🏗️ System Architecture
+# 🏗️ Platform System Architecture — Master Reference (HLD)
 
-JobNok is built on a modern, distributed architecture designed for high performance, scalability, and cost efficiency (currently free-tier optimized). The system strictly separates the user interface from business logic, utilizing a robust stack of Next.js, FastAPI, Neon, Clerk (Auth), Supabase (Storage), Redis, and ARQ.
+**Document Version:** 2.0.0  
+**Status:** Production Baseline  
+**Target Audience:** Staff Engineers, Lead Architects, Infrastructure & Security Engineers  
 
-## High-Level Architecture Diagram
+---
+
+## 1. High-Level System Architecture & Topography
+
+The platform is engineered as a high-throughput, modular monolith backend paired with a Next.js 14 single-page web client. It orchestrates real-time multi-provider job search, automated ATS startup crawling, executive contact discovery, AI content generation, and bulk email campaign delivery.
 
 ```mermaid
-graph TD
-    Client[Browser / Client] --> |HTTPS| Vercel[Vercel: Next.js Frontend]
-    Vercel --> |API Calls via Proxy /api/*| Nginx[Nginx Proxy]
-    Nginx --> |HTTP| FastAPI[Railway: FastAPI Backend]
-    FastAPI --> |SQLAlchemy async ORM| Neon[(Neon-hosted Postgres)]
-    FastAPI --> |Cache & Rate Limits| Redis[(Upstash Redis)]
-    FastAPI --> |Task Queue| Redis
-    Redis --> |Consume| ARQ[ARQ Worker]
-    ARQ --> |Send Emails| Resend[Resend API]
-    FastAPI --> |LLM Prompts| AI[Anthropic / HuggingFace API]
-    FastAPI --> |Scraping Requests| RapidAPI[RapidAPI / PhantomBuster]
+flowchart TD
+    Client["Browser / Next.js Web App (apps/web)"]
+    NextProxy["Next.js API Proxy (/api/*)"]
+    FastAPI["FastAPI Backend App (apps/api/app/main.py)"]
+
+    subgraph Identity ["1. Authentication & Identity"]
+        ClerkSDK["Clerk Auth Provider"]
+        ClerkJWKS["Clerk JWKS Endpoint (RS256 Local Validation)"]
+    end
+
+    subgraph DataPersistence ["2. Persistence & Cache Topology"]
+        PostgresDB[(PostgreSQL / Supabase - SQLAlchemy Async ORM)]
+        UpstashRedis[(Upstash Redis REST - Rate Limits & Single-Flight Locks)]
+        TCPRedis[(Redis TCP Instance - ARQ Queue Broker)]
+    end
+
+    subgraph AsyncExecution ["3. Worker Subsystems"]
+        ARQWorker["ARQ Worker Process (app.workers.arq_worker)"]
+        CeleryWorker["Startup Hunt Crawling Pipeline (workers/)"]
+    end
+
+    subgraph Integrations ["4. AI & Third-Party Service Providers"]
+        GroqAI["Groq AI (Primary: gpt-oss-20b, Light: allam-2-7b)"]
+        OpenRouterAI["OpenRouter AI (Fallback: nemotron-3-super-120b)"]
+        JinaEmbeddings["Jina AI Embeddings (Primary: jina-embeddings-v3)"]
+        CohereEmbeddings["Cohere Embeddings (Fallback: embed-english-v3)"]
+        RapidAPI["RapidAPI LinkedIn Scraper (linkedin-api8.p.rapidapi.com)"]
+        PhantomBuster["PhantomBuster Scraper (Fallback)"]
+        Cloudinary["Cloudinary (CV Photo Uploads)"]
+        ResendEmail["Resend API (Email Delivery)"]
+        ApolloAPI["Apollo People Search API (Contact Verification)"]
+    end
+
+    Client -->|HTTPS + Supabase/Clerk JWT| NextProxy
+    NextProxy -->|Forward /api/*| FastAPI
+    ClerkSDK -.->|Issue Session JWT| Client
+    FastAPI -->|Local RS256 Verification| ClerkJWKS
+
+    FastAPI -->|SQLAlchemy 2.0 Async Session| PostgresDB
+    FastAPI -->|Rate Limits & Single-Flight Locks| UpstashRedis
+    FastAPI -->|Enqueue Async Jobs| TCPRedis
+
+    TCPRedis -->|Dequeue Jobs| ARQWorker
+    TCPRedis -->|Dequeue Crawls| CeleryWorker
+
+    ARQWorker -->|Bulk Email Send| ResendEmail
+    FastAPI -->|CV Photo Upload| Cloudinary
+    FastAPI -->|LinkedIn Profile Scrape| RapidAPI
+    RapidAPI -.->|Scrape Fallback| PhantomBuster
+
+    FastAPI -->|Structured AI Generation| GroqAI
+    GroqAI -.->|Groq Timeout/5xx Fallback| OpenRouterAI
+
+    FastAPI -->|Resume/JD Match Embeddings| JinaEmbeddings
+    JinaEmbeddings -.->|Jina Fallback| CohereEmbeddings
+
+    FastAPI -->|Contact Discovery| ApolloAPI
+
+    classDef client fill:#e1f5fe,stroke:#0288d1,stroke-width:2px,color:#01579b;
+    classDef gateway fill:#fff3e0,stroke:#f57c00,stroke-width:2px,color:#e65100;
+    classDef backend fill:#e8f5e9,stroke:#388e3c,stroke-width:2px,color:#1b5e20;
+    classDef db fill:#f3e5f5,stroke:#7b1fa2,stroke-width:2px,color:#4a148c;
+    classDef worker fill:#fffde7,stroke:#fbc02d,stroke-width:2px,color:#f57f17;
+    classDef external fill:#fce4ec,stroke:#c2185b,stroke-width:2px,color:#880e4f;
+
+    class Client,ClerkSDK,ClerkJWKS client;
+    class NextProxy gateway;
+    class FastAPI backend;
+    class PostgresDB,UpstashRedis,TCPRedis db;
+    class ARQWorker,CeleryWorker worker;
+    class GroqAI,OpenRouterAI,JinaEmbeddings,CohereEmbeddings,RapidAPI,PhantomBuster,Cloudinary,ResendEmail,ApolloAPI external;
 ```
 
-## Core Components
+---
 
-### 1. Frontend (Next.js 14)
-- **Role:** Pure User Interface. Handles rendering, state management, and user interactions.
-- **Responsibilities:**
-  - Client-side routing.
-  - Clerk Auth integration (JWTs, OAuth).
-  - Proxying API requests (`/api/*` routes) to the API to avoid CORS issues and obscure backend URLs.
-- **Tech:** React, Tailwind CSS, shadcn/ui, Zustand, React Hook Form + Zod.
-- **Deployment:** Vercel.
+## 2. Core Subsystem Architecture
 
-### 2. Backend (FastAPI, modular monolith)
-- **Role:** Central business logic hub. All heavy computations and external integrations happen here.
-- **Structure:** `apps/api/app/` — one module per feature under `app/modules/<feature>/` (`routes.py`, `service.py`, `schemas.py`, `models.py`), plus shared `core/`, `shared/`, `ai/`, `integrations/`, `services/`, `workers/`.
-- **Responsibilities:**
-  - Handling business workflows (e.g., resume tailoring, cover letter generation).
-  - Interacting with AI Providers (Anthropic, HuggingFace).
-  - Executing scraping logic (LinkedIn profiles via RapidAPI).
-  - Enforcing server-side rate limits using Redis.
-  - Data access via SQLAlchemy async ORM + Alembic migrations (not a Supabase query client).
-- **Tech:** Python 3.12, FastAPI, Pydantic (validation), SQLAlchemy + Alembic.
-- **Deployment:** Railway.
+### 2.1 Web Frontend (`apps/web`)
+- **Framework**: Next.js 14 App Router with React Server Components.
+- **Client Validation & UI**: React Hook Form with Zod schemas, styled via Tailwind CSS & shadcn/ui.
+- **API Proxy**: Next.js server rewrites route `/api/*` requests to backend instance (`http://localhost:8000` or production API URL), securing backend origin URLs.
 
-### 3. Proxy (Nginx)
-- **Role:** Reverse Proxy.
-- **Responsibilities:** In Docker/production setups, Nginx is used to safely route `/api` traffic directly to the FastAPI container, providing an additional layer of security and load balancing capabilities.
+### 2.2 Modular Monolith Backend (`apps/api`)
+- **Framework**: FastAPI (Python 3.12) running on Uvicorn.
+- **Composition Root**: `apps/api/app/main.py` registers all 16 feature module routers (`job_search`, `startup_hunt`, `startup_scout`, `tracker`, `bulk_email`, `templates`, `profile`, `auth`, `usage`, `admin`, `cover_letter`, `interview_prep`, `salary`, `resume_tailor`, `linkedin_fill`).
+- **Data Access Pattern**: SQLAlchemy 2.0 Async Session (`asyncpg` driver). Tenant isolation enforced at the service layer by `UserScopedRepository` (`app/shared/repository.py`), requiring an explicit `user_id` filter on every query.
 
-### 4. Database (Neon) & Auth (Clerk)
-- **Role:** Neon hosts Postgres; Clerk is the authentication provider (JWT/OAuth) — it is not the database host. A Clerk webhook (`app/modules/auth/routes.py`) keeps the `profiles` table's `clerk_user_id` mapping in sync with Clerk-side identity changes.
-- **Responsibilities:**
-  - Managing user sessions via JWT (verified in `app/core/security.py` against Clerk's JWKS — pure crypto/claims verification, no Clerk SDK dependency on the backend).
-  - Storing user data, templates, job applications, and email campaigns, accessed via SQLAlchemy async ORM against Neon.
-  - Enforcing **user_id scoping at the application layer**: every SQLAlchemy query goes through `UserScopedRepository` (`app/shared/repository.py`), which requires an explicit `user_id` filter. There is no Row Level Security, no PostgREST, and no `authenticated`/`anon`/`service_role` Postgres roles — the app connects with a single ordinary role, so app-level filtering is the sole enforcement mechanism, not a backstop alongside anything else.
+### 2.3 AI & Embedding Multi-Provider Fallback Architecture
+- **Primary AI Provider**: **Groq** (`groq_model="openai/gpt-oss-20b"`, `groq_light_model="allam-2-7b"` for prompt extraction).
+- **Fallback AI Provider**: **OpenRouter** (`openrouter_model="nvidia/nemotron-3-super-120b-a12b:free"`, triggered on Groq rate limits, 5xx errors, or timeouts).
+- **Embedding Layer**: **Jina AI** (`jina-embeddings-v3`) with fallback to **Cohere** (`embed-english-v3.0`) for semantic resume/JD scoring.
 
-### 5. Cache & Queues (Redis via Upstash)
-- **Role:** High-speed in-memory datastore.
-- **Responsibilities:**
-  - **Rate Limiting:** Enforcing per-user limits on tool usage (sliding window, reset midnight UTC).
-  - **ARQ Broker:** Managing background task queues for asynchronous operations like bulk email sending.
+### 2.4 Caching, Concurrency & Rate Limiting
+- **Dual Redis Infrastructure**:
+  1. **Upstash Redis REST**: Enforces sliding/fixed window per-user daily rate limits (reset at 00:00 UTC), burst protection (10s window), and Redlock single-flight cache locks (`acquire_lock()`).
+  2. **TCP Redis**: Acts as the message broker for background task execution (ARQ).
+- **Fail-Open Policy**: If Redis is unreachable, rate-limit checks fail open to prevent application outages.
 
-### 6. Background Workers (ARQ)
-- **Role:** Asynchronous task processing.
-- **Responsibilities:** Handling long-running or batch tasks (e.g., sending bulk emails via Resend, rate-limited by a Redis token bucket) so that the FastAPI main thread is never blocked. Runs as plain `async def` tasks sharing the same async SQLAlchemy session pattern as the API — no separate sync DB path.
+---
 
-## Security Principles
+## 3. Dedicated Tool Subsystem Architecture
 
-- **Zero Hardcoding:** All configurations, model names, and keys are injected via environment variables.
-- **Strict Validation:** Inputs are validated on the client (Zod) and re-validated on the server (Pydantic).
-- **Secure Data Access:** Every backend endpoint requires a valid JWT. The FastAPI service layer's explicit `user_id` filtering (via `UserScopedRepository`) is what enforces that users can only read and mutate their own rows — there is no Row Level Security layered underneath it; this is the sole enforcement mechanism.
-- **Fail Gracefully:**
-  - If a scraper fails, the system falls back to manual entry or cached data.
-  - If an AI provider timeouts, automatic retries are triggered.
-  - If Redis goes down, the rate limiter fails open (allows requests) rather than crashing the system.
+Specific feature tools maintain dedicated production documentation packages in their `docs/` subdirectories:
+
+1. 📂 [Recent Job Search Architecture](file:///d:/Projects/Vibe%20Code/quickjob-ai-job-search-automation-platform/docs/recent_job_search/architecture_hld.md)
+   - Real-time job search across Adzuna, Bundesagentur für Arbeit, and Arbeitnow bonus pipeline.
+   - Word-boundary title relevance scoring, strict country isolation, and fingerprint deduplication.
+
+2. 📂 [Startup Hunt Architecture](file:///d:/Projects/Vibe%20Code/quickjob-ai-job-search-automation-platform/docs/startup_hunt/architecture_hld.md)
+   - Multi-ATS job board crawler (Greenhouse, Lever, Ashby, Personio, Workable).
+   - SSRF protection layer (`ssrf_guard.py`), DNS pinning, and async background workers (`discovery_worker`, `resolution_worker`, `sync_worker`).
+
+3. 📂 [Startup Scout Architecture](file:///d:/Projects/Vibe%20Code/quickjob-ai-job-search-automation-platform/docs/startup_scout/architecture_hld.md)
+   - AI startup intelligence engine querying DuckDuckGo HTML endpoints.
+   - Domain noise blacklist (`_NEWS_DOMAINS`) and Apollo API executive contact discovery.
+
+---
+
+## 4. Production Hardening & Operational Safeguards
+
+1. **Alembic Single Authority**: All schema DDL changes strictly flow through Alembic migrations (`apps/api/alembic/versions/`).
+2. **SSRF Guarding**: All third-party URL fetching passes through `SafeHTTPClient`, blocking private IP ranges (`10.0.0.0/8`, `172.16.0.0/12`, `192.168.0.0/16`) and metadata endpoints (`169.254.169.254`).
+3. **Database Triggers**: Automatic `updated_at` column timestamp management via Postgres `set_updated_at()` trigger function.

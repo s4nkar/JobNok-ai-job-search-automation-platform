@@ -20,41 +20,31 @@
 
 ## 2. System Topography & Architecture Diagram (Euclidraw Modern Style)
 
-Below is the modern system architecture diagram illustrating request flow, caching, fallback layers, and external provider isolation.
-
 ```mermaid
 flowchart TD
-    %% Styling - Excalidraw modern theme
-    classDef client fill:#e1f5fe,stroke:#0288d1,stroke-width:2px,color:#01579b,rx:8px,ry:8px;
-    classDef gateway fill:#fff3e0,stroke:#f57c00,stroke-width:2px,color:#e65100,rx:8px,ry:8px;
-    classDef cache fill:#e8f5e9,stroke:#388e3c,stroke-width:2px,color:#1b5e20,rx:8px,ry:8px;
-    classDef db fill:#f3e5f5,stroke:#7b1fa2,stroke-width:2px,color:#4a148c,rx:8px,ry:8px;
-    classDef provider fill:#fce4ec,stroke:#c2185b,stroke-width:2px,color:#880e4f,rx:8px,ry:8px;
-    classDef lock fill:#fffde7,stroke:#fbc02d,stroke-width:2px,color:#f57f17,rx:8px,ry:8px;
-
-    User[Web Client / React Dashboard] :::client
-    Gateway[FastAPI API Router /api/v1/job-search/recent] :::gateway
+    User["Web Client / React Dashboard"]
+    Gateway["FastAPI API Router (/api/v1/job-search/recent)"]
 
     subgraph Defense ["Rate Limiting & Concurrency Control"]
-        RateLimiter["Fail-Open Rate Limiter\n(Burst: 5s window | Daily: 500 ops)"] :::lock
-        SingleFlight["Redis Single-Flight Lock\n(acquire_lock key: sha256)"] :::lock
+        RateLimiter["Fail-Open Rate Limiter (Burst + Daily Quota)"]
+        SingleFlight["Redis Single-Flight Lock (acquire_lock)"]
     end
 
     subgraph Caching ["Multi-Tier Cache Layer"]
-        RedisCache["Redis Hot Cache\n(TTL: 30-60 mins with Jitter)"] :::cache
-        PGCache["PostgreSQL DB Cache\n(Table: jobs, Indexed EXPLAIN)"] :::db
+        RedisCache["Redis Hot Cache (TTL Jittered)"]
+        PGCache["PostgreSQL DB Cache (jobs Table)"]
     end
 
     subgraph CoreEngine ["Service & Scoring Engine"]
-        ServiceLayer["Service Coordinator\n(service.py)"] :::gateway
-        ScoringEngine["Location & Title Scoring\n(scoring.py)"] :::gateway
-        DedupEngine["Fingerprint & URL Dedup\n(dedup.py)"] :::gateway
+        ServiceLayer["Service Coordinator (service.py)"]
+        ScoringEngine["Location & Title Scoring (scoring.py)"]
+        DedupEngine["Fingerprint & URL Dedup (dedup.py)"]
     end
 
     subgraph ExternalProviders ["Isolated External Providers"]
-        Adzuna["Adzuna Provider\n(Circuit Breaker + Budget Guard)"] :::provider
-        Bundesagentur["Bundesagentur Provider\n(German Federal API)"] :::provider
-        BonusPipeline["Arbeitnow Bonus Pipeline\n(Country Unrestricted Bonus Finds)"] :::provider
+        Adzuna["Adzuna Provider (Circuit Breaker)"]
+        Bundesagentur["Bundesagentur Provider (German API)"]
+        BonusPipeline["Arbeitnow Bonus Pipeline (Bonus Finds)"]
     end
 
     User -->|1. Search Request| Gateway
@@ -75,6 +65,20 @@ flowchart TD
     DedupEngine -->|6. Upsert Clean Jobs| PGCache
     DedupEngine -->|7. Set Response Cache| RedisCache
     ServiceLayer -->|8. Formatted JSON Response| User
+
+    classDef client fill:#e1f5fe,stroke:#0288d1,stroke-width:2px,color:#01579b;
+    classDef gateway fill:#fff3e0,stroke:#f57c00,stroke-width:2px,color:#e65100;
+    classDef cache fill:#e8f5e9,stroke:#388e3c,stroke-width:2px,color:#1b5e20;
+    classDef db fill:#f3e5f5,stroke:#7b1fa2,stroke-width:2px,color:#4a148c;
+    classDef provider fill:#fce4ec,stroke:#c2185b,stroke-width:2px,color:#880e4f;
+    classDef lock fill:#fffde7,stroke:#fbc02d,stroke-width:2px,color:#f57f17;
+
+    class User client;
+    class Gateway,ServiceLayer,ScoringEngine,DedupEngine gateway;
+    class RedisCache cache;
+    class PGCache db;
+    class Adzuna,Bundesagentur,BonusPipeline provider;
+    class RateLimiter,SingleFlight lock;
 ```
 
 ---
