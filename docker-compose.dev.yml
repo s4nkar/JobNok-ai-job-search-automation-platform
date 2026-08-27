@@ -203,6 +203,46 @@ services:
           memory: 1G
           cpus: "1.0"
 
+  admin:
+    build:
+      context: .
+      dockerfile: apps/admin/Dockerfile.dev
+    volumes:
+      - ./apps/admin:/repo/apps/admin
+      - /repo/apps/admin/node_modules
+      - /repo/apps/admin/.next
+      # See the nextjs service's identical mounts above — same reasons.
+      - ./packages/ui:/repo/packages/ui
+      - /repo/packages/ui/node_modules
+    ports:
+      - "3002:3002"
+    environment:
+      - NEXT_PUBLIC_APP_URL=http://localhost:3002
+      - BACKEND_URL=http://api:8000
+      - WATCHPACK_POLLING=true
+      - CHOKIDAR_USEPOLLING=true
+    # Same reasoning as marketing's override above - dev mode runs on 3002,
+    # not the prod `next start` port the base healthcheck checks.
+    healthcheck:
+      test: [ "CMD-SHELL", "node -e \"fetch('http://localhost:3002/api/health').then(r => process.exit(r.ok ? 0 : 1)).catch(() => process.exit(1))\"" ]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+    # 3G/2.0, matching the nextjs service above, not marketing's lighter 1G -
+    # admin runs the same full Next.js dev server (webpack/HMR) as nextjs,
+    # just with fewer pages; page count doesn't reduce the dev server's
+    # baseline memory need. The 1G limit this had before caused real ENOMEM
+    # crashes (Watchpack's initial directory scan hit the container's own
+    # cgroup memory cap, observed at 86% usage / 99% CPU right before it
+    # failed) - same "thrash and crawl" failure mode nextjs's own comment
+    # already documented, just not applied here originally.
+    deploy:
+      resources:
+        limits:
+          memory: 3G
+          cpus: "2.0"
+
 volumes:
   api_venv:
   postgres_data:

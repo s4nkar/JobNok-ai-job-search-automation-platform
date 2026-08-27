@@ -40,6 +40,7 @@ class Job(Base, UUIDPKMixin, CreatedAtMixin):
             postgresql_using="gin",
             postgresql_ops={"description": "gin_trgm_ops"},
         ),
+        Index("jobs_company_id_idx", "company_id"),
     )
 
     source: Mapped[str] = mapped_column(Text, nullable=False)
@@ -49,6 +50,14 @@ class Job(Base, UUIDPKMixin, CreatedAtMixin):
     # provider (e.g. "adzuna"). Lets multiple tools share this cache without
     # losing track of where a row came from.
     origin_tool: Mapped[str] = mapped_column(Text, nullable=False, server_default="recent_job_search")
+    # Cross-module FK to startup_hunt's crawler company registry - plain FK
+    # column only, no ORM relationship() across module boundaries (see
+    # startup_hunt/models.py's CompanyRegistry and the plan notes). Populated
+    # only for rows the startup_hunt background crawler wrote; every other
+    # origin_tool leaves this null.
+    company_id: Mapped[uuid.UUID | None] = mapped_column(
+        PG_UUID(as_uuid=True), ForeignKey("company_registry.id", ondelete="SET NULL"), nullable=True
+    )
     title: Mapped[str] = mapped_column(Text, nullable=False)
     company: Mapped[str] = mapped_column(Text, nullable=False)
     location: Mapped[str] = mapped_column(Text, nullable=False)
@@ -138,6 +147,7 @@ async def query_job_cache_candidates(
     limit: int,
     include_null_country: bool = False,
     allowed_sources: set[str] | None = None,
+    allowed_origin_tools: set[str] | None = None,
 ) -> list[Job]:
     """Coarse, bounded pre-filter over the shared `jobs` cache, not exact
     matching, just narrows the candidate pool. Callers run their own
@@ -165,6 +175,14 @@ async def query_job_cache_candidates(
     disabled provider's already-cached rows would keep surfacing from the
     DB indefinitely (up to their 14-day TTL), silently defeating the kill
     switch's whole point.
+
+    allowed_origin_tools: restricts results to these `Job.origin_tool`
+    values (e.g. only "startup_hunt"). None = no filter. Needed for the
+    same reason as allowed_sources but at the tool level, not the provider
+    level - without this, one tool's DB-first candidate scan can silently
+    read rows another tool wrote (e.g. startup_hunt's scoring pipeline
+    picking up recent_job_search's Adzuna/Bundesagentur results, which
+    carry no company-size/stage signal and may not be startups at all).
     """
     country_condition = (
         or_(Job.country == country_code, Job.country.is_(None))
@@ -175,6 +193,9 @@ async def query_job_cache_candidates(
 
     if allowed_sources is not None:
         conditions.append(Job.source.in_(allowed_sources))
+
+    if allowed_origin_tools is not None:
+        conditions.append(Job.origin_tool.in_(allowed_origin_tools))
 
     if posted_within_hours is not None:
         cutoff = datetime.now(timezone.utc) - timedelta(hours=posted_within_hours)

@@ -7,16 +7,24 @@ mirroring the original supabase-py calls' per-statement auto-commit behavior.
 """
 
 import asyncio
+import hashlib
+import json
 import logging
 from decimal import Decimal
 
 from fastapi import HTTPException
-from sqlalchemy import select
+from sqlalchemy import or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.config import settings
 from app.core.database import AsyncSessionLocal
+from app.services.cache import acquire_lock, get_cached, jittered_ttl, record_search_outcome, set_cached
 from app.shared.repository import UserScopedRepository
 from app.shared.utils import row_to_dict
+from app.modules.startup_hunt.discovery.discovery_service import upsert_discovered
+from app.modules.startup_hunt.discovery.startup_source import DiscoveredStartup
+from app.modules.startup_hunt.models import CompanyRegistry
+from app.modules.startup_scout import engine
 from app.modules.startup_scout.models import StartupScoutCompany, StartupScoutContact
 from app.modules.startup_scout.schemas import SaveCompanyRequest
 from app.modules.startup_scout.engine import (
@@ -28,6 +36,10 @@ from app.modules.startup_scout.engine import (
 
 log = logging.getLogger(__name__)
 
+_SINGLE_FLIGHT_LOCK_TTL_SECONDS = 20
+_SINGLE_FLIGHT_POLL_INTERVAL_SECONDS = 0.5
+_SINGLE_FLIGHT_MAX_WAIT_SECONDS = 10
+
 MIN_VERIFIED_CONTACTS = 2
 
 # In-process cancel flags keyed by company_id.
@@ -37,6 +49,244 @@ _cancel_flags: dict[str, bool] = {}
 
 class CompanyRepository(UserScopedRepository[StartupScoutCompany]):
     model = StartupScoutCompany
+
+
+# ── Phase A search: response cache + company_registry DB-first layer ───────
+
+def _response_cache_key(location: str, funding_stages: list[str], industry: str, size_range: str, limit: int) -> str:
+    parts = [
+        location.strip().lower(),
+        ",".join(sorted(s.strip().lower() for s in funding_stages)),
+        industry.strip().lower(),
+        size_range.strip().lower(),
+        str(limit),
+    ]
+    digest = hashlib.sha256("|".join(parts).encode("utf-8")).hexdigest()
+    return f"startup_scout:{digest}"
+
+
+async def _company_registry_candidates(db: AsyncSession, location: str, limit: int) -> list[dict]:
+    """DB-first layer, reusing the crawler's own company_registry - free,
+    always-available candidates for any location the crawler (or a prior
+    startup_scout search) has already discovered.
+
+    CompanyRegistry.country/.city are free text copied straight from whatever
+    the discovery source reported (e.g. "Germany" - see
+    startup_hunt/discovery/startupmap.py), not ISO codes, so this matches via
+    a plain case-insensitive substring check against location's own
+    comma-separated parts rather than a country-code lookup.
+
+    company_registry has no funding_stage/industry/description field at all,
+    so every row returned here has an unknown stage/size - the caller
+    (search_startups below) only treats these as satisfying the request when
+    no funding_stage filter was requested, since there's no way to verify a
+    stage match against this table's data.
+    """
+    parts = [p.strip() for p in location.split(",") if p.strip()]
+    if not parts:
+        return []
+    conditions = or_(*[
+        or_(CompanyRegistry.city.ilike(f"%{p}%"), CompanyRegistry.country.ilike(f"%{p}%"))
+        for p in parts
+    ])
+    rows = (
+        await db.execute(
+            select(CompanyRegistry)
+            .where(conditions)
+            .order_by(CompanyRegistry.last_discovered_at.desc())
+            .limit(limit)
+        )
+    ).scalars().all()
+    return [
+        {
+            "name": row.name,
+            "description": "",
+            "funding_stage": "",
+            "location": ", ".join(p for p in [row.city, row.country] if p) or location,
+            "size_range": "",
+            "website": row.website_url or "",
+            "domain": row.domain or "",
+            "source": "company_registry",
+        }
+        for row in rows
+    ]
+
+
+async def _store_discovered_companies(db: AsyncSession, location: str, companies: list[dict]) -> None:
+    """Feed live-scraped companies back into the crawler's company_registry so
+    a repeat search (from anyone) can be served from _company_registry_candidates
+    instead of scraping again, and so startup_hunt's own resolution pipeline
+    might eventually resolve/sync jobs for a company scout found first (see
+    ingestion/scheduler.py::sweep_undiscovered_companies, which is what
+    actually enqueues that resolution - this function only writes the row).
+
+    domain/website_url are deliberately left None. What engine._parse_company
+    calls "website" is the DIRECTORY PROFILE page (e.g.
+    crunchbase.com/organization/x), never the startup's own site, and its
+    "domain" is that directory's domain (crunchbase.com) - writing either into
+    company_registry.domain/website_url would corrupt those fields for
+    startup_hunt's ats_resolver.py, which uses website_url as a career-page
+    fallback target. discovery_source_url (whose whole purpose is "where I
+    found this listing") is the field this profile URL actually belongs in.
+
+    city: best-effort only, and only when location has no comma (a single
+    unambiguous value) - a multi-city search ("Berlin, Munich, Remote") can't
+    be attributed to one specific found company's actual city. Written into
+    `city` regardless of whether it's actually a city or country name (e.g.
+    "Germany") since _company_registry_candidates' own read-side query already
+    checks both columns - a search for "Germany" will still find a row with
+    "Germany" sitting in `city`, so this is functionally harmless even though
+    it isn't fully accurate data.
+    """
+    location_parts = [p.strip() for p in location.split(",") if p.strip()]
+    single_location = location_parts[0] if len(location_parts) == 1 else None
+
+    items: list[DiscoveredStartup] = []
+    for c in companies:
+        profile_url = (c.get("website") or "").strip()
+        name = (c.get("name") or "").strip()
+        if not profile_url or not name:
+            continue
+        items.append(
+            DiscoveredStartup(
+                name=name,
+                domain=None,
+                website_url=None,
+                country=None,
+                city=single_location,
+                discovery_source="startup_scout",
+                discovery_source_url=profile_url,
+                discovery_source_id=profile_url.rstrip("/").lower(),
+            )
+        )
+    if not items:
+        return
+    try:
+        await upsert_discovered(db, items)
+        await db.commit()
+    except Exception:
+        await db.rollback()
+        log.warning("startup_scout: failed to write discovered companies back to company_registry", exc_info=True)
+
+
+def _dedupe_key(c: dict) -> str:
+    domain_or_url = (c.get("domain") or c.get("website") or "").rstrip("/").lower()
+    return domain_or_url or c.get("name", "").strip().lower()
+
+
+async def search_startups(
+    db: AsyncSession,
+    *,
+    location: str,
+    funding_stages: list[str],
+    industry: str,
+    size_range: str,
+    limit: int,
+) -> dict:
+    """Phase A orchestration: L1 Redis response cache -> L2 company_registry
+    DB-first check -> live DDG scrape (engine.search_startups) only for
+    whatever shortfall remains, mirroring job_search/startup_hunt's own
+    DB-first, pay-only-for-the-shortfall pattern (see
+    job_search/service.py::search_recent_jobs,
+    startup_hunt/service.py::search_startup_hunt_opportunities for the same
+    cache-key/single-flight-lock shape reused here).
+    """
+    cache_key = _response_cache_key(location, funding_stages, industry, size_range, limit)
+    try:
+        cached = await get_cached(cache_key)
+    except Exception:
+        cached = None
+    if cached:
+        try:
+            result = json.loads(cached)
+            await record_search_outcome("startup_scout", "l1_hit")
+            return result
+        except json.JSONDecodeError:
+            pass
+
+    try:
+        is_leader = await acquire_lock(f"{cache_key}:lock", _SINGLE_FLIGHT_LOCK_TTL_SECONDS)
+    except Exception:
+        is_leader = True
+
+    if not is_leader:
+        waited = 0.0
+        while waited < _SINGLE_FLIGHT_MAX_WAIT_SECONDS:
+            await asyncio.sleep(_SINGLE_FLIGHT_POLL_INTERVAL_SECONDS)
+            waited += _SINGLE_FLIGHT_POLL_INTERVAL_SECONDS
+            try:
+                cached = await get_cached(cache_key)
+            except Exception:
+                cached = None
+            if cached:
+                try:
+                    result = json.loads(cached)
+                    await record_search_outcome("startup_scout", "l1_hit")
+                    return result
+                except json.JSONDecodeError:
+                    break
+
+    # Only consulted for stage-agnostic searches - company_registry has no
+    # data to verify a funding_stage filter against (see
+    # _company_registry_candidates' own docstring).
+    db_candidates = [] if funding_stages else await _company_registry_candidates(db, location, limit)
+
+    if db_candidates and len(db_candidates) >= limit:
+        result = {
+            "companies": db_candidates[:limit],
+            "meta": {
+                "total": limit, "limit": limit, "queries_run": 0,
+                "sources": {"company_registry": limit},
+                "location": location, "industry": industry.strip() or None,
+                "funding_stages": funding_stages,
+            },
+        }
+        try:
+            await set_cached(cache_key, json.dumps(result), jittered_ttl(settings.startup_scout_response_cache_ttl_seconds))
+        except Exception:
+            pass
+        await record_search_outcome("startup_scout", "l2_full")
+        return result
+
+    live_limit = max(10, limit - len(db_candidates))
+    live_result = await engine.search_startups(
+        location=location, funding_stages=funding_stages, industry=industry,
+        size_range=size_range, limit=live_limit,
+    )
+    live_companies = live_result["companies"]
+
+    await _store_discovered_companies(db, location, live_companies)
+
+    seen: set[str] = set()
+    merged: list[dict] = []
+    for c in db_candidates + live_companies:
+        key = _dedupe_key(c)
+        if key in seen:
+            continue
+        seen.add(key)
+        merged.append(c)
+    merged = merged[:limit]
+
+    sources = dict(live_result["meta"]["sources"])
+    company_registry_count = sum(1 for c in merged if c.get("source") == "company_registry")
+    if company_registry_count:
+        sources["company_registry"] = company_registry_count
+
+    result = {
+        "companies": merged,
+        "meta": {
+            "total": len(merged), "limit": limit,
+            "queries_run": live_result["meta"]["queries_run"],
+            "sources": sources, "location": location,
+            "industry": industry.strip() or None, "funding_stages": funding_stages,
+        },
+    }
+    try:
+        await set_cached(cache_key, json.dumps(result), jittered_ttl(settings.startup_scout_response_cache_ttl_seconds))
+    except Exception:
+        pass
+    await record_search_outcome("startup_scout", "live")
+    return result
 
 
 async def list_companies(db: AsyncSession, user_id: str) -> list[dict]:

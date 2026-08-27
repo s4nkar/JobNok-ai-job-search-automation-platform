@@ -7,6 +7,7 @@
     "dev": "docker compose -f docker-compose.yml -f docker-compose.dev.yml up --build",
     "dev:local": "concurrently -n docker,web -c yellow,blue \"docker compose -f docker-compose.yml -f docker-compose.dev.yml -f docker-compose.local.yml up --build\" \"pnpm --filter jobnok-frontend dev\"",
     "dev:api": "docker compose -f docker-compose.yml -f docker-compose.dev.yml up --build postgres api worker",
+    "dev:realdb": "docker compose -f docker-compose.yml -f docker-compose.dev.yml -f docker-compose.realdb.yml up --build",
     "prod": "docker compose up --build -d",
     "down": "docker compose down",
     "logs": "docker compose logs -f",
@@ -14,12 +15,16 @@
     "api:migrate:new": "docker compose exec api alembic revision --autogenerate -m",
     "api:migrate:down": "docker compose exec api alembic downgrade -1",
     "api:migrate:current": "docker compose exec api alembic current",
+    "admin:promote": "docker compose exec api python -m app.scripts.promote_admin",
     "build": "pnpm --filter jobnok-frontend build",
     "lint": "pnpm --filter jobnok-frontend lint",
     "typecheck": "pnpm --filter jobnok-frontend type-check",
     "build:marketing": "pnpm --filter jobnok-marketing build",
     "lint:marketing": "pnpm --filter jobnok-marketing lint",
-    "typecheck:marketing": "pnpm --filter jobnok-marketing type-check"
+    "typecheck:marketing": "pnpm --filter jobnok-marketing type-check",
+    "build:admin": "pnpm --filter jobnok-admin build",
+    "lint:admin": "pnpm --filter jobnok-admin lint",
+    "typecheck:admin": "pnpm --filter jobnok-admin type-check"
   },
   "devDependencies": {
     "concurrently": "^9.2.4"

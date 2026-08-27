@@ -12,6 +12,8 @@ services:
         condition: service_healthy
       marketing:
         condition: service_healthy
+      admin:
+        condition: service_healthy
     networks:
       - frontend-net
       - backend-net
@@ -107,6 +109,46 @@ services:
       - frontend-net
     healthcheck:
       test: [ "CMD-SHELL", "node -e \"fetch('http://localhost:3000/').then(r => process.exit(r.ok ? 0 : 1)).catch(() => process.exit(1))\"" ]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 40s
+    deploy:
+      resources:
+        limits:
+          memory: 256M
+          cpus: "0.5"
+    restart: unless-stopped
+
+  # Internal crawler-observability app - own Clerk origin (see
+  # ADMIN_APP_URL/settings.admin_app_url), gated to profiles.role=='admin' on
+  # every API call (app/modules/admin/routes.py), not just at this app's
+  # login screen.
+  admin:
+    build:
+      context: .
+      dockerfile: apps/admin/Dockerfile
+      args:
+        # Same Clerk publishable key as the nextjs service, deliberately -
+        # this is the SAME Clerk application as apps/web (one JWKS/issuer,
+        # see settings.clerk_jwks_url/clerk_issuer), just with
+        # admin.jobnok.com added as an additional allowed origin/redirect URL
+        # in that one Clerk app's dashboard settings. A different publishable
+        # key here would mean a different Clerk application, whose tokens
+        # the backend's single JWKS endpoint couldn't even verify.
+        NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY: ${NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY}
+        NEXT_PUBLIC_APP_URL: ${ADMIN_APP_URL}
+    env_file:
+      - ./apps/admin/.env.local
+    environment:
+      BACKEND_URL: http://api:8000
+    expose:
+      - "3000"
+    networks:
+      - frontend-net
+      - backend-net
+    healthcheck:
+      test: [ "CMD-SHELL", "node -e \"fetch('http://localhost:3000/api/health').then(r => process.exit(r.ok ? 0 : 1)).catch(() => process.exit(1))\"" ]
       interval: 10s
       timeout: 5s
       retries: 5

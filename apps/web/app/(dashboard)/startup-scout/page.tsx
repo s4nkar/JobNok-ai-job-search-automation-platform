@@ -3,7 +3,6 @@
 import { useState } from 'react'
 import Link from 'next/link'
 import { useRouter } from 'next/navigation'
-import Papa from 'papaparse'
 import { useToast } from '@jobnok/ui'
 import { Button } from '@jobnok/ui'
 import { Input } from '@jobnok/ui'
@@ -16,8 +15,8 @@ import { apiFetch } from '@/lib/api'
 import { cn } from '@jobnok/ui'
 import {
   Radar, Search, Loader2, ExternalLink, BookmarkPlus,
-  CheckCircle, Building2, MapPin, TrendingUp, Download,
-  Database, ChevronLeft, ChevronRight, SlidersHorizontal,
+  CheckCircle, Building2, MapPin, TrendingUp,
+  ChevronLeft, ChevronRight, ChevronUp, ChevronDown, SlidersHorizontal,
 } from 'lucide-react'
 
 // ── Types ────────────────────────────────────────────────────────────────────
@@ -31,16 +30,6 @@ interface DiscoveredCompany {
   funding_stage: string
   location: string
   size_range: string
-}
-
-interface SearchMeta {
-  total: number
-  limit: number
-  queries_run: number
-  sources: Record<string, number>
-  location: string
-  industry: string | null
-  funding_stages: string[]
 }
 
 // ── Constants ─────────────────────────────────────────────────────────────────
@@ -84,24 +73,8 @@ const SOURCE_PILL: Record<string, string> = {
   Seedtable: 'bg-slate-50 text-slate-600 ring-slate-200',
   'Y Combinator': 'bg-slate-50 text-slate-600 ring-slate-200',
   Tracxn: 'bg-slate-50 text-slate-600 ring-slate-200',
-  'Crunchbase API': 'bg-slate-50 text-slate-600 ring-slate-200',
-  TheirStack: 'bg-slate-50 text-slate-600 ring-slate-200',
   Startupdetector: 'bg-slate-50 text-slate-600 ring-slate-200',
   F6S: 'bg-slate-50 text-slate-600 ring-slate-200',
-}
-
-const SOURCE_DOT: Record<string, string> = {
-  Crunchbase: 'bg-slate-400',
-  Wellfound: 'bg-slate-400',
-  Dealroom: 'bg-slate-400',
-  'Germanyy.ai': 'bg-slate-400',
-  Seedtable: 'bg-slate-400',
-  'Y Combinator': 'bg-slate-400',
-  Tracxn: 'bg-slate-400',
-  'Crunchbase API': 'bg-slate-400',
-  TheirStack: 'bg-slate-400',
-  Startupdetector: 'bg-slate-400',
-  F6S: 'bg-slate-400',
 }
 
 const STAGE_PILL: Record<string, string> = {
@@ -160,10 +133,10 @@ export default function StartupScoutPage() {
   const [industry, setIndustry] = useState('')
   const [sizeRange, setSizeRange] = useState('')
   const [limit, setLimit] = useState('50')
+  const [filtersOpen, setFiltersOpen] = useState(false)
 
   // ── Result state ──────────────────────────────────────────────────────────
   const [results, setResults] = useState<DiscoveredCompany[]>([])
-  const [meta, setMeta] = useState<SearchMeta | null>(null)
   const [searching, setSearching] = useState(false)
   const [hasSearched, setHasSearched] = useState(false)
 
@@ -202,7 +175,6 @@ export default function StartupScoutPage() {
     setSearching(true)
     setHasSearched(true)
     setResults([])
-    setMeta(null)
     setCurrentPage(1)
 
     const res = await apiFetch('/api/startup-scout/search', {
@@ -220,7 +192,6 @@ export default function StartupScoutPage() {
     if (res.ok) {
       const data = await res.json()
       setResults(data.companies || [])
-      setMeta(data.meta || null)
       if ((data.companies || []).length === 0) {
         toast({ title: 'No results', description: 'Try a broader location or different stage.' })
       }
@@ -257,80 +228,74 @@ export default function StartupScoutPage() {
     setSavingName(null)
   }
 
-  function downloadCSV() {
-    if (!results.length) return
-    const rows = results.map(c => ({
-      Name: c.name,
-      Description: c.description,
-      'Funding Stage': c.funding_stage,
-      Location: c.location,
-      'Size Range': c.size_range,
-      Website: c.website,
-      Source: c.source,
-    }))
-    const csv = Papa.unparse(rows)
-    const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' })
-    const url = URL.createObjectURL(blob)
-    const a = Object.assign(document.createElement('a'), {
-      href: url,
-      download: `startups-${location.trim().toLowerCase().replace(/\s+/g, '-')}-${new Date().toISOString().slice(0, 10)}.csv`,
-    })
-    document.body.appendChild(a)
-    a.click()
-    document.body.removeChild(a)
-    URL.revokeObjectURL(url)
-    toast({ title: 'Downloaded', description: `${results.length} startups exported as CSV (opens in Excel)` })
-  }
-
   // ── Render ────────────────────────────────────────────────────────────────
+
+  const filterSummary = [location || 'No location', selectedStages.join(', ') || 'No stage']
+    .filter(Boolean)
+    .join(' · ')
 
   return (
     <div className="animate-fade-in">
 
       {/* ── Page header ───────────────────────────────────────────────────── */}
-      <div className="flex items-start justify-between mb-6">
-        <div className="flex items-center gap-3">
-          <div className="page-header-icon bg-indigo-100">
-            <Radar className="h-5 w-5 text-indigo-600" />
-          </div>
-          <div>
-            <h1 className="text-2xl font-bold text-slate-900 tracking-tight">Startup Scout</h1>
-            <p className="text-sm text-slate-500 mt-0.5">
-              Discover startups by location &amp; stage, then crawl for founder contacts
-            </p>
-          </div>
+      <div className="flex items-center gap-4 mb-6">
+        <div className="hidden sm:flex page-header-icon bg-indigo-100">
+          <Radar className="h-5 w-5 text-indigo-600" />
         </div>
-
-        <div className="flex items-center gap-2">
-          {results.length > 0 && (
+        <div className="min-w-0 flex-1">
+          <div className="flex items-center justify-between gap-3">
+            <h1 className="text-2xl font-bold text-slate-900 tracking-tight">Startup Scout</h1>
             <Button
               variant="outline"
-              onClick={downloadCSV}
-              className="h-9 px-3.5 rounded-xl text-sm border-slate-200 text-slate-600 hover:text-slate-900 hover:border-slate-300 gap-1.5"
+              onClick={() => router.push('/tracker')}
+              className="h-9 px-3.5 rounded-xl text-sm border-slate-200 text-slate-600 hover:text-slate-900 gap-1.5 flex-shrink-0"
             >
-              <Download className="h-3.5 w-3.5" />
-              Export CSV
-              <span className="text-slate-400 text-xs">({results.length})</span>
+              <Building2 className="h-3.5 w-3.5" />
+              View Tracker
             </Button>
-          )}
-          <Button
-            variant="outline"
-            onClick={() => router.push('/tracker')}
-            className="h-9 px-3.5 rounded-xl text-sm border-slate-200 text-slate-600 hover:text-slate-900 gap-1.5"
-          >
-            <Building2 className="h-3.5 w-3.5" />
-            View Tracker
-          </Button>
+          </div>
+          <p className="text-slate-500 text-sm mt-0.5">
+            Discover startups by location &amp; stage, then crawl for founder contacts
+          </p>
         </div>
       </div>
 
-      {/* ── Main grid ─────────────────────────────────────────────────────── */}
-      <div className="grid grid-cols-[300px_1fr] gap-5 items-start">
+      {/* lg:, not md: - at md (768px, iPad portrait) a fixed 320px sidebar
+          would leave the results column only ~420px wide while its cards'
+          internal sm: breakpoints (640px) still key off full viewport width,
+          not that column's actual space, so they'd assume room they don't
+          have. Staying stacked through lg: keeps the column = viewport width
+          the whole time those sm: breakpoints are active. */}
+      <div className="grid grid-cols-1 lg:grid-cols-[320px_1fr] gap-5 items-start">
 
         {/* ── Filter panel ──────────────────────────────────────────────── */}
-        <aside className="bg-white rounded-2xl border border-slate-100 shadow-sm p-5 space-y-5 sticky top-6">
+        {/* max-height must clear the layout's own top offset before this
+            panel ever becomes "stuck" at lg:top-6 - same fix/reasoning as
+            startup-hunt and recent-job-search's identical sidebars: the
+            dashboard shell's py-8 (2rem) plus this page's own header block
+            (icon/h1/subtitle row + mb-6, ~4.5rem) push the panel's natural
+            pre-scroll position well past what a bare calc(100vh-2rem) - sized
+            for the 1.5rem stuck-state gap only - actually leaves room for. */}
+        <aside className="bg-white rounded-2xl border border-slate-100 shadow-sm lg:sticky lg:top-6 lg:max-h-[calc(100vh-8.5rem)] lg:flex lg:flex-col overflow-hidden">
+          {/* Mobile/tablet-only collapsible header - filters start closed so
+              results are reachable without scrolling past every field first. */}
+          <button
+            type="button"
+            onClick={() => setFiltersOpen((prev) => !prev)}
+            className="w-full lg:hidden flex items-center justify-between gap-3 px-5 py-3.5"
+          >
+            <span className="flex items-center gap-2 text-xs font-semibold text-slate-500 uppercase tracking-wider flex-shrink-0">
+              <SlidersHorizontal className="h-3.5 w-3.5 text-slate-400" />
+              Filters
+            </span>
+            <span className="flex items-center gap-1.5 text-xs text-slate-500 font-normal normal-case min-w-0">
+              <span className="truncate">{filterSummary}</span>
+              {filtersOpen ? <ChevronUp className="h-3.5 w-3.5 flex-shrink-0" /> : <ChevronDown className="h-3.5 w-3.5 flex-shrink-0" />}
+            </span>
+          </button>
 
-          <div className="flex items-center gap-2 pb-1 border-b border-slate-100">
+          <div className={`${filtersOpen ? 'block' : 'hidden'} lg:block lg:flex-1 lg:min-h-0 lg:overflow-y-auto scrollbar-thin lg:scroll-fade-y p-5 lg:pt-5 space-y-5 ${filtersOpen ? 'border-t border-slate-100 lg:border-t-0' : ''}`}>
+          <div className="hidden lg:flex items-center gap-2 pb-1 border-b border-slate-100">
             <SlidersHorizontal className="h-3.5 w-3.5 text-slate-400" />
             <span className="text-xs font-semibold text-slate-500 uppercase tracking-wider">Filters</span>
           </div>
@@ -435,6 +400,7 @@ export default function StartupScoutPage() {
               {results.length} of {limit} results found
             </p>
           )}
+          </div>
         </aside>
 
         {/* ── Results column ────────────────────────────────────────────── */}
@@ -484,66 +450,12 @@ export default function StartupScoutPage() {
           {!searching && results.length > 0 && (
             <>
               {/* ── Citation card ──────────────────────────────────────── */}
-              {meta && (
-                <div className="bg-gradient-to-r from-slate-50 to-white rounded-2xl border border-slate-200 p-4">
-                  <div className="flex items-start gap-3">
-                    <div className="w-8 h-8 rounded-lg bg-indigo-100 flex items-center justify-center flex-shrink-0 mt-0.5">
-                      <Database className="h-4 w-4 text-indigo-500" />
-                    </div>
-
-                    <div className="flex-1 min-w-0">
-                      <div className="flex items-center flex-wrap gap-x-3 gap-y-1">
-                        <span className="text-sm font-semibold text-slate-800">
-                          {meta.total} startup{meta.total !== 1 ? 's' : ''} found
-                        </span>
-                        <span className="text-xs text-slate-400">
-                          {meta.queries_run} quer{meta.queries_run !== 1 ? 'ies' : 'y'} · {Object.keys(meta.sources).length} source{Object.keys(meta.sources).length !== 1 ? 's' : ''}
-                        </span>
-                        <span className="text-xs text-slate-400">limit: {meta.limit}</span>
-                      </div>
-
-                      {/* Source chips */}
-                      <div className="flex flex-wrap gap-1.5 mt-2.5">
-                        {Object.entries(meta.sources)
-                          .sort(([, a], [, b]) => b - a)
-                          .map(([src, count]) => (
-                            <span
-                              key={src}
-                              className={cn(
-                                'inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[11px] font-medium ring-1',
-                                SOURCE_PILL[src] || 'bg-slate-50 text-slate-600 ring-slate-200',
-                              )}
-                            >
-                              <span className={cn('w-1.5 h-1.5 rounded-full', SOURCE_DOT[src] || 'bg-slate-400')} />
-                              {src} <span className="opacity-60">({count})</span>
-                            </span>
-                          ))}
-                      </div>
-
-                      {/* Search params */}
-                      <p className="text-[11px] text-slate-400 mt-2">
-                        Searched:&nbsp;
-                        <span className="text-slate-500 font-medium">{meta.location}</span>
-                        {meta.industry && <>&nbsp;·&nbsp;<span className="text-slate-500 font-medium">{meta.industry}</span></>}
-                        {meta.funding_stages.length > 0 && (
-                          <>&nbsp;·&nbsp;<span className="text-slate-500 font-medium">{meta.funding_stages.join(', ')}</span></>
-                        )}
-                      </p>
-                    </div>
-
-                    <button
-                      onClick={downloadCSV}
-                      className="flex-shrink-0 h-7 px-2.5 rounded-lg border border-slate-200 text-[11px] font-medium text-slate-500 hover:text-slate-800 hover:border-slate-300 transition-colors flex items-center gap-1"
-                    >
-                      <Download className="h-3 w-3" />
-                      Export
-                    </button>
-                  </div>
-                </div>
-              )}
-
               {/* ── Result count + top pagination ──────────────────────── */}
-              <div className="flex items-center justify-between px-0.5">
+              {/* flex-wrap - up to 9 pagination buttons (7 numbered + prev/
+                  next) plus the "Showing X-Y of Z" text can exceed a 375px
+                  viewport in one row; wraps to two lines instead of
+                  overflowing horizontally. */}
+              <div className="flex items-center flex-wrap gap-2 justify-between px-0.5">
                 <p className="text-xs text-slate-500">
                   Showing <span className="font-semibold text-slate-700">
                     {(currentPage - 1) * PAGE_SIZE + 1}–{Math.min(currentPage * PAGE_SIZE, results.length)}
@@ -606,13 +518,17 @@ export default function StartupScoutPage() {
                                 {company.size_range} people
                               </span>
                             )}
-                            {/* Source */}
-                            <span className={cn(
-                              'px-2 py-0.5 rounded-full text-[10px] font-medium ring-1',
-                              SOURCE_PILL[company.source] || 'bg-slate-50 text-slate-500 ring-slate-200',
-                            )}>
-                              {company.source}
-                            </span>
+                            {/* Source - dev-only, useful for debugging which
+                                scraper/layer a result came from, but not
+                                something an end user needs to see. */}
+                            {process.env.NODE_ENV === 'development' && (
+                              <span className={cn(
+                                'px-2 py-0.5 rounded-full text-[10px] font-medium ring-1',
+                                SOURCE_PILL[company.source] || 'bg-slate-50 text-slate-500 ring-slate-200',
+                              )}>
+                                {company.source}
+                              </span>
+                            )}
                           </div>
                         </div>
 
@@ -652,11 +568,11 @@ export default function StartupScoutPage() {
                       </div>
 
                       {/* Description */}
-                      {company.description && (
-                        <p className="text-[12px] text-slate-500 mt-2 leading-relaxed line-clamp-2">
-                          {company.description}
-                        </p>
-                      )}
+                      <p className="text-[12px] text-slate-500 mt-2 leading-relaxed line-clamp-2">
+                        {company.description || (
+                          <span className="italic text-slate-400">No description available</span>
+                        )}
+                      </p>
                     </div>
                   </article>
                 )

@@ -2,26 +2,42 @@
 
 from __future__ import annotations
 
+from arq.connections import ArqRedis
 from fastapi import APIRouter, Depends, HTTPException, Request
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import settings
 from app.core.database import get_db
-from app.services.cache import check_rate_limit
+from app.services.cache import check_burst_limit, check_rate_limit
 from app.core.security import get_current_user_id
 from app.modules.startup_hunt.schemas import (
     StartupHuntOpportunityCreateRequest,
     StartupHuntOpportunityUpdateRequest,
     StartupHuntSearchRequest,
     StartupHuntSourceIn,
+    StartupHuntSourceResolveRequest,
 )
 from app.modules.startup_hunt import service
 from app.modules.usage.service import record_event as record_tool_usage
+from app.workers.arq_worker import get_arq_pool
 
 router = APIRouter()
 
 
 async def _check_rate_limit_fail_open(user_id: str) -> None:
+    """Two independent limits, same as job_search's own
+    _check_rate_limit_fail_open: a short burst window (catches a
+    double-click or a retry loop - the daily quota alone doesn't cap arrival
+    rate, only total volume) and the daily quota itself."""
+    try:
+        burst_ok = await check_burst_limit(
+            user_id, "startup_hunt", settings.rate_limit_burst_limit, settings.rate_limit_burst_window_seconds
+        )
+    except Exception:
+        burst_ok = True
+    if not burst_ok:
+        raise HTTPException(status_code=429, detail="Searching too quickly - please wait a few seconds and try again.")
+
     try:
         allowed, _ = await check_rate_limit(user_id, "startup_hunt", settings.rate_limit_startup_hunt_per_day)
     except Exception:
@@ -123,8 +139,24 @@ async def list_startup_hunt_sources(request: Request, db: AsyncSession = Depends
 async def create_startup_hunt_source(
     request: Request, body: StartupHuntSourceIn, db: AsyncSession = Depends(get_db)
 ):
+    """Manual entry - the fallback path, kept for when the smart-add resolve
+    flow below can't find a company on its own."""
     user_id = await get_current_user_id(request, db)
     return await service.create_startup_hunt_source(db, user_id, body)
+
+
+@router.post("/sources/resolve", status_code=201)
+async def resolve_startup_hunt_source(
+    request: Request,
+    body: StartupHuntSourceResolveRequest,
+    db: AsyncSession = Depends(get_db),
+    arq_pool: ArqRedis = Depends(get_arq_pool),
+):
+    """Smart-add entry point - a company name or careers URL, nothing else.
+    See service.py's resolve_startup_hunt_source for the reuse/fast-sync/
+    async-fallback flow this drives."""
+    user_id = await get_current_user_id(request, db)
+    return await service.resolve_startup_hunt_source(db, user_id, body.company_input, arq_pool)
 
 
 @router.delete("/sources/{source_id}", status_code=204)

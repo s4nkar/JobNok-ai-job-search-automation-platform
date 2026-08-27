@@ -20,6 +20,7 @@ import { queryKeys } from '@/lib/queryKeys'
 import {
   Bookmark,
   BriefcaseBusiness,
+  Building2,
   CheckCircle2,
   ChevronDown,
   ChevronUp,
@@ -327,9 +328,18 @@ export default function RecentJobSearchPage() {
           have. Staying stacked through lg: keeps the column = viewport width
           the whole time those sm: breakpoints are active. */}
       <div className="grid grid-cols-1 lg:grid-cols-[320px_1fr] gap-5 items-start">
+        {/* max-height must clear the layout's own top offset before this
+            form ever becomes "stuck" at lg:top-6 - same fix and reasoning
+            as startup-hunt/page.tsx's identical sidebar (see its comment):
+            the dashboard shell's py-8 (2rem) plus this page's own header
+            block (icon/h1/subtitle row + mb-6, ~4.5rem) push the form's
+            natural pre-scroll position well past what the old
+            calc(100vh-2rem) - sized for the 1.5rem stuck-state gap only -
+            actually left room for, hiding the submit button until the page
+            was scrolled down manually. */}
         <form
           onSubmit={handleSubmit(onSubmit)}
-          className="bg-white rounded-2xl border border-slate-100 shadow-sm lg:sticky lg:top-6 lg:max-h-[calc(100vh-2rem)] lg:flex lg:flex-col overflow-hidden"
+          className="bg-white rounded-2xl border border-slate-100 shadow-sm lg:sticky lg:top-6 lg:max-h-[calc(100vh-8.5rem)] lg:flex lg:flex-col overflow-hidden"
         >
           {/* Mobile/tablet-only collapsible header - filters start closed so
               results are reachable without scrolling past every field first. */}
@@ -348,7 +358,7 @@ export default function RecentJobSearchPage() {
             </span>
           </button>
 
-          <div className={`${filtersOpen ? 'block' : 'hidden'} lg:block lg:flex-1 lg:min-h-0 lg:overflow-y-auto scrollbar-hide lg:scroll-fade-y p-5 lg:pt-5 space-y-5 ${filtersOpen ? 'border-t border-slate-100 lg:border-t-0' : ''}`}>
+          <div className={`${filtersOpen ? 'block' : 'hidden'} lg:block lg:flex-1 lg:min-h-0 lg:overflow-y-auto scrollbar-thin lg:scroll-fade-y p-5 lg:pt-5 space-y-5 ${filtersOpen ? 'border-t border-slate-100 lg:border-t-0' : ''}`}>
             <div className="hidden lg:flex items-center gap-2 pb-1 border-b border-slate-100">
               <SlidersHorizontal className="h-3.5 w-3.5 text-slate-400" />
               <span className="text-xs font-semibold text-slate-500 uppercase tracking-wider">Filters</span>
@@ -402,6 +412,7 @@ export default function RecentJobSearchPage() {
                     <SelectItem value="24" className="text-sm">24 hours</SelectItem>
                     <SelectItem value="72" className="text-sm">72 hours</SelectItem>
                     <SelectItem value="168" className="text-sm">7 days</SelectItem>
+                    <SelectItem value="720" className="text-sm">30 days</SelectItem>
                   </SelectContent>
                 </Select>
               </div>
@@ -524,7 +535,7 @@ export default function RecentJobSearchPage() {
                   <div className="flex flex-col sm:flex-row sm:items-start sm:justify-between gap-4">
                     <div className="min-w-0">
                       <div className="flex items-center gap-2 flex-wrap mb-1">
-                        <h2 className="text-sm font-semibold text-slate-900">{job.role}</h2>
+                        <h3 className="text-base font-semibold text-slate-900">{job.role}</h3>
                         {job.applied && (
                           <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-semibold bg-emerald-50 text-emerald-700 border border-emerald-100">
                             <CheckCircle2 className="h-3 w-3 mr-1" />
@@ -574,42 +585,46 @@ export default function RecentJobSearchPage() {
                     </div>
                   </div>
 
-                  <div className="rounded-xl border border-slate-100 bg-slate-50 p-3.5">
-                    <p className="text-[10px] font-bold text-slate-500 uppercase tracking-widest mb-2">Citation</p>
-                    <p className="text-xs text-slate-600">{job.citation.extraction_note}</p>
-                    <div className="flex flex-wrap gap-1.5 mt-2.5">
+                  <div className="rounded-xl border border-slate-100 p-3.5 space-y-2">
+                    <div className="flex items-center gap-2">
+                      <Building2 className="h-3.5 w-3.5 text-slate-400" />
+                      <p className="text-[10px] font-bold text-slate-500 uppercase tracking-widest">Citation</p>
+                    </div>
+                    <div className="flex flex-wrap gap-1.5">
                       {job.citation.evidence.map((line) => (
-                        <span key={line} className="inline-flex items-center px-2 py-0.5 rounded-md text-[10px] font-medium bg-white text-slate-600 border border-slate-200">
-                          {line}
-                        </span>
+                        <span key={line} className="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-medium bg-white text-slate-600 border border-slate-200">{line}</span>
                       ))}
                     </div>
                   </div>
 
                   {job.description_text && (
-                    <div className="rounded-xl border-slate-100 overflow-hidden">
-                      <button
-                        type="button"
-                        onClick={() => toggleDescription(job.job_url_canonical)}
-                        className="w-full flex items-center justify-between gap-2 px-3.5 py-2.5 text-xs font-semibold text-slate-600 hover:bg-slate-40 transition-colors"
-                      >
-                        Job Description Preview
-                        {expandedDescriptions.has(job.job_url_canonical)
-                          ? <ChevronUp className="h-3.5 w-3.5 text-slate-400" />
-                          : <ChevronDown className="h-3.5 w-3.5 text-slate-400" />
-                        }
-                      </button>
+                    <>
+                      <div className="mt-4">
+                        <button
+                          type="button"
+                          onClick={() => toggleDescription(job.job_url_canonical)}
+                          className="inline-flex items-center gap-1.5 text-xs font-semibold text-slate-600 hover:text-slate-900"
+                        >
+                          {expandedDescriptions.has(job.job_url_canonical) ? <ChevronUp className="h-3.5 w-3.5" /> : <ChevronDown className="h-3.5 w-3.5" />}
+                          Job Description
+                        </button>
+                      </div>
+
                       {expandedDescriptions.has(job.job_url_canonical) && (
-                        <div className="px-3.5 pb-3.5 max-h-[28rem] overflow-y-auto scrollbar-hide">
-                          <p className="text-sm text-slate-700 whitespace-pre-wrap leading-relaxed">
-                            {job.description_text}
-                          </p>
-                          <p className="text-xs text-slate-400 mt-2">
-                            Open the job to read the full posting.
-                          </p>
+                        <div className="space-y-4 mt-4">
+                          <div className="rounded-xl border border-slate-100 bg-slate-50 p-3.5 space-y-2">
+                            <div className="max-h-[28rem] overflow-y-auto scrollbar-hide">
+                              <p className="text-xs text-slate-700 whitespace-pre-wrap leading-relaxed">
+                                {job.description_text}
+                              </p>
+                            </div>
+                            <p className="text-xs text-slate-400 mt-2">
+                              Open the job to read the full posting.
+                            </p>
+                          </div>
                         </div>
                       )}
-                    </div>
+                    </>
                   )}
 
 

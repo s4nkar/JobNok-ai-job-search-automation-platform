@@ -161,6 +161,116 @@ class Settings(BaseSettings):
     startup_hunt_timeout_seconds: int = 20
     startup_hunt_apify_poll_seconds: int = 60
     startup_hunt_total_budget_seconds: int = 30
+    # Redis response cache TTL for identical (query, location, filters, ...)
+    # hunts - mirrors job_search_response_cache_ttl_seconds.
+    startup_hunt_response_cache_ttl_seconds: int = 900
+    # How long a cached ATS (greenhouse/lever/ashby) fetch for one company
+    # board is trusted before a hunt will re-fetch it live again. Shorter
+    # than job_search_cache_ttl_days (14 days) deliberately - that's how
+    # long a row stays *eligible* for reuse at all, this is how long it's
+    # trusted as "fresh enough to skip a live call," which needs to be much
+    # tighter given a company can post/close a role within hours.
+    startup_hunt_ats_cache_freshness_hours: int = 6
+    # How long the "smart add" My Sources flow tries to resolve a company
+    # name/URL synchronously before falling back to a background ARQ job
+    # (see resolver.py + tasks.py). Kept short - a direct slug guess against
+    # 3 ATS APIs normally lands in 1-2s; anything slower goes async instead
+    # of leaving the user staring at a spinner.
+    startup_hunt_resolve_sync_timeout_seconds: float = 3.0
+
+    # ── Startup Hunt — providers ─────────────────────────────────────────────
+    # Per-provider kill switch, server-side only - there is no per-request
+    # "provider enabled" toggle anymore (removed from StartupHuntSearchRequest
+    # along with the old "Provider controls" UI section). Greenhouse/Lever/Ashby
+    # need no credentials (public ATS APIs); TheirStack/Google-web also need
+    # their respective keys configured below to actually run even if enabled.
+    startup_hunt_greenhouse_enabled: bool = True
+    startup_hunt_lever_enabled: bool = True
+    startup_hunt_ashby_enabled: bool = True
+    # Combined result cap across greenhouse+lever+ashby for one hunt - mirrors
+    # the old request-level ats_limit's default (15), now fixed server-side.
+    startup_hunt_ats_result_limit: int = 15
+    startup_hunt_theirstack_enabled: bool = True
+    # Mirrors the old request-level theirstack_limit's default (15).
+    startup_hunt_theirstack_result_limit: int = 15
+    # TheirStack is the only metered/paid Startup Hunt source - global daily
+    # call cap shared across every user, protects its own account-level quota
+    # from aggregate exhaustion the same way adzuna_daily_call_budget does
+    # for job_search. PLACEHOLDER - tune from real usage/plan data once
+    # available, same caveat as job_search's provider budgets.
+    startup_hunt_theirstack_daily_budget: int = 150
+    # Whole-tool external-call budget, combined across every Startup Hunt
+    # source (not just TheirStack) - a cost-governance ceiling distinct from
+    # any single source's own quota, mirrors job_search_tool_daily_budget.
+    # PLACEHOLDER, same caveat.
+    startup_hunt_tool_daily_budget: int = 500
+    # Off by default - CSE-only web discovery (see providers/google_web.py for
+    # why the scrape-fallback other web-discovery code paths have was dropped
+    # rather than ported). Flip on once Google CSE credentials are configured
+    # and you actually want this source contributing results.
+    startup_hunt_google_web_enabled: bool = False
+    startup_hunt_google_web_result_limit: int = 15
+
+    # ── Startup Hunt — automated discovery/resolution/sync crawler pipeline ──
+    # Off by default - robots.txt and llms.txt at startupmap.one both
+    # explicitly welcome crawlers/AI, but no separate Terms of Service could
+    # be located (checked the sitemap, llms.txt, and the homepage's static
+    # HTML - see discovery/startupmap.py's module docstring). Flip on only
+    # once that gap has been explicitly accepted or resolved.
+    startup_hunt_startupmap_enabled: bool = True
+    # How many /startup/{slug} detail pages discovery/startupmap.py fetches
+    # per run - each one is a real page fetch against startupmap.one's
+    # server, and this whole call has to fit inside the ARQ job_timeout
+    # (30s) too. Measured live: 50 pages at concurrency=5 takes ~12s, well
+    # within budget. At 50/run x 8 runs/day (see arq_worker.py's cron_jobs)
+    # that's a full first pass across the ~4,500 listed startups in ~11
+    # days - tune further once this is live and its real-world impact is
+    # observed.
+    startup_hunt_discovery_batch_size: int = 50
+    # How many /startup/{slug} pages are fetched concurrently within one
+    # discovery run - bounded so this never opens more than a handful of
+    # simultaneous connections to their server at once.
+    startup_hunt_startupmap_fetch_concurrency: int = 5
+    # How many due companies the scheduler dispatches to the sync queue per
+    # tick - small and continuous (PRD section 26), not one giant daily batch.
+    startup_hunt_sync_batch_size: int = 50
+    # Default crawl_frequency_hours for a newly-resolved company (PRD section 24).
+    startup_hunt_crawl_frequency_default_hours: int = 48
+    # SSRF guard limits for the generic career-page crawler and (once enabled)
+    # StartupMap discovery - both fetch arbitrary third-party URLs.
+    startup_hunt_ssrf_max_redirects: int = 3
+    startup_hunt_ssrf_max_response_bytes: int = 2_000_000
+    startup_hunt_ssrf_timeout_seconds: float = 10.0
+    # Stuck-resolution sweep (ingestion/scheduler.py::sweep_stuck_resolutions) -
+    # catches companies left in status='resolving' by a resolve_company_task
+    # that crashed/was killed mid-job, which ARQ's own retry mechanism does
+    # not cover (it only retries jobs that explicitly raise arq.Retry).
+    startup_hunt_resolution_stuck_after_minutes: int = 30
+    startup_hunt_resolution_max_attempts: int = 5
+    startup_hunt_resolution_sweep_batch_size: int = 100
+    # Generic discovered-company sweep (ingestion/scheduler.py::
+    # sweep_undiscovered_companies) - catches ANY company_registry row left at
+    # status='discovered' regardless of which pipeline inserted it, not just
+    # discovery_worker.py's own StartupMap rows. Needed because startup_scout
+    # writes rows into company_registry from inside an HTTP request handler,
+    # which has no ARQ worker context to enqueue resolve_company_task through
+    # directly the way discovery_worker.py does inline - this sweep is its
+    # only path to getting resolved. Also hardens discovery_worker.py's own
+    # existing path: if it crashed between its commit() and its inline enqueue
+    # loop, rows would otherwise sit at 'discovered' forever with nothing else
+    # ever picking them up.
+    startup_hunt_discovery_sweep_after_minutes: int = 5
+    startup_hunt_discovery_sweep_batch_size: int = 100
+    # ATS boards (esp. Lever, which only exposes createdAt - no repost/update
+    # timestamp) can list postings well over a year old that are still
+    # technically "open". Sync skips writing/refreshing any posting older
+    # than this - postings with no posted_at at all (generic_crawler, mostly)
+    # are kept, since "unknown age" isn't evidence of staleness. A posting
+    # that stops qualifying just stops being refreshed and ages out via the
+    # existing expires_at TTL (see job_search/tasks.py::sweep_expired_jobs) -
+    # no separate cleanup pass needed.
+    startup_hunt_job_max_age_days: int = 30
+
     google_cse_api_key: str = ""
     google_cse_cx: str = ""
     apify_api_token: str = ""
@@ -177,16 +287,29 @@ class Settings(BaseSettings):
     startup_hunt_contact_enrichment_provider: str = ""
     apollo_api_key: str = ""
     people_data_labs_api_key: str = ""
-    # Crunchbase Basic API (free tier: 200 searches/month).
-    # Used by Startup Scout Phase A for structured EU company discovery.
-    # Get from: https://www.crunchbase.com/api
-    crunchbase_api_key: str = ""
+
+    # ── Startup Scout ────────────────────────────────────────────────────────
+    # Redis response cache TTL for identical (location, funding_stages,
+    # industry, size_range, limit) searches - deliberately far longer than
+    # job_search/startup_hunt's ~900s. A company's existence, funding stage,
+    # and team size don't meaningfully change hour to hour the way a job
+    # listing's availability does, so a much longer cache window is safe here.
+    startup_scout_response_cache_ttl_seconds: int = 21600  # 6 hours
+    # Explicit, not just relying on the ddgs library's own default (5s,
+    # verified by reading its source) - declared here so it's visible/tunable
+    # without reading a third-party library to find out what it currently is.
+    startup_scout_ddg_timeout_seconds: int = 8
 
     # ── Bulk Email ───────────────────────────────────────────────────────────
     # Minimum delay between individual emails to avoid spam flags (seconds)
     bulk_email_min_delay_seconds: int = 20
     # Worker-side token-bucket cap on Resend sends across all campaigns combined
     bulk_email_sends_per_second: int = 5
+    # Stuck-'sending' sweep (bulk_email/tasks.py::sweep_stuck_email_sends) -
+    # catches recipients left mid-send by a worker crash, which neither
+    # send_campaign_email's own Retry nor ARQ's max_tries covers on its own.
+    bulk_email_stuck_sending_after_minutes: int = 10
+    bulk_email_sweep_batch_size: int = 200
 
     # ── Cloudinary (CV photo storage) ───────────────────────────────────────
     # Get from Cloudinary dashboard's Account Details page.
@@ -202,6 +325,32 @@ class Settings(BaseSettings):
     clerk_issuer: str = ""
     # Svix signing secret for verifying inbound webhooks (app/modules/auth/routes.py).
     clerk_webhook_secret: str = ""
+    # A Clerk session's `azp` claim reflects whichever origin it was actually
+    # issued from - apps/admin is a separate Next.js app/origin from apps/web
+    # (app_url), so its tokens carry a different azp and would otherwise fail
+    # core/security.py's audience check outright. Empty (default) = admin app
+    # not deployed yet, behavior is unchanged (only app_url is ever accepted).
+    # Must exactly match apps/admin's own NEXT_PUBLIC_APP_URL. If Clerk's
+    # "Allowed Subdomains" restriction is enabled on the dashboard (Configure
+    # -> Domains), the admin origin also needs adding there - by default
+    # every subdomain of the primary domain already works without that.
+    admin_app_url: str = ""
+    # Only used by scripts/promote_admin.py to find which profiles row to
+    # set role='admin' on - see that script's docstring. The Clerk account
+    # itself is created separately (dashboard or the app's own sign-up), not
+    # by this app; nothing here ever handles a credential. clerk_user_id
+    # takes precedence over email when both are set - see promote_admin.py's
+    # docstring for why email alone doesn't work in local dev (no publicly
+    # reachable webhook endpoint means profiles get a placeholder email).
+    admin_email: str = ""
+    admin_clerk_user_id: str = ""
+
+    @property
+    def clerk_allowed_origins(self) -> set[str]:
+        origins = {self.app_url}
+        if self.admin_app_url:
+            origins.add(self.admin_app_url)
+        return origins
 
     # ── Database (SQLAlchemy) ────────────────────────────────────────────────
     # Direct Postgres connection string to the same Supabase project, e.g.

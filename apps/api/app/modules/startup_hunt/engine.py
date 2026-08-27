@@ -14,7 +14,13 @@ import httpx
 
 from app.ai.llm import provider as ai_provider
 from app.core.config import settings
-from app.services.cache import cached_prompt_parse
+from app.services.cache import (
+    cached_prompt_parse,
+    check_provider_budget,
+    check_tool_budget,
+    circuit_is_open,
+    record_provider_result,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -101,9 +107,9 @@ COUNTRY_CODE_OVERRIDES = {
     "deutschland": "de",
     "united states": "us",
     "usa": "us",
-    "united kingdom": "uk",
-    "uk": "uk",
-    "great britain": "uk",
+    "united kingdom": "gb",
+    "uk": "gb",
+    "great britain": "gb",
     "france": "fr",
     "spain": "es",
     "italy": "it",
@@ -116,6 +122,8 @@ COUNTRY_CODE_OVERRIDES = {
     "ireland": "ie",
     "canada": "ca",
     "australia": "au",
+    "india": "in",
+    "new zealand": "nz",
 }
 
 
@@ -367,13 +375,34 @@ async def search_startup_hunt(
     global_sources: list[StartupHuntSourceConfig] | None = None,
     user_sources: list[StartupHuntSourceConfig] | None = None,
     strategy: dict[str, Any] | None = None,
-) -> tuple[list[dict[str, Any]], list[dict[str, Any]], list[dict[str, Any]], dict[str, Any], int, dict[str, int], dict[str, dict[str, Any]]]:
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]], list[dict[str, Any]], dict[str, Any], int, dict[str, int], dict[str, dict[str, Any]], list[dict[str, Any]]]:
     sources: list[StartupHuntSourceConfig] = []
-    if payload.get("include_seeded_sources") and _bucket_enabled(payload, "crawler"):
-        sources.extend(global_sources or [])
-    # A user's own explicitly-added sources are always searched — no reason to
-    # hide them behind the (currently off-by-default) crawler bucket toggle.
-    sources.extend(user_sources or [])
+    # Previously also required _bucket_enabled(payload, "crawler") - a
+    # per-request bucket toggle that had no UI control and always defaulted
+    # False, so this condition was permanently unreachable: global (curated)
+    # seeded sources - including any greenhouse/lever/ashby company boards -
+    # never actually got included regardless of what a user set
+    # include_seeded_sources to. include_seeded_sources is a real, distinct
+    # request field with its own UI toggle (unlike the bucket bools, which
+    # are gone now) - that alone is the intended gate here.
+    #
+    # user_sources (a user's own added companies, via "My Sources") used to
+    # always run regardless of this toggle. Folded under the same gate now -
+    # the toggle is the user's explicit "search my watchlist too" decision,
+    # and that should cover their own added companies just as much as the
+    # shared curated list, not bypass it.
+    if payload.get("include_seeded_sources"):
+        # The "crawler" bucket (startup_company/startup_directory sources)
+        # is permanently disabled - see _bucket_enabled's flag_map, which
+        # never includes "crawler" - so anything routed there is fetched
+        # (real HTTP scrape + contact extraction + an LLM metadata call,
+        # see _fetch_startup_company) only to be discarded later by
+        # _apply_bucket_caps's 0 cap. Skip it here instead of paying that
+        # cost for a guaranteed-zero result. Re-enabling this bucket would
+        # also reintroduce contact-page scraping, which product explicitly
+        # doesn't want for Startup Hunt.
+        sources.extend(s for s in (global_sources or []) if _source_bucket(s) != "crawler")
+        sources.extend(s for s in (user_sources or []) if _source_bucket(s) != "crawler")
     sources.extend(_auto_sources_from_integrations(payload))
     sources.extend(_auto_dynamic_sources(payload))
     # Callers that already parsed strategy_prompt (e.g. to score DB-cache
@@ -382,7 +411,7 @@ async def search_startup_hunt(
     if strategy is None:
         strategy = await parse_strategy_prompt(payload.get("strategy_prompt"))
     if not sources:
-        return [], [], [], strategy, 0, {bucket: 0 for bucket in SOURCE_BUCKETS}, _build_source_diagnostics(payload, [], [])
+        return [], [], [], strategy, 0, {bucket: 0 for bucket in SOURCE_BUCKETS}, _build_source_diagnostics(payload, [], []), []
 
     total_budget = float(getattr(settings, "startup_hunt_total_budget_seconds", 150))
     bucket_fatal: dict[str, str] = {}
@@ -472,6 +501,15 @@ async def search_startup_hunt(
         results.extend(items)
 
     results = await _enrich_opportunities_contacts(results)
+    # Every raw item this search actually fetched live, before scoring/
+    # filtering/bucket-capping - the caller (service.py) caches this
+    # wholesale (for cacheable source types) so a job we already paid a
+    # provider for is reusable by a LATER search with different filters,
+    # not just this one. Caching only `results`/`overflow_results` (the
+    # post-filter survivors) would mean a hard-excluded item (wrong
+    # seniority, no keyword match, etc.) - which may well match some other
+    # search - gets thrown away and re-fetched live next time.
+    raw_items = list(results)
 
     scored: list[dict[str, Any]] = []
     filtered_out: list[dict[str, Any]] = []
@@ -480,12 +518,45 @@ async def search_startup_hunt(
         if scored_item is not None:
             scored.append(scored_item)
         elif filter_reason:
+            # Kept close to the full raw item, not just a name/reason
+            # summary - a filtered-out result is often a false negative
+            # (the heuristic filters here are approximate: keyword match,
+            # location, freshness, seniority, etc.), so the frontend can
+            # offer the same Open/Save actions a normal result gets instead
+            # of only explaining why it was hidden. score_total/labels/
+            # reasons are omitted (left at neutral defaults on the frontend)
+            # since _score_opportunity returned before computing them for a
+            # filtered item - there's no real score to show.
+            canonical_key = item.get("canonical_job_url") or (
+                f'{normalize_text(str(item.get("company_name") or ""))}|'
+                f'{normalize_text(str(item.get("role_title") or ""))}|'
+                f'{normalize_text(str(item.get("location") or ""))}'
+            )
+            existing = existing_opportunities.get(canonical_key)
+            posted_at = item.get("posted_at")
             filtered_out.append(
                 {
                     "company_name": item.get("company_name"),
+                    "company_domain": item.get("company_domain"),
+                    "company_website_url": item.get("company_website_url"),
+                    "company_careers_url": item.get("company_careers_url"),
                     "role_title": item.get("role_title"),
+                    "location": item.get("location"),
+                    "country": item.get("country"),
                     "source_name": item.get("source_name"),
+                    "source_type": item.get("source_type"),
                     "source_bucket": _result_source_bucket(item),
+                    "direct_apply_url": item.get("direct_apply_url"),
+                    "canonical_job_url": item.get("canonical_job_url"),
+                    "portal_job_url": item.get("portal_job_url"),
+                    "posted_at": posted_at.isoformat() if isinstance(posted_at, datetime) else posted_at,
+                    "opportunity_kind": item.get("opportunity_kind", "job"),
+                    "citation": item.get("citation") or {},
+                    "company": item.get("company_payload") or {},
+                    "contacts": item.get("contacts") or [],
+                    "saved": bool(existing),
+                    "saved_status": existing.get("opportunity_status") if existing else None,
+                    "saved_opportunity_id": existing.get("id") if existing else None,
                     "reason": filter_reason,
                 }
             )
@@ -510,7 +581,7 @@ async def search_startup_hunt(
     effective_limit = _effective_result_limit(payload, sources)
     primary_results = capped[:effective_limit]
     overflow_results = capped[effective_limit:]
-    return primary_results, overflow_results, filtered_out[:50], strategy, len(sources), source_result_counts, source_diagnostics
+    return primary_results, overflow_results, filtered_out[:50], strategy, len(sources), source_result_counts, source_diagnostics, raw_items
 
 
 def _apply_bucket_caps(
@@ -643,6 +714,18 @@ def _classify_bucket_fatal(exc: Exception) -> tuple[int | None, str | None]:
     return None, None
 
 
+# Only theirstack_search has a real external usage cost - everyone else
+# (greenhouse/lever/ashby's public boards, google_web's CSE free tier, and
+# the untouched legacy source types) passes None here, which makes
+# check_provider_budget a no-op that skips Redis entirely. Kept as a dict
+# rather than an inline if/else so a future metered addition is a one-line
+# change here, not a new branch in _fetch_source_safe.
+def _provider_daily_budget(provider_name: str) -> int | None:
+    if provider_name == "theirstack_search":
+        return settings.startup_hunt_theirstack_daily_budget
+    return None
+
+
 async def _fetch_source_safe(
     client: httpx.AsyncClient,
     source: StartupHuntSourceConfig,
@@ -653,10 +736,28 @@ async def _fetch_source_safe(
     bucket = _source_bucket(source)
     if bucket_fatal is not None and bucket in bucket_fatal:
         return {"items": [], "error": bucket_fatal[bucket]}
+
+    provider_name = source.type
+    # Circuit breaker + budget gates, same pattern as job_search's
+    # _fetch_provider_safe - if a source starts hard-failing repeatedly, skip
+    # it without paying the full request timeout on a call that's essentially
+    # guaranteed to fail; if a metered source (theirstack) is out of budget
+    # for the day, skip it rather than burning real external spend. Silent
+    # skip (no error surfaced), matching job_search's own choice not to alarm
+    # the user over a deliberate self-protective pause.
+    if await circuit_is_open("startup_hunt", provider_name):
+        return {"items": [], "error": None}
+    if not await check_provider_budget("startup_hunt", provider_name, _provider_daily_budget(provider_name)):
+        return {"items": [], "error": None}
+    if not await check_tool_budget("startup_hunt", settings.startup_hunt_tool_daily_budget):
+        return {"items": [], "error": None}
+
     try:
         items = await _fetch_source(client, source, payload, strategy)
+        await record_provider_result("startup_hunt", provider_name, ok=True)
         return {"items": items, "error": None}
     except Exception as exc:
+        await record_provider_result("startup_hunt", provider_name, ok=False)
         status, friendly = _classify_bucket_fatal(exc)
         if status and bucket_fatal is not None:
             reason = friendly or "This source is temporarily unavailable."
@@ -675,18 +776,27 @@ async def _fetch_source(
     payload: dict[str, Any],
     strategy: dict[str, Any],
 ) -> list[dict[str, Any]]:
+    # Deferred imports (not at module top) - these provider modules import
+    # shared helpers (normalize_text, StartupHuntSourceConfig, etc.) FROM
+    # this module, so importing them back at engine.py's top would be a
+    # circular import. By the time _fetch_source is actually called, this
+    # module has finished loading and the cycle is a non-issue.
     if source.type == "greenhouse":
-        return await _fetch_greenhouse(client, source)
+        from app.modules.startup_hunt.providers import greenhouse
+        return await greenhouse.fetch(client, source) if greenhouse.is_available() else []
     if source.type == "lever":
-        return await _fetch_lever(client, source)
+        from app.modules.startup_hunt.providers import lever
+        return await lever.fetch(client, source) if lever.is_available() else []
     if source.type == "ashby":
-        return await _fetch_ashby(client, source)
+        from app.modules.startup_hunt.providers import ashby
+        return await ashby.fetch(client, source) if ashby.is_available() else []
     if source.type == "startup_company":
         return await _fetch_startup_company(client, source, payload)
     if source.type == "startup_directory":
         return await _fetch_startup_directory(client, source, payload, strategy)
     if source.type == "google_web":
-        return await _fetch_google_web(client, source, payload, strategy)
+        from app.modules.startup_hunt.providers import google_web
+        return await google_web.fetch(client, source, payload, strategy) if google_web.is_available() else []
     if source.type == "web_search":
         return await _fetch_web_search(client, source, payload, strategy)
     if source.type == "ats_discovery":
@@ -696,7 +806,8 @@ async def _fetch_source(
     if source.type == "indeed_search":
         return await _fetch_indeed_search(client, source, payload, strategy)
     if source.type == "theirstack_search":
-        return await _fetch_theirstack_search(client, source, payload, strategy)
+        from app.modules.startup_hunt.providers import theirstack
+        return await theirstack.fetch(client, source, payload, strategy) if theirstack.is_available() else []
     return []
 
 
@@ -754,7 +865,13 @@ def _auto_sources_from_integrations(payload: dict[str, Any]) -> list[StartupHunt
                     metadata={"location": location},
                 )
             )
-    if _bucket_enabled(payload, "theirstack") and payload.get("theirstack_limit", 0) > 0 and settings.theirstack_api_key:
+    # No `and payload.get("theirstack_limit", 0) > 0` check here anymore -
+    # that field no longer exists on the request (removed along with the
+    # old per-request provider toggles), so it would always have evaluated
+    # to 0 > 0 = False, silently disabling TheirStack regardless of
+    # _bucket_enabled's value. _bucket_enabled(payload, "theirstack") is
+    # config-driven now (see that function) and is the real gate.
+    if _bucket_enabled(payload, "theirstack") and settings.theirstack_api_key:
         sources.append(
             StartupHuntSourceConfig(
                 type="theirstack_search",
@@ -858,27 +975,48 @@ def _result_source_bucket(item: dict[str, Any]) -> str:
 def _bucket_limit(payload: dict[str, Any], bucket: str) -> int:
     if not _bucket_enabled(payload, bucket):
         return 0
+    # Fixed server-side caps for the buckets this refactor manages - mirrors
+    # what used to be per-request *_limit fields, now config (see
+    # config.py's "Startup Hunt — providers" section). Every other bucket
+    # (crawler/startupmap/indeed/apify) isn't gated here at all anymore -
+    # they resolve to 0 via _bucket_enabled below, same as their
+    # always-off-in-practice behavior before this refactor.
     limits = {
-        "crawler": int(payload.get("crawler_limit", 0)),
-        "startupmap": int(payload.get("startupmap_limit", 0)),
-        "web": int(payload.get("web_limit", 0)),
-        "indeed": int(payload.get("indeed_limit", 0)),
-        "theirstack": int(payload.get("theirstack_limit", 0)),
-        "apify": int(payload.get("apify_limit", 0)),
-        "ats": int(payload.get("ats_limit", 0)),
+        "ats": settings.startup_hunt_ats_result_limit,
+        "theirstack": settings.startup_hunt_theirstack_result_limit,
+        "web": settings.startup_hunt_google_web_result_limit,
     }
     return limits.get(bucket, 0)
 
 
 def _bucket_enabled(payload: dict[str, Any], bucket: str) -> bool:
+    # Server-side config decides whether a provider is allowed to run at
+    # all now - the old per-request *_enabled booleans (and the "Provider
+    # controls" UI that set them) are gone. "ats" is true if any of
+    # greenhouse/lever/ashby is on (whichever's actually enabled still needs
+    # this bucket's cap to be non-zero for its results to survive
+    # _apply_bucket_caps). Every other bucket (crawler/startupmap/indeed/
+    # apify) stays off - none of them had a working UI toggle before this
+    # refactor either, so this isn't a behavior change for them.
+    #
+    # theirstack is the one exception that still reads `payload`:
+    # service.py's DB-first shortfall check writes
+    # payload["theirstack_enabled"] = False for one specific search when the
+    # DB cache already covers it - that's not a user-facing toggle, it's an
+    # internal "don't bother, DB already has enough" signal layered on top
+    # of the config gate, not instead of it.
+    if bucket == "theirstack":
+        return settings.startup_hunt_theirstack_enabled and bool(payload.get("theirstack_enabled", True))
+    # web gets the same payload-override treatment as theirstack, for the
+    # same reason: service.py's cost-aware fetch ordering (phase
+    # 1 = every free bucket incl. web, phase 2 = TheirStack only) writes
+    # payload["web_enabled"] = False into phase 2's payload so google_web
+    # (if it's ever turned on) doesn't get fetched a second time - it was
+    # already covered in phase 1.
+    if bucket == "web":
+        return settings.startup_hunt_google_web_enabled and bool(payload.get("web_enabled", True))
     flag_map = {
-        "crawler": bool(payload.get("crawler_enabled", False)),
-        "startupmap": bool(payload.get("startupmap_enabled", False)),
-        "web": bool(payload.get("web_enabled", False)),
-        "indeed": bool(payload.get("indeed_enabled", False)),
-        "theirstack": bool(payload.get("theirstack_enabled", True)),
-        "apify": bool(payload.get("apify_enabled", False)),
-        "ats": bool(payload.get("ats_enabled", True)),
+        "ats": settings.startup_hunt_greenhouse_enabled or settings.startup_hunt_lever_enabled or settings.startup_hunt_ashby_enabled,
     }
     return flag_map.get(bucket, False)
 
@@ -1018,192 +1156,6 @@ def _is_supported_startup_actor(actor_id: str | None) -> bool:
     if "linkedin-jobs-scraper" in normalized:
         return False
     return True
-
-
-async def _fetch_greenhouse(client: httpx.AsyncClient, source: StartupHuntSourceConfig) -> list[dict[str, Any]]:
-    response = await client.get(f"https://boards-api.greenhouse.io/v1/boards/{source.slug}/jobs")
-    response.raise_for_status()
-    payload = response.json()
-    opportunities: list[dict[str, Any]] = []
-    for item in payload.get("jobs", []):
-        job_url = item.get("absolute_url")
-        title = item.get("title")
-        if not job_url or not title:
-            continue
-        company_payload = _base_company_payload(source)
-        opportunities.append(
-            {
-                "opportunity_kind": "job",
-                "company_name": source.company,
-                "company_domain": extract_domain(company_payload.get("company_website_url")),
-                "company_website_url": company_payload.get("company_website_url"),
-                "company_careers_url": company_payload.get("company_careers_url"),
-                "role_title": title,
-                "location": ((item.get("location") or {}).get("name") or company_payload.get("city") or "Unspecified").strip(),
-                "country": company_payload.get("country"),
-                "source_name": source.name,
-                "source_type": source.type,
-                "direct_apply_url": job_url,
-                "canonical_job_url": canonicalize_url(job_url),
-                "portal_job_url": None,
-                "posted_at": parse_dt(item.get("updated_at")),
-                "company_payload": company_payload,
-                "contacts": _contacts_from_metadata(source.metadata, source.company),
-                "raw_text": f"{title} {source.company}",
-                "citation": {
-                    "source_name": source.name,
-                    "canonical_url": canonicalize_url(job_url),
-                    "job_url": job_url,
-                    "posted_at": item.get("updated_at"),
-                    "evidence": ["Fetched from configured greenhouse ATS feed"],
-                    "extraction_note": "Direct ATS source used for freshest company-hosted apply link.",
-                },
-            }
-        )
-    return opportunities
-
-
-async def _fetch_lever(client: httpx.AsyncClient, source: StartupHuntSourceConfig) -> list[dict[str, Any]]:
-    response = await client.get(f"https://api.lever.co/v0/postings/{source.slug}?mode=json")
-    response.raise_for_status()
-    payload = response.json()
-    opportunities: list[dict[str, Any]] = []
-    for item in payload:
-        job_url = item.get("hostedUrl")
-        title = item.get("text")
-        if not job_url or not title:
-            continue
-        categories = item.get("categories") or {}
-        description_parts = []
-        for block in item.get("lists", []) or []:
-            content = block.get("content")
-            if content:
-                description_parts.append(re.sub(r"<[^>]+>", " ", content))
-        description_text = re.sub(r"\s+", " ", " ".join(description_parts)).strip()
-        company_payload = _base_company_payload(source)
-        opportunities.append(
-            {
-                "opportunity_kind": "job",
-                "company_name": source.company,
-                "company_domain": extract_domain(company_payload.get("company_website_url")),
-                "company_website_url": company_payload.get("company_website_url"),
-                "company_careers_url": company_payload.get("company_careers_url"),
-                "role_title": title,
-                "location": (categories.get("location") or company_payload.get("city") or "Unspecified").strip(),
-                "country": company_payload.get("country"),
-                "source_name": source.name,
-                "source_type": source.type,
-                "direct_apply_url": job_url,
-                "canonical_job_url": canonicalize_url(job_url),
-                "portal_job_url": None,
-                "posted_at": datetime.fromtimestamp(item.get("createdAt", 0) / 1000, tz=timezone.utc) if item.get("createdAt") else None,
-                "company_payload": company_payload,
-                "contacts": _contacts_from_metadata(source.metadata, source.company),
-                "raw_text": f"{title} {source.company} {description_text}",
-                "citation": {
-                    "source_name": source.name,
-                    "canonical_url": canonicalize_url(job_url),
-                    "job_url": job_url,
-                    "posted_at": datetime.fromtimestamp(item.get("createdAt", 0) / 1000, tz=timezone.utc).isoformat() if item.get("createdAt") else None,
-                    "evidence": ["Fetched from configured lever ATS feed"],
-                    "extraction_note": "Direct ATS source used for startup-hosted role details and apply link.",
-                },
-            }
-        )
-    return opportunities
-
-
-async def _fetch_ashby(client: httpx.AsyncClient, source: StartupHuntSourceConfig) -> list[dict[str, Any]]:
-    board_name = _ashby_board_name(source)
-    if not board_name:
-        return []
-
-    try:
-        response = await client.get(
-            f"https://api.ashbyhq.com/posting-api/job-board/{board_name}",
-            params={"includeCompensation": "true"},
-        )
-        response.raise_for_status()
-    except httpx.HTTPStatusError as exc:
-        if exc.response is not None and exc.response.status_code == 404:
-            fallback_url = (
-                str(source.metadata.get("careers_url") or "").strip()
-                or str(source.metadata.get("company_website_url") or "").strip()
-                or source.url
-            )
-            if fallback_url:
-                fallback_source = StartupHuntSourceConfig(
-                    type="startup_company",
-                    name=source.name,
-                    company=source.company,
-                    slug=source.slug,
-                    url=fallback_url,
-                    metadata=source.metadata,
-                )
-                return await _fetch_startup_company(client, fallback_source, {"query": source.metadata.get("target_role") or "AI/ML Engineer", **{"location": source.metadata.get("city") or "Germany", "country": source.metadata.get("country") or "Germany"}})
-        raise
-    payload = response.json()
-    opportunities: list[dict[str, Any]] = []
-    company_payload = _base_company_payload(source)
-    company_payload["company_careers_url"] = company_payload.get("company_careers_url") or source.url or f"https://jobs.ashbyhq.com/{board_name}"
-
-    for item in payload.get("jobs", []) or []:
-        title = str(item.get("title", "")).strip()
-        if not title:
-            continue
-        direct_apply_url = str(item.get("applyUrl") or "").strip() or None
-        job_url = str(item.get("jobUrl") or "").strip() or direct_apply_url
-        if not job_url and not direct_apply_url:
-            continue
-
-        description = str(item.get("descriptionPlain") or "").strip()
-        location = _ashby_location(item) or company_payload.get("city") or "Unspecified"
-        opportunities.append(
-            {
-                "opportunity_kind": "job",
-                "company_name": source.company,
-                "company_domain": extract_domain(company_payload.get("company_website_url") or company_payload.get("company_careers_url")),
-                "company_website_url": company_payload.get("company_website_url"),
-                "company_careers_url": company_payload.get("company_careers_url"),
-                "role_title": title,
-                "location": location,
-                "country": _ashby_country(item) or company_payload.get("country"),
-                "source_name": source.name,
-                "source_type": source.type,
-                "direct_apply_url": direct_apply_url or job_url,
-                "canonical_job_url": canonicalize_url(job_url or direct_apply_url or company_payload["company_careers_url"]),
-                "portal_job_url": job_url,
-                "posted_at": parse_dt(str(item.get("publishedAt") or "")),
-                "company_payload": {
-                    **company_payload,
-                    "source_tags": [
-                        *company_payload.get("source_tags", []),
-                        *[
-                            value
-                            for value in [
-                                str(item.get("department") or "").strip() or None,
-                                str(item.get("team") or "").strip() or None,
-                                str(item.get("employmentType") or "").strip() or None,
-                                str(item.get("workplaceType") or "").strip() or None,
-                            ]
-                            if value
-                        ],
-                    ],
-                    "english_friendly": bool(company_payload.get("english_friendly")) or "english" in normalize_text(description),
-                },
-                "contacts": _contacts_from_metadata(source.metadata, source.company),
-                "raw_text": f"{title} {source.company} {location} {description}",
-                "citation": {
-                    "source_name": source.name,
-                    "canonical_url": canonicalize_url(job_url or direct_apply_url or company_payload["company_careers_url"]),
-                    "job_url": direct_apply_url or job_url or company_payload["company_careers_url"],
-                    "posted_at": item.get("publishedAt"),
-                    "evidence": ["Fetched from configured Ashby job board"],
-                    "extraction_note": "Direct Ashby job board source used for current public startup roles.",
-                },
-            }
-        )
-    return opportunities
 
 
 async def _fetch_startup_company(
@@ -1557,99 +1509,6 @@ def _dedupe_directory_entries(entries: list[dict[str, Any]]) -> list[dict[str, A
         if current is None or len(entry.get("summary") or "") > len(current.get("summary") or ""):
             deduped[key] = entry
     return list(deduped.values())
-
-
-async def _fetch_google_web(
-    client: httpx.AsyncClient,
-    source: StartupHuntSourceConfig,
-    payload: dict[str, Any],
-    strategy: dict[str, Any],
-) -> list[dict[str, Any]]:
-    if not settings.google_cse_api_key or not settings.google_cse_cx:
-        return []
-
-    query = _build_web_query(payload, strategy)
-    target = max(int(payload.get("web_limit", 0) or 0), int(payload.get("result_limit", 15) or 15))
-    target = max(1, min(target * 2, 50))
-
-    raw_items: list[dict[str, Any]] = []
-    start = 1
-    while len(raw_items) < target and start <= 91:
-        response = await client.get(
-            "https://www.googleapis.com/customsearch/v1",
-            params={
-                "key": settings.google_cse_api_key,
-                "cx": settings.google_cse_cx,
-                "q": query,
-                "num": min(10, target - len(raw_items)),
-                "start": start,
-                "dateRestrict": _google_date_restrict(payload.get("posted_within_hours")),
-            },
-        )
-        if response.status_code in (400, 429):
-            break
-        response.raise_for_status()
-        data = response.json()
-        page = data.get("items", []) or []
-        if not page:
-            break
-        raw_items.extend(page)
-        start += len(page)
-        if len(page) < 10:
-            break
-
-    opportunities: list[dict[str, Any]] = []
-    for item in raw_items:
-        link = str(item.get("link", "")).strip()
-        title = str(item.get("title", "")).strip()
-        snippet = str(item.get("snippet", "")).strip()
-        if not link or not title:
-            continue
-
-        company_name = _infer_company_from_search_result(title, link)
-        role_title = _role_title_from_search_result(title, payload["query"])
-        company_payload = {
-            "stage": None,
-            "company_size": None,
-            "country": payload.get("country"),
-            "city": payload.get("location"),
-            "english_friendly": "english" in normalize_text(snippet),
-            "ai_relevance": snippet,
-            "relocation_support": "relocation" if "relocation" in normalize_text(snippet) else None,
-            "company_website_url": _root_url(link),
-            "company_careers_url": link if any(token in link.lower() for token in ["/careers", "/jobs", "greenhouse.io", "lever.co", "ashbyhq.com", "workable.com", "smartrecruiters.com"]) else None,
-            "source_tags": ["google-web"],
-        }
-        opportunities.append(
-            {
-                "opportunity_kind": "job" if company_payload["company_careers_url"] else "outreach_lead",
-                "company_name": company_name,
-                "company_domain": extract_domain(link),
-                "company_website_url": company_payload["company_website_url"],
-                "company_careers_url": company_payload["company_careers_url"],
-                "role_title": role_title,
-                "location": payload["location"],
-                "country": payload.get("country"),
-                "source_name": source.name,
-                "source_type": source.type,
-                "direct_apply_url": company_payload["company_careers_url"],
-                "canonical_job_url": canonicalize_url(company_payload["company_careers_url"]) if company_payload["company_careers_url"] else None,
-                "portal_job_url": link,
-                "posted_at": None,
-                "company_payload": company_payload,
-                "contacts": [],
-                "raw_text": f"{title} {snippet}",
-                "citation": {
-                    "source_name": source.name,
-                    "canonical_url": canonicalize_url(link),
-                    "job_url": link,
-                    "posted_at": None,
-                    "evidence": ["Discovered via Google Programmable Search"],
-                    "extraction_note": "Web-discovered lead found through Google-based startup and job search.",
-                },
-            }
-        )
-    return opportunities
 
 
 async def _fetch_web_search(
@@ -2040,53 +1899,6 @@ async def _fetch_indeed_search(
     return _normalize_apify_items(items, source.name, source.type, payload, contract)
 
 
-async def _fetch_theirstack_search(
-    client: httpx.AsyncClient,
-    source: StartupHuntSourceConfig,
-    payload: dict[str, Any],
-    strategy: dict[str, Any],
-) -> list[dict[str, Any]]:
-    if not settings.theirstack_api_key:
-        return []
-
-    result_limit = max(1, int(payload.get("theirstack_limit", 0) or payload.get("result_limit", 15) or 15))
-    # TheirStack's free plan rejects the whole request (403, E-020) if `limit`
-    # exceeds its page-size cap — clamp rather than let the entire bucket fail.
-    result_limit = min(result_limit, settings.theirstack_max_page_size)
-    request_payload: dict[str, Any] = {
-        "limit": result_limit,
-        "page": 0,
-        "posted_at_max_age_days": max(1, int((payload.get("posted_within_hours") or 168) / 24)),
-        "job_title_pattern_or": _theirstack_title_patterns(payload["query"]),
-        "job_country_code_or": [_country_code_for_indeed(payload.get("country")).upper()],
-        "company_country_code_or": [_country_code_for_indeed(payload.get("country")).upper()],
-    }
-
-    if payload.get("remote_only"):
-        request_payload["remote"] = True
-
-    if _looks_startup_focused(payload, strategy):
-        request_payload["max_employee_count_or_null"] = 1000
-        explicit_stage = normalize_text(str(payload.get("company_stage") or strategy.get("company_stage") or ""))
-        if explicit_stage:
-            funding_stages = _theirstack_funding_stages(payload, strategy)
-            if funding_stages:
-                request_payload["funding_stage_or"] = funding_stages
-
-    response = await client.post(
-        f"{settings.theirstack_base_url.rstrip('/')}/v1/jobs/search",
-        headers={
-            "Authorization": f"Bearer {settings.theirstack_api_key}",
-            "Content-Type": "application/json",
-        },
-        json=request_payload,
-    )
-    response.raise_for_status()
-    data = response.json()
-    items = data if isinstance(data, list) else data.get("data") or data.get("jobs") or data.get("results") or []
-    return _normalize_theirstack_items(items, source.name, source.type, payload)
-
-
 async def _fetch_html_with_optional_scrapling(client: httpx.AsyncClient, url: str) -> str:
     try:
         from scrapling.fetchers import AsyncFetcher
@@ -2227,75 +2039,6 @@ def _normalize_apify_items(
                     "posted_at": mapped["posted_at"],
                     "evidence": [f"Discovered via {source_name}", f"Apify contract: {contract}"],
                     "extraction_note": "Result imported from Apify-powered discovery.",
-                },
-            }
-        )
-    return opportunities
-
-
-def _normalize_theirstack_items(
-    items: list[dict[str, Any]],
-    source_name: str,
-    source_type: str,
-    payload: dict[str, Any],
-) -> list[dict[str, Any]]:
-    opportunities: list[dict[str, Any]] = []
-    for item in items[: payload.get("theirstack_limit", 0) or payload.get("result_limit", 15)]:
-        if not isinstance(item, dict):
-            continue
-        company_obj = item.get("company_object") if isinstance(item.get("company_object"), dict) else {}
-        title = str(item.get("job_title") or item.get("title") or "").strip() or payload["query"]
-        company_name = str(item.get("company_name") or company_obj.get("name") or "").strip() or "Unknown company"
-        final_url = str(item.get("final_url") or item.get("url") or item.get("job_url") or "").strip()
-        source_url = str(item.get("source_url") or final_url).strip()
-        location = ", ".join([part for part in [item.get("city"), item.get("country")] if isinstance(part, str) and part.strip()]) or str(item.get("location") or payload["location"]).strip()
-        company_website_url = _safe_company_website_url(
-            company_obj.get("domain")
-            or item.get("company_domain")
-            or company_obj.get("url")
-        )
-        if company_website_url and not str(company_website_url).startswith("http"):
-            company_website_url = f"https://{str(company_website_url).lstrip('/')}"
-        company_careers_url = final_url or None
-        description = str(item.get("description") or item.get("job_description") or "").strip()
-        company_payload = {
-            "stage": _humanize_theirstack_stage(company_obj.get("funding_stage")),
-            "company_size": _humanize_employee_count(company_obj.get("employee_count")),
-            "country": item.get("country") or payload.get("country"),
-            "city": item.get("city") or payload.get("location"),
-            "english_friendly": "english" in normalize_text(description) or "english" in normalize_text(title),
-            "ai_relevance": description or title,
-            "relocation_support": "relocation" if "relocation" in normalize_text(description) else None,
-            "company_website_url": company_website_url,
-            "company_careers_url": company_careers_url,
-            "source_tags": ["theirstack", str(item.get("source") or "").strip()],
-        }
-        opportunities.append(
-            {
-                "opportunity_kind": "job",
-                "company_name": company_name,
-                "company_domain": extract_domain(company_website_url or company_careers_url or source_url),
-                "company_website_url": company_website_url,
-                "company_careers_url": company_careers_url,
-                "role_title": title,
-                "location": location,
-                "country": item.get("country") or payload.get("country"),
-                "source_name": source_name,
-                "source_type": source_type,
-                "direct_apply_url": company_careers_url,
-                "canonical_job_url": canonicalize_url(company_careers_url or source_url) if (company_careers_url or source_url) else None,
-                "portal_job_url": source_url or None,
-                "posted_at": parse_dt(str(item.get("date_posted") or item.get("posted_at") or "")),
-                "company_payload": company_payload,
-                "contacts": [],
-                "raw_text": f"{title} {company_name} {description}",
-                "citation": {
-                    "source_name": source_name,
-                    "canonical_url": canonicalize_url(source_url) if source_url else "",
-                    "job_url": company_careers_url or source_url,
-                    "posted_at": item.get("date_posted") or item.get("posted_at"),
-                    "evidence": ["Imported from TheirStack Jobs API"],
-                    "extraction_note": "Result imported from TheirStack hiring search.",
                 },
             }
         )
@@ -2671,9 +2414,18 @@ def _country_code_for_indeed(country: str | None) -> str:
     if not country:
         return "de"
     normalized = normalize_text(country)
+    # Check the override table before the raw-2-letter passthrough below -
+    # some common inputs (e.g. "UK") are themselves 2 letters but not a
+    # valid ISO 3166-1 code (that's "GB"), so returning them verbatim would
+    # silently skip the override entirely and send an invalid code to
+    # providers that require real ISO codes (TheirStack's API 400s on "UK",
+    # confirmed live - the correct code is "GB").
+    override = COUNTRY_CODE_OVERRIDES.get(normalized)
+    if override:
+        return override
     if len(normalized) == 2:
         return normalized
-    return COUNTRY_CODE_OVERRIDES.get(normalized, "de")
+    return "de"
 
 
 def _role_title_from_search_result(title: str, fallback_query: str) -> str:
@@ -2745,10 +2497,6 @@ def _search_query_variant(query: str, mode: str) -> str:
     if mode == "web":
         return f"({joined})"
     return f"({joined})"
-
-
-def _theirstack_title_patterns(query: str) -> list[str]:
-    return _ai_engineer_family_variants(query)[:6]
 
 
 def _theirstack_funding_stages(payload: dict[str, Any], strategy: dict[str, Any]) -> list[str]:
@@ -3210,49 +2958,6 @@ def _base_company_payload(source: StartupHuntSourceConfig) -> dict[str, Any]:
     }
 
 
-def _ashby_board_name(source: StartupHuntSourceConfig) -> str | None:
-    if source.slug:
-        return source.slug.strip()
-    if not source.url:
-        return None
-    parsed = urlparse(source.url)
-    parts = [part for part in parsed.path.split("/") if part]
-    if not parts:
-        return None
-    return parts[-1].strip() or None
-
-
-def _ashby_location(item: dict[str, Any]) -> str | None:
-    location = str(item.get("location") or "").strip()
-    if location:
-        return location
-    address = (((item.get("address") or {}).get("postalAddress")) or {}) if isinstance(item.get("address"), dict) else {}
-    locality = str(address.get("addressLocality") or "").strip()
-    region = str(address.get("addressRegion") or "").strip()
-    country = str(address.get("addressCountry") or "").strip()
-    parts = [part for part in [locality, region, country] if part]
-    if parts:
-        return ", ".join(parts)
-    return None
-
-
-def _ashby_country(item: dict[str, Any]) -> str | None:
-    address = (((item.get("address") or {}).get("postalAddress")) or {}) if isinstance(item.get("address"), dict) else {}
-    country = str(address.get("addressCountry") or "").strip()
-    if country:
-        return country
-    secondary = item.get("secondaryLocations") or []
-    if isinstance(secondary, list):
-        for entry in secondary:
-            if not isinstance(entry, dict):
-                continue
-            sec_address = entry.get("address") or {}
-            country = str(sec_address.get("addressCountry") or "").strip()
-            if country:
-                return country
-    return None
-
-
 def _contacts_from_metadata(metadata: dict[str, Any], company_name: str) -> list[dict[str, Any]]:
     contacts: list[dict[str, Any]] = []
     for item in metadata.get("contacts", []) if isinstance(metadata.get("contacts"), list) else []:
@@ -3557,6 +3262,25 @@ async def _enrich_contact_pdl(
     }
 
 
+def _short_company_signal(text: str, max_chars: int = 160) -> str:
+    """Trims a raw ai_relevance blob down to a citation-sized signal line.
+
+    Most providers already hand back a short search-result snippet here, but
+    TheirStack's ai_relevance is the entire raw job description verbatim
+    (seen in production: 2000+ words of markdown-formatted posting text) -
+    without this, that whole blob was dumped wholesale into a single
+    "Company signal: ..." citation line. Strips the markdown noise
+    (**bold**, # headings) that raw text carries, then cuts at the last word
+    boundary under max_chars rather than mid-word.
+    """
+    cleaned = re.sub(r"[*#]+", "", text)
+    cleaned = re.sub(r"\s+", " ", cleaned).strip()
+    if len(cleaned) <= max_chars:
+        return cleaned
+    truncated = cleaned[:max_chars].rsplit(" ", 1)[0]
+    return f"{truncated}..."
+
+
 def _score_opportunity(
     item: dict[str, Any],
     payload: dict[str, Any],
@@ -3723,7 +3447,9 @@ def _score_opportunity(
         if any(token in ai_relevance for token in ["ai", "ml", "machine learning", "llm", "data", "model"]):
             score += 2
             labels.append("AI/ML Fit")
-            reasons.append(f"Company signal: {company_payload.get('ai_relevance')}")
+            signal_text = _short_company_signal(str(company_payload.get("ai_relevance") or ""))
+            if signal_text:
+                reasons.append(f"Company signal: {signal_text}")
         stack_hits = [signal for signal in stack_signals if signal in ai_relevance or signal in raw_text or signal in normalized_title]
         if stack_hits:
             score += min(len(stack_hits), 2) * 0.75
@@ -3796,6 +3522,7 @@ def _score_opportunity(
         "rank_age_hours": age_hours,
         "source_bucket": source_bucket,
         "cache_hit": bool(item.get("cache_hit")),
+        "description_text": item.get("description_text"),
     }, None)
 
 

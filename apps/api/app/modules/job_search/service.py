@@ -12,6 +12,7 @@ import hashlib
 import json
 import logging
 import random
+import uuid
 from datetime import datetime, timedelta, timezone
 
 from fastapi import HTTPException
@@ -20,7 +21,18 @@ from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import settings
-from app.services.cache import acquire_lock, check_burst_limit, check_rate_limit, get_cached, set_cached
+from app.services.cache import (
+    acquire_lock,
+    check_burst_limit,
+    check_provider_budget,
+    check_rate_limit,
+    check_tool_budget,
+    circuit_is_open,
+    get_cached,
+    jittered_ttl,
+    record_provider_result,
+    set_cached,
+)
 from app.shared.utils import row_to_dict
 from app.modules.job_search import dedup, scoring
 from app.modules.job_search.providers import (
@@ -28,10 +40,6 @@ from app.modules.job_search.providers import (
     ProviderError,
     ProviderSpec,
     applicable_providers,
-    check_provider_budget,
-    check_tool_budget,
-    circuit_is_open,
-    record_provider_result,
 )
 from app.modules.job_search.providers import arbeitnow
 from app.modules.job_search.providers.adzuna import adzuna_country_code
@@ -132,27 +140,40 @@ def _response_cache_key(payload: dict) -> str:
     return f"job_search:{digest}"
 
 
-def _jittered_ttl(base_seconds: int, jitter_fraction: float = 0.15) -> int:
-    """Randomize a cache TTL by +/-jitter_fraction so entries written around
-    the same time (e.g. everyone's response cache filling up during a burst
-    of traffic on a popular query) don't all expire at the same instant -
-    reduces the odds of a stampede forming in the first place. The
-    single-flight lock in search_recent_jobs already handles a stampede
-    gracefully if one forms anyway; this is a cheap complement, not a
-    replacement for it."""
-    jitter = base_seconds * jitter_fraction
-    return max(1, int(base_seconds + random.uniform(-jitter, jitter)))
-
-
-async def _upsert_jobs_cache(db: AsyncSession, raw_jobs: list[dict], *, origin_tool: str = "recent_job_search") -> None:
+async def _upsert_jobs_cache(
+    db: AsyncSession,
+    raw_jobs: list[dict],
+    *,
+    origin_tool: str = "recent_job_search",
+    ttl_hours: int | None = None,
+    company_id: uuid.UUID | None = None,
+) -> None:
     """Upsert every fetched listing into the shared `jobs` cache table, keyed
     by (source, source_job_id), refreshes last_seen_at/expires_at on repeat
-    sightings instead of inserting duplicates."""
+    sightings instead of inserting duplicates.
+
+    ttl_hours: overrides the default job_search_cache_ttl_days-based expiry
+    with a shorter, caller-supplied window - used by startup_hunt's
+    background sync worker (see modules/startup_hunt/ingestion/job_sync.py),
+    where a company's own crawl_frequency_hours already bounds how soon a
+    stale posting should naturally age out of query results, much tighter
+    than the 14-day general default. None (the default) keeps the original
+    days-based behavior for every other caller.
+
+    company_id: stamped onto every row in this batch - only ever passed by
+    startup_hunt's sync worker, which always upserts one company's jobs per
+    call. None (the default) leaves it unset, correct for every other caller
+    (job_search's own providers have no company_registry concept at all).
+    """
     if not raw_jobs:
         return
 
     now = datetime.now(timezone.utc)
-    expires_at = now + timedelta(days=settings.job_search_cache_ttl_days)
+    expires_at = (
+        now + timedelta(hours=ttl_hours)
+        if ttl_hours is not None
+        else now + timedelta(days=settings.job_search_cache_ttl_days)
+    )
 
     rows = []
     for job in raw_jobs:
@@ -164,6 +185,7 @@ async def _upsert_jobs_cache(db: AsyncSession, raw_jobs: list[dict], *, origin_t
                 "source": job["provider_type"],
                 "source_job_id": job["external_job_id"],
                 "origin_tool": origin_tool,
+                "company_id": company_id,
                 "title": job["role"],
                 "company": job["company"],
                 "location": job["location"],
@@ -187,6 +209,7 @@ async def _upsert_jobs_cache(db: AsyncSession, raw_jobs: list[dict], *, origin_t
         index_elements=["source", "source_job_id"],
         set_={
             "origin_tool": stmt.excluded.origin_tool,
+            "company_id": stmt.excluded.company_id,
             "title": stmt.excluded.title,
             "company": stmt.excluded.company,
             "location": stmt.excluded.location,
@@ -302,29 +325,29 @@ async def _fetch_provider_safe(provider: ProviderSpec, payload: dict) -> tuple[l
     would (e.g. a provider with no hard external quota still costs real
     compute at volume).
     """
-    if await circuit_is_open(provider.name):
+    if await circuit_is_open("job_search", provider.name):
         logger.info("Skipping %s - circuit open (repeated recent failures)", provider.name)
         return [], None
 
-    if not await check_provider_budget(provider):
+    if not await check_provider_budget("job_search", provider.name, provider.daily_budget):
         logger.info("Skipping %s - global daily call budget exhausted", provider.name)
         return [], None
 
-    if not await check_tool_budget():
+    if not await check_tool_budget("job_search", settings.job_search_tool_daily_budget):
         logger.info("Skipping %s - whole-tool daily call budget exhausted", provider.name)
         return [], None
 
     try:
         jobs = await provider.fetch(payload)
-        await record_provider_result(provider.name, ok=True)
+        await record_provider_result("job_search", provider.name, ok=True)
         return jobs, None
     except ProviderError as exc:
         logger.warning("Provider %s failed: %s", provider.name, exc)
-        await record_provider_result(provider.name, ok=False)
+        await record_provider_result("job_search", provider.name, ok=False)
         return [], str(exc)
     except Exception:
         logger.exception("Provider %s raised an unexpected error", provider.name)
-        await record_provider_result(provider.name, ok=False)
+        await record_provider_result("job_search", provider.name, ok=False)
         return [], None
 
 
@@ -343,15 +366,15 @@ async def _fetch_bonus_jobs_raw(payload: dict) -> list[dict]:
     budget counter would add on top."""
     if not arbeitnow.is_available():
         return []
-    if await circuit_is_open("arbeitnow"):
+    if await circuit_is_open("job_search", "arbeitnow"):
         return []
     try:
         jobs = await arbeitnow.fetch(payload)
-        await record_provider_result("arbeitnow", ok=True)
+        await record_provider_result("job_search", "arbeitnow", ok=True)
         return jobs
     except Exception:
         logger.exception("Arbeitnow bonus-jobs fetch raised an unexpected error")
-        await record_provider_result("arbeitnow", ok=False)
+        await record_provider_result("job_search", "arbeitnow", ok=False)
         return []
 
 
@@ -501,7 +524,7 @@ async def search_recent_jobs(db: AsyncSession, user_id: str, body: JobSearchRequ
 
     combined_raw = db_raw_jobs + fresh_raw_jobs
     try:
-        await set_cached(cache_key, json.dumps(combined_raw), _jittered_ttl(settings.job_search_response_cache_ttl_seconds))
+        await set_cached(cache_key, json.dumps(combined_raw), jittered_ttl(settings.job_search_response_cache_ttl_seconds))
     except Exception:
         pass
 

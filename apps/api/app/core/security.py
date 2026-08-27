@@ -52,9 +52,12 @@ def verify_jwt(token: str) -> dict[str, Any]:
         )
 
         # azp (authorized party) is Clerk's equivalent of an audience check —
-        # confirms this token was issued for THIS app's origin, not some other
-        # application on the same Clerk instance replaying a valid token here.
-        if payload.get("azp") != settings.app_url:
+        # confirms this token was issued for one of OUR origins, not some
+        # other application on the same Clerk instance replaying a valid
+        # token here. More than one allowed origin only when apps/admin is
+        # configured (see settings.admin_app_url) - otherwise this is exactly
+        # the single-origin check it always was.
+        if payload.get("azp") not in settings.clerk_allowed_origins:
             raise HTTPException(status_code=401, detail="Token issued for a different origin")
 
         return payload

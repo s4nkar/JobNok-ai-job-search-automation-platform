@@ -18,34 +18,63 @@ class StartupHuntSearchRequest(BaseModel):
     english_friendly_only: bool = False
     company_stage: str | None = None
     strategy_prompt: str | None = None
-    crawler_enabled: bool = False
-    startupmap_enabled: bool = False
-    web_enabled: bool = False
-    indeed_enabled: bool = False
-    theirstack_enabled: bool = True
-    apify_enabled: bool = False
-    ats_enabled: bool = True
-    seeded_limit: int = 0
-    crawler_limit: int = 0
-    startupmap_limit: int = 0
-    web_limit: int = 0
-    indeed_limit: int = 0
-    theirstack_limit: int = 15
-    apify_limit: int = 0
-    ats_limit: int = 15
+    # Per-provider enabled/limit toggles used to live here (crawler_enabled,
+    # theirstack_limit, etc.) - removed. Every provider's on/off state and
+    # result cap is server-side config now (see config.py's "Startup Hunt —
+    # providers" section and app/modules/startup_hunt/providers/), not a
+    # per-request choice. include_seeded_sources stays - that's a real
+    # per-search data-scope choice ("include my own watchlist"), not a
+    # provider availability toggle.
 
-    @field_validator("query", "location")
+    @field_validator("query")
     @classmethod
-    def validate_required_text(cls, v: str) -> str:
+    def validate_query(cls, v: str) -> str:
         value = v.strip()
         if len(value) < 2:
             raise ValueError("Must be at least 2 characters")
+        if len(value) > 200:
+            raise ValueError("query must be at most 200 characters")
         return value
 
-    @field_validator("country", "company_stage", "strategy_prompt")
+    @field_validator("location")
     @classmethod
-    def normalize_optional_text(cls, v: str | None) -> str | None:
-        return v.strip() if v and v.strip() else None
+    def validate_location(cls, v: str) -> str:
+        # Multi-city, comma-separated ("Berlin, Munich, Remote") - wider cap
+        # than job_search's single-location field, same floor.
+        value = v.strip()
+        if len(value) < 2:
+            raise ValueError("Must be at least 2 characters")
+        if len(value) > 300:
+            raise ValueError("location must be at most 300 characters")
+        return value
+
+    @field_validator("country")
+    @classmethod
+    def normalize_country(cls, v: str | None) -> str | None:
+        value = v.strip() if v and v.strip() else None
+        if value and len(value) > 100:
+            raise ValueError("country must be at most 100 characters")
+        return value
+
+    @field_validator("company_stage")
+    @classmethod
+    def normalize_company_stage(cls, v: str | None) -> str | None:
+        value = v.strip() if v and v.strip() else None
+        if value and len(value) > 50:
+            raise ValueError("company_stage must be at most 50 characters")
+        return value
+
+    @field_validator("strategy_prompt")
+    @classmethod
+    def normalize_strategy_prompt(cls, v: str | None) -> str | None:
+        # Same 500-char cap as job_search's preferences_prompt - this text
+        # flows straight into an LLM call (parse_strategy_prompt), so an
+        # unbounded value is both a cost/DoS vector and a real risk of
+        # blowing the extraction prompt's own token budget.
+        value = v.strip() if v and v.strip() else None
+        if value and len(value) > 500:
+            raise ValueError("strategy_prompt must be at most 500 characters")
+        return value
 
     @field_validator("posted_within_hours")
     @classmethod
@@ -59,13 +88,6 @@ class StartupHuntSearchRequest(BaseModel):
     def validate_limit(cls, v: int) -> int:
         if v < 1 or v > 50:
             raise ValueError("result_limit must be between 1 and 50")
-        return v
-
-    @field_validator("seeded_limit", "crawler_limit", "startupmap_limit", "web_limit", "indeed_limit", "theirstack_limit", "apify_limit", "ats_limit")
-    @classmethod
-    def validate_source_limit(cls, v: int) -> int:
-        if v < 0 or v > 50:
-            raise ValueError("Source limits must be between 0 and 50")
         return v
 
 
@@ -105,15 +127,24 @@ class StartupHuntOpportunityCreateRequest(BaseModel):
     )
     @classmethod
     def validate_non_empty_text(cls, v: str) -> str:
+        # 300-char cap matches job_search's identical fields
+        # (source_name/company/role/location) - this endpoint is populated
+        # from search results in practice, but is still a real write
+        # endpoint a client could POST to directly with an arbitrary payload.
         value = v.strip()
         if not value:
             raise ValueError("Field is required")
+        if len(value) > 300:
+            raise ValueError("Field must be at most 300 characters")
         return value
 
     @field_validator("country", "company_domain")
     @classmethod
     def normalize_nullable_text(cls, v: str | None) -> str | None:
-        return v.strip() if v and v.strip() else None
+        value = v.strip() if v and v.strip() else None
+        if value and len(value) > 300:
+            raise ValueError("Field must be at most 300 characters")
+        return value
 
     @field_validator("posted_at", "discovered_at")
     @classmethod
@@ -181,14 +212,44 @@ class StartupHuntSourceIn(BaseModel):
         value = v.strip()
         if not value:
             raise ValueError("name is required")
+        if len(value) > 300:
+            raise ValueError("name must be at most 300 characters")
         return value
 
     @field_validator("company")
     @classmethod
     def normalize_company(cls, v: str | None) -> str | None:
-        return v.strip() if v and v.strip() else None
+        value = v.strip() if v and v.strip() else None
+        if value and len(value) > 300:
+            raise ValueError("company must be at most 300 characters")
+        return value
 
     @field_validator("slug")
     @classmethod
     def normalize_slug(cls, v: str | None) -> str | None:
-        return v.strip() if v and v.strip() else None
+        # ATS board slugs are always short (a company's own URL path segment)
+        # - 100 is generous headroom, not a tight fit.
+        value = v.strip() if v and v.strip() else None
+        if value and len(value) > 100:
+            raise ValueError("slug must be at most 100 characters")
+        return value
+
+
+class StartupHuntSourceResolveRequest(BaseModel):
+    """Smart-add input for My Sources - just a company name or a pasted
+    careers URL. See resolver.py/service.py's resolve_startup_hunt_source
+    for how this gets turned into a type/slug automatically. The old
+    explicit type/name/slug/url form (StartupHuntSourceIn above) stays as
+    the manual-entry fallback for when this can't find a match."""
+
+    company_input: str
+
+    @field_validator("company_input")
+    @classmethod
+    def validate_company_input(cls, v: str) -> str:
+        value = v.strip()
+        if len(value) < 2:
+            raise ValueError("Enter a company name or careers URL")
+        if len(value) > 300:
+            raise ValueError("Keep it under 300 characters")
+        return value
