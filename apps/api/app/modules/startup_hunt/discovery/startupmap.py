@@ -37,6 +37,7 @@ from app.core.config import settings
 from app.modules.startup_hunt.discovery.startup_source import DiscoveredStartup
 from app.modules.startup_hunt.engine import extract_domain
 from app.modules.startup_hunt.ingestion.ssrf_guard import SSRFBlockedError, safe_fetch
+from app.shared import funding_stages
 
 logger = logging.getLogger(__name__)
 
@@ -82,6 +83,37 @@ def _extract_graph_entries(html: str) -> list[dict[str, Any]]:
     return entries
 
 
+def _employee_count_from_schema(org: dict[str, Any]) -> tuple[int | None, int | None]:
+    """schema.org QuantitativeValue, e.g.
+    {"@type": "QuantitativeValue", "minValue": 51, "maxValue": 200,
+    "unitText": "employees"} - verified present on a real live page
+    (startupmap.one/startup/dance_de) before writing this. Real structured
+    data, not text to regex-parse - best-effort, any unexpected shape just
+    yields (None, None) rather than failing discovery."""
+    raw = org.get("numberOfEmployees")
+    if not isinstance(raw, dict):
+        return None, None
+    try:
+        min_value = int(raw["minValue"]) if raw.get("minValue") is not None else None
+        max_value = int(raw["maxValue"]) if raw.get("maxValue") is not None else None
+    except (TypeError, ValueError):
+        return None, None
+    return min_value, max_value
+
+
+def _funding_stage_from_keywords(org: dict[str, Any]) -> str | None:
+    """StartupMap has no dedicated funding-stage field - it shows up as a
+    plain token inside `keywords` (e.g. "Mobility & Transport, Seed",
+    verified on a real live page). Reuses the exact same detection regex
+    startup_scout's DDG-snippet parsing uses (app/shared/funding_stages.py)
+    so the two discovery paths can't produce incompatible stage strings for
+    the same company_registry.funding_stage column."""
+    keywords = str(org.get("keywords") or "")
+    if not keywords:
+        return None
+    return funding_stages.detect_stage(keywords)
+
+
 def _to_discovered(slug: str, org: dict[str, Any]) -> DiscoveredStartup | None:
     name = str(org.get("name") or "").strip()
     if not name or name == "StartupMap":
@@ -89,6 +121,7 @@ def _to_discovered(slug: str, org: dict[str, Any]) -> DiscoveredStartup | None:
     website_url = str(org.get("url") or "").strip() or None
     location = org.get("location") if isinstance(org.get("location"), dict) else {}
     address = location.get("address") if isinstance(location.get("address"), dict) else {}
+    employee_count_min, employee_count_max = _employee_count_from_schema(org)
     return DiscoveredStartup(
         name=name,
         domain=extract_domain(website_url),
@@ -98,6 +131,9 @@ def _to_discovered(slug: str, org: dict[str, Any]) -> DiscoveredStartup | None:
         discovery_source=_DISCOVERY_SOURCE,
         discovery_source_url=f"{_BASE_URL}/startup/{slug}",
         discovery_source_id=slug,
+        funding_stage=_funding_stage_from_keywords(org),
+        employee_count_min=employee_count_min,
+        employee_count_max=employee_count_max,
     )
 
 

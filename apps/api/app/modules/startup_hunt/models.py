@@ -282,6 +282,22 @@ class CompanyRegistry(Base, UUIDPKMixin, CreatedAtMixin):
     website_url: Mapped[str | None] = mapped_column(Text, nullable=True)
     country: Mapped[str | None] = mapped_column(Text, nullable=True)
     city: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # Canonical lowercase-hyphenated form (e.g. "series-a") - see
+    # app/shared/funding_stages.py, the single vocabulary both discovery
+    # paths (StartupMap's `keywords` field, startup_scout's DDG-snippet
+    # parsing) write into. Stored canonical, not display form, since
+    # matching a search request's funding_stages filter is the actual DB use
+    # case - convert to Title-Case only when building a response.
+    funding_stage: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # Numeric, not a bucket-string, deliberately: startup_scout's own
+    # detected ranges ("51-100", "101-250") use different granularity than
+    # the frontend's filter buckets ("51-200", "201-500") - an exact string
+    # match between the two would silently never fire. Storing the actual
+    # min/max lets filtering do a numeric overlap check against whatever
+    # bucket a search requested, regardless of which granularity either
+    # discovery path happened to detect at.
+    employee_count_min: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    employee_count_max: Mapped[int | None] = mapped_column(Integer, nullable=True)
     discovery_source: Mapped[str] = mapped_column(Text, nullable=False)
     discovery_source_url: Mapped[str | None] = mapped_column(Text, nullable=True)
     discovery_source_id: Mapped[str | None] = mapped_column(Text, nullable=True)

@@ -16,6 +16,8 @@
     "api:migrate:down": "docker compose exec api alembic downgrade -1",
     "api:migrate:current": "docker compose exec api alembic current",
     "admin:promote": "docker compose exec api python -m app.scripts.promote_admin",
+    "api:enqueue": "docker compose exec api python -m app.scripts.enqueue_job",
+    "api:backfill-company-metadata": "docker compose exec api python -m app.scripts.enqueue_job backfill_company_metadata",
     "build": "pnpm --filter jobnok-frontend build",
     "lint": "pnpm --filter jobnok-frontend lint",
     "typecheck": "pnpm --filter jobnok-frontend type-check",

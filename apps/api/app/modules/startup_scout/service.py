@@ -19,6 +19,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.config import settings
 from app.core.database import AsyncSessionLocal
 from app.services.cache import acquire_lock, get_cached, jittered_ttl, record_search_outcome, set_cached
+from app.shared import funding_stages
 from app.shared.repository import UserScopedRepository
 from app.shared.utils import row_to_dict
 from app.modules.startup_hunt.discovery.discovery_service import upsert_discovered
@@ -65,7 +66,9 @@ def _response_cache_key(location: str, funding_stages: list[str], industry: str,
     return f"startup_scout:{digest}"
 
 
-async def _company_registry_candidates(db: AsyncSession, location: str, limit: int) -> list[dict]:
+async def _company_registry_candidates(
+    db: AsyncSession, location: str, funding_stages_filter: list[str], size_range_filter: str, limit: int
+) -> list[dict]:
     """DB-first layer, reusing the crawler's own company_registry - free,
     always-available candidates for any location the crawler (or a prior
     startup_scout search) has already discovered.
@@ -76,23 +79,36 @@ async def _company_registry_candidates(db: AsyncSession, location: str, limit: i
     a plain case-insensitive substring check against location's own
     comma-separated parts rather than a country-code lookup.
 
-    company_registry has no funding_stage/industry/description field at all,
-    so every row returned here has an unknown stage/size - the caller
-    (search_startups below) only treats these as satisfying the request when
-    no funding_stage filter was requested, since there's no way to verify a
-    stage match against this table's data.
+    funding_stage/employee_count_min/max CAN now be verified (both discovery
+    paths populate them - see app/shared/funding_stages.py) - a row with a
+    still-NULL value is excluded when a filter is given rather than assumed
+    to match, since "unknown" isn't evidence of a match.
     """
     parts = [p.strip() for p in location.split(",") if p.strip()]
     if not parts:
         return []
-    conditions = or_(*[
+    conditions = [or_(*[
         or_(CompanyRegistry.city.ilike(f"%{p}%"), CompanyRegistry.country.ilike(f"%{p}%"))
         for p in parts
-    ])
+    ])]
+
+    if funding_stages_filter:
+        conditions.append(CompanyRegistry.funding_stage.in_(funding_stages_filter))
+
+    if size_range_filter:
+        requested_min, requested_max = funding_stages.parse_employee_range(size_range_filter)
+        if requested_min is not None and requested_max is not None:
+            conditions.append(
+                CompanyRegistry.employee_count_min.isnot(None),
+            )
+            conditions.append(CompanyRegistry.employee_count_max.isnot(None))
+            conditions.append(CompanyRegistry.employee_count_max >= requested_min)
+            conditions.append(CompanyRegistry.employee_count_min <= requested_max)
+
     rows = (
         await db.execute(
             select(CompanyRegistry)
-            .where(conditions)
+            .where(*conditions)
             .order_by(CompanyRegistry.last_discovered_at.desc())
             .limit(limit)
         )
@@ -101,9 +117,13 @@ async def _company_registry_candidates(db: AsyncSession, location: str, limit: i
         {
             "name": row.name,
             "description": "",
-            "funding_stage": "",
+            "funding_stage": funding_stages.display_stage(row.funding_stage) if row.funding_stage else "",
             "location": ", ".join(p for p in [row.city, row.country] if p) or location,
-            "size_range": "",
+            "size_range": (
+                f"{row.employee_count_min}-{row.employee_count_max}"
+                if row.employee_count_min is not None and row.employee_count_max is not None
+                else ""
+            ),
             "website": row.website_url or "",
             "domain": row.domain or "",
             "source": "company_registry",
@@ -147,6 +167,13 @@ async def _store_discovered_companies(db: AsyncSession, location: str, companies
         name = (c.get("name") or "").strip()
         if not profile_url or not name:
             continue
+        # engine._parse_company already extracts these from the scraped
+        # snippet (they're what the UI card shows) - just weren't being
+        # persisted anywhere until now. funding_stage comes back in
+        # Title-Case display form ("Series A"); canonical_stage() converts
+        # to the lowercase-hyphenated form the DB column actually stores.
+        raw_stage = (c.get("funding_stage") or "").strip()
+        employee_min, employee_max = funding_stages.parse_employee_range(c.get("size_range") or "")
         items.append(
             DiscoveredStartup(
                 name=name,
@@ -157,6 +184,9 @@ async def _store_discovered_companies(db: AsyncSession, location: str, companies
                 discovery_source="startup_scout",
                 discovery_source_url=profile_url,
                 discovery_source_id=profile_url.rstrip("/").lower(),
+                funding_stage=funding_stages.canonical_stage(raw_stage) if raw_stage else None,
+                employee_count_min=employee_min,
+                employee_count_max=employee_max,
             )
         )
     if not items:
@@ -190,6 +220,12 @@ async def search_startups(
     job_search/service.py::search_recent_jobs,
     startup_hunt/service.py::search_startup_hunt_opportunities for the same
     cache-key/single-flight-lock shape reused here).
+
+    L2 now verifies funding_stage/size_range itself (both discovery paths
+    populate them - see app/shared/funding_stages.py), so it's consulted for
+    every search shape, not just stage-agnostic ones - a row still missing
+    that data (not yet backfilled/re-discovered) just won't match a filtered
+    request, the same as any other non-matching row would.
     """
     cache_key = _response_cache_key(location, funding_stages, industry, size_range, limit)
     try:
@@ -226,10 +262,12 @@ async def search_startups(
                 except json.JSONDecodeError:
                     break
 
-    # Only consulted for stage-agnostic searches - company_registry has no
-    # data to verify a funding_stage filter against (see
-    # _company_registry_candidates' own docstring).
-    db_candidates = [] if funding_stages else await _company_registry_candidates(db, location, limit)
+    # Note: this function's own `funding_stages` parameter (the request's
+    # list of stages) intentionally shadows the app.shared.funding_stages
+    # module imported at the top of this file - that module is only used
+    # inside _company_registry_candidates/_store_discovered_companies below,
+    # never directly in this function's body.
+    db_candidates = await _company_registry_candidates(db, location, funding_stages, size_range, limit)
 
     if db_candidates and len(db_candidates) >= limit:
         result = {

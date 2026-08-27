@@ -261,6 +261,13 @@ class Settings(BaseSettings):
     # ever picking them up.
     startup_hunt_discovery_sweep_after_minutes: int = 5
     startup_hunt_discovery_sweep_batch_size: int = 100
+    # Pause between chunks in workers/backfill_worker.py - a one-off backfill
+    # processes far more total volume than any single ongoing discovery run
+    # (which only ever does startup_hunt_discovery_batch_size pages), so
+    # without a real gap between chunks it reads as one oversized burst to
+    # startupmap.one, not several ordinary-sized runs back to back. Tuned
+    # after a real run without this delay drew widespread 429s.
+    startup_hunt_backfill_chunk_delay_seconds: int = 30
     # ATS boards (esp. Lever, which only exposes createdAt - no repost/update
     # timestamp) can list postings well over a year old that are still
     # technically "open". Sync skips writing/refreshing any posting older

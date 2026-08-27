@@ -20,6 +20,14 @@ class DiscoveredStartup:
     discovery_source: str
     discovery_source_url: str | None
     discovery_source_id: str | None
+    # Optional, defaulting to None - not every discovery source can find
+    # these (see app/shared/funding_stages.py for the canonical form
+    # funding_stage is stored in). Added after the fields above with no
+    # default, so every existing positional/keyword caller keeps working
+    # unchanged.
+    funding_stage: str | None = None
+    employee_count_min: int | None = None
+    employee_count_max: int | None = None
 
 
 class StartupSource(Protocol):

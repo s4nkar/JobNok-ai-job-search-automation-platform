@@ -27,6 +27,7 @@ except ImportError:
 
 from app.core.config import settings
 from app.services.cache import circuit_is_open, record_provider_result
+from app.shared import funding_stages
 
 log = logging.getLogger(__name__)
 
@@ -562,58 +563,32 @@ def _select_platforms(location: str, stages: list[str]) -> list[Platform]:
 # ── Employee-count detector ───────────────────────────────────────────────────
 # Crunchbase snippets frequently embed the employee band in the format:
 #   "Private Seed Berlin, Germany 11-50 company.ai · AI ..."
-_EMPLOYEE_RANGE_RE = re.compile(
-    r"\b(1-10|11-50|51-100|101-250|251-500|501-1?000|1[,.]?001-5[,.]?000|5[,.]?001-10[,.]?000)\b"
-)
-
-
+# Thin wrapper over app/shared/funding_stages.py - same reasoning as
+# _detect_funding_stage/_canonical_stage above: shared with the DDG fallback
+# lookup used for StartupMap gaps (see workers/backfill_worker.py), return
+# shape here is unchanged from before that module existed.
 def _detect_employee_range(text: str) -> str:
     """Return first employee-band found in text (e.g. '11-50'), or ''."""
-    m = _EMPLOYEE_RANGE_RE.search(text)
-    return m.group(1) if m else ""
+    emp_min, emp_max = funding_stages.detect_employee_range(text)
+    return f"{emp_min}-{emp_max}" if emp_min is not None and emp_max is not None else ""
 
 
 # ── Stage normaliser (for post-search filtering) ──────────────────────────────
-_STAGE_CANONICAL: dict[str, str] = {
-    "angel":     "angel",
-    "pre-seed":  "pre-seed", "pre seed": "pre-seed",
-    "seed":      "seed",
-    "series-a":  "series-a", "series a": "series-a",
-    "series-b":  "series-b", "series b": "series-b",
-    "series-c":  "series-c", "series c": "series-c",
-    "series-c+": "series-c", "series c+": "series-c",
-    "series-d":  "series-d", "series d": "series-d",
-    "series-e":  "series-e", "series e": "series-e",
-}
-
-
+# Thin wrappers over app/shared/funding_stages.py - kept as-is here so every
+# existing call site in this file is unchanged; the underlying vocabulary is
+# now shared with startup_hunt/discovery/startupmap.py's keyword parsing, so
+# the two discovery paths can't drift into incompatible stage strings for
+# the same company_registry.funding_stage column.
 def _canonical_stage(raw: str) -> str:
-    key = re.sub(r"\s+", " ", raw.strip().lower())
-    return _STAGE_CANONICAL.get(key, key)
-
-
-_STAGE_RE = re.compile(
-    r"\b(pre[- ]seed|seed|series\s+[abc][\+]?|series[- ][abc][\+]?|angel)\b",
-    re.I,
-)
-_STAGE_NORMALISE: dict[str, str] = {
-    "pre seed": "Pre-Seed", "pre-seed": "Pre-Seed",
-    "seed": "Seed",
-    "series a": "Series A", "series-a": "Series A",
-    "series b": "Series B", "series-b": "Series B",
-    "series c": "Series C", "series-c": "Series C",
-    "series c+": "Series C+", "series c +": "Series C+",
-    "angel": "Angel",
-}
+    return funding_stages.canonical_stage(raw)
 
 
 def _detect_funding_stage(text: str) -> str:
-    """Extract the first funding-stage mention from a snippet, or return ''."""
-    m = _STAGE_RE.search(text)
-    if not m:
-        return ""
-    raw = re.sub(r"\s+", " ", m.group(0).strip().lower())
-    return _STAGE_NORMALISE.get(raw, m.group(0).title())
+    """Extract the first funding-stage mention from a snippet, in Title-Case
+    display form (e.g. "Series A"), or "" if none found - unchanged return
+    shape from before this was backed by the shared module."""
+    detected = funding_stages.detect_stage(text)
+    return funding_stages.display_stage(detected) if detected else ""
 
 
 def _parse_company(item: dict[str, str], source_platform: str = "web") -> dict[str, Any] | None:
