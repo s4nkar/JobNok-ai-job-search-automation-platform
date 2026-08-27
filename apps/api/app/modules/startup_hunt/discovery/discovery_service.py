@@ -10,7 +10,7 @@ from __future__ import annotations
 import re
 from datetime import datetime, timezone
 
-from sqlalchemy import literal_column, select
+from sqlalchemy import func, literal_column, select
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -79,22 +79,43 @@ async def upsert_discovered(db: AsyncSession, items: list[DiscoveredStartup]) ->
             discovery_source=item.discovery_source,
             discovery_source_url=item.discovery_source_url,
             discovery_source_id=item.discovery_source_id,
+            funding_stage=item.funding_stage,
+            employee_count_min=item.employee_count_min,
+            employee_count_max=item.employee_count_max,
+            description=item.description,
             last_discovered_at=now,
         )
 
+        # COALESCE(new, existing) on conflict for these three - a
+        # re-discovery that *doesn't* find stage/size data (e.g. StartupMap's
+        # keywords field happened not to mention it this time) must not blank
+        # out a value an earlier discovery already found. A fresh non-null
+        # value still overwrites (e.g. a company progressing seed -> Series A).
         if item.domain:
             stmt = pg_insert(CompanyRegistry).values(domain=item.domain, **base_fields)
             stmt = stmt.on_conflict_do_update(
                 index_elements=["domain"],
                 index_where=CompanyRegistry.domain.isnot(None),
-                set_={"last_discovered_at": now},
+                set_={
+                    "last_discovered_at": now,
+                    "funding_stage": func.coalesce(stmt.excluded.funding_stage, CompanyRegistry.funding_stage),
+                    "employee_count_min": func.coalesce(stmt.excluded.employee_count_min, CompanyRegistry.employee_count_min),
+                    "employee_count_max": func.coalesce(stmt.excluded.employee_count_max, CompanyRegistry.employee_count_max),
+                    "description": func.coalesce(stmt.excluded.description, CompanyRegistry.description),
+                },
             )
         elif item.discovery_source_id:
             stmt = pg_insert(CompanyRegistry).values(**base_fields)
             stmt = stmt.on_conflict_do_update(
                 index_elements=["discovery_source", "discovery_source_id"],
                 index_where=CompanyRegistry.discovery_source_id.isnot(None),
-                set_={"last_discovered_at": now},
+                set_={
+                    "last_discovered_at": now,
+                    "funding_stage": func.coalesce(stmt.excluded.funding_stage, CompanyRegistry.funding_stage),
+                    "employee_count_min": func.coalesce(stmt.excluded.employee_count_min, CompanyRegistry.employee_count_min),
+                    "employee_count_max": func.coalesce(stmt.excluded.employee_count_max, CompanyRegistry.employee_count_max),
+                    "description": func.coalesce(stmt.excluded.description, CompanyRegistry.description),
+                },
             )
         else:
             row = CompanyRegistry(**base_fields)

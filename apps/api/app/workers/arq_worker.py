@@ -4,7 +4,7 @@ Runs as a separate service (same image as the API, different start command):
     arq app.workers.arq_worker.WorkerSettings
 """
 
-from arq import cron
+from arq import cron, func
 from arq.connections import ArqRedis, RedisSettings
 from fastapi import Request
 
@@ -26,6 +26,7 @@ from app.modules.startup_hunt.ingestion.scheduler import (
     sweep_stuck_resolutions,
     sweep_undiscovered_companies,
 )
+from app.modules.startup_hunt.workers.backfill_worker import backfill_company_metadata
 from app.modules.startup_hunt.workers.discovery_worker import run_discovery
 from app.modules.startup_hunt.workers.resolution_worker import resolve_company_task
 from app.modules.startup_hunt.workers.sync_worker import sync_company_task
@@ -58,6 +59,13 @@ class WorkerSettings:
         run_discovery,
         resolve_company_task,
         sync_company_task,
+        # Manually enqueued once, not part of cron_jobs below - see
+        # backfill_worker.py's own docstring for why. Per-task timeout
+        # override: the class-wide job_timeout=30 below is sized for a
+        # single Resend API call, nowhere near enough for ~800 sequential
+        # HTTP fetches (even at concurrency=5) - hit this exact TimeoutError
+        # live on the first real run before adding this override.
+        func(backfill_company_metadata, timeout=1800),
     ]
     # Startup Hunt's automated discovery/resolution/sync pipeline (see
     # modules/startup_hunt/discovery|ingestion|workers/) - this worker had no
