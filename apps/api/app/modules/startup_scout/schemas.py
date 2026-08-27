@@ -14,7 +14,6 @@ class ScoutSearchRequest(BaseModel):
     location: str = Field(min_length=1, max_length=300)
     funding_stages: list[str] = Field(default_factory=list, max_length=8)
     industry: str = Field(default="", max_length=100)
-    size_range: str = Field(default="", max_length=50)
     limit: int = Field(default=50, ge=10, le=200)
 
     @field_validator("funding_stages")

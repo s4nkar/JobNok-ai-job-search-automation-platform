@@ -65,7 +65,6 @@ async def scout_search(req: ScoutSearchRequest, request: Request, db: AsyncSessi
         location=req.location.strip(),
         funding_stages=req.funding_stages,
         industry=req.industry.strip(),
-        size_range=req.size_range.strip(),
         limit=req.limit,
     )
     companies = result["companies"]

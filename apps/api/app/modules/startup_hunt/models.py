@@ -280,6 +280,13 @@ class CompanyRegistry(Base, UUIDPKMixin, CreatedAtMixin):
     normalized_name: Mapped[str] = mapped_column(Text, nullable=False)
     domain: Mapped[str | None] = mapped_column(Text, nullable=True)
     website_url: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # Free text, both discovery paths populate it (StartupMap's own JSON-LD
+    # `description` field; startup_scout's scraped-snippet description) - was
+    # discarded entirely at write-back time until this column existed, which
+    # is why a company_registry (L2 cache)-served search result always showed
+    # "No description available" even for companies whose live discovery did
+    # find one.
+    description: Mapped[str | None] = mapped_column(Text, nullable=True)
     country: Mapped[str | None] = mapped_column(Text, nullable=True)
     city: Mapped[str | None] = mapped_column(Text, nullable=True)
     # Canonical lowercase-hyphenated form (e.g. "series-a") - see

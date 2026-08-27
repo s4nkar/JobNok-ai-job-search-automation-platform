@@ -82,6 +82,7 @@ async def upsert_discovered(db: AsyncSession, items: list[DiscoveredStartup]) ->
             funding_stage=item.funding_stage,
             employee_count_min=item.employee_count_min,
             employee_count_max=item.employee_count_max,
+            description=item.description,
             last_discovered_at=now,
         )
 
@@ -100,6 +101,7 @@ async def upsert_discovered(db: AsyncSession, items: list[DiscoveredStartup]) ->
                     "funding_stage": func.coalesce(stmt.excluded.funding_stage, CompanyRegistry.funding_stage),
                     "employee_count_min": func.coalesce(stmt.excluded.employee_count_min, CompanyRegistry.employee_count_min),
                     "employee_count_max": func.coalesce(stmt.excluded.employee_count_max, CompanyRegistry.employee_count_max),
+                    "description": func.coalesce(stmt.excluded.description, CompanyRegistry.description),
                 },
             )
         elif item.discovery_source_id:
@@ -112,6 +114,7 @@ async def upsert_discovered(db: AsyncSession, items: list[DiscoveredStartup]) ->
                     "funding_stage": func.coalesce(stmt.excluded.funding_stage, CompanyRegistry.funding_stage),
                     "employee_count_min": func.coalesce(stmt.excluded.employee_count_min, CompanyRegistry.employee_count_min),
                     "employee_count_max": func.coalesce(stmt.excluded.employee_count_max, CompanyRegistry.employee_count_max),
+                    "description": func.coalesce(stmt.excluded.description, CompanyRegistry.description),
                 },
             )
         else:

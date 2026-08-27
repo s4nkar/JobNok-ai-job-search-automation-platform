@@ -134,6 +134,10 @@ def _to_discovered(slug: str, org: dict[str, Any]) -> DiscoveredStartup | None:
         funding_stage=_funding_stage_from_keywords(org),
         employee_count_min=employee_count_min,
         employee_count_max=employee_count_max,
+        # Real prose, verified present on a live page (dance_de) - was never
+        # captured before, which is why a company_registry-served search
+        # result always showed no description even when this page has one.
+        description=str(org.get("description") or "").strip() or None,
     )
 
 

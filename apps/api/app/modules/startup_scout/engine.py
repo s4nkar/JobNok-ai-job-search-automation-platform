@@ -858,7 +858,6 @@ async def search_startups(
     location: str,
     funding_stages: list[str],
     industry: str = "",
-    size_range: str = "",
     limit: int = 50,
 ) -> dict[str, Any]:
     """Phase A — discover startups via structured APIs + targeted DDG site: queries.
@@ -934,9 +933,8 @@ async def search_startups(
                     )
                     continue
 
-            detected_size = (raw_size_pre or _detect_employee_range(c.get("description", ""))) if not size_range else ""
             c["location"] = loc
-            c["size_range"] = detected_size or size_range
+            c["size_range"] = raw_size_pre or _detect_employee_range(c.get("description", ""))
             companies.append(c)
             source_counts[source] = source_counts.get(source, 0) + 1
 

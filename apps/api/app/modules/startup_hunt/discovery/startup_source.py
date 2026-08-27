@@ -28,6 +28,7 @@ class DiscoveredStartup:
     funding_stage: str | None = None
     employee_count_min: int | None = None
     employee_count_max: int | None = None
+    description: str | None = None
 
 
 class StartupSource(Protocol):

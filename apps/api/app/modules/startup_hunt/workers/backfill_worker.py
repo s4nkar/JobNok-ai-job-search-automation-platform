@@ -1,9 +1,18 @@
-"""ARQ task: one-off backfill of funding_stage/employee_count_min/max for
-company_registry rows discovered before those columns existed (migration
-e64a6643c9a0). Deliberately NOT in arq_worker.py's cron_jobs - manually
-enqueued once after that migration ships, and safe to re-run since it only
-ever selects rows still missing the data (an accidental second run is a
-no-op, not a duplicate-work problem).
+"""ARQ task: one-off backfill of funding_stage/employee_count_min/max/
+description for company_registry rows discovered before those columns
+existed (migrations e64a6643c9a0, 826d16204c5f). Deliberately NOT in
+arq_worker.py's cron_jobs - manually enqueued once after each such migration
+ships, and safe to re-run since it only ever selects rows still missing
+description (an accidental second run is a no-op, not a duplicate-work
+problem).
+
+Selection is keyed on `description IS NULL` alone, not all three fields -
+description was added after funding_stage/employee_count_min/max, so most
+rows already have those two filled from the previous run of this same task
+and only need this one field. Re-fetching still re-extracts all three from
+the live page regardless (cheap, same request either way) - upsert_discovered
+'s COALESCE means that's a harmless no-op for whichever fields a row already
+has, see discovery_service.py.
 
 Scoped to discovery_source='startupmap' only - those rows have a reliable,
 single-format URL to re-fetch (their own discovery_source_url, the exact
@@ -107,8 +116,7 @@ async def backfill_company_metadata(ctx: dict) -> None:
             await db.execute(
                 select(CompanyRegistry.discovery_source_id).where(
                     CompanyRegistry.discovery_source == "startupmap",
-                    CompanyRegistry.funding_stage.is_(None),
-                    CompanyRegistry.employee_count_min.is_(None),
+                    CompanyRegistry.description.is_(None),
                     CompanyRegistry.discovery_source_id.isnot(None),
                 )
             )
@@ -117,7 +125,7 @@ async def backfill_company_metadata(ctx: dict) -> None:
     if not slugs:
         logger.info(
             "backfill_company_metadata: nothing to do - every startupmap-sourced company "
-            "already has funding_stage/employee_count data."
+            "already has a description."
         )
         return
 
@@ -139,16 +147,23 @@ async def backfill_company_metadata(ctx: dict) -> None:
     discovered = []
     ddg_filled_total = 0
     still_empty_total = 0
+    description_filled_total = 0
     for i in range(0, len(slugs), chunk_size):
         chunk = slugs[i : i + chunk_size]
         results = await asyncio.gather(*(_fetch_one(slug, semaphore) for slug in chunk))
         chunk_discovered = [r for r in results if r is not None]
         fetch_failed = len(chunk) - len(chunk_discovered)
+        description_filled = sum(1 for c in chunk_discovered if c.description is not None)
+        description_filled_total += description_filled
 
-        # DDG fallback for whatever StartupMap itself still left empty -
-        # zero additional cost, DDG-mediated (see _ddg_fallback_stage_and_size
-        # docstring), applied before the upsert below so a filled-in gap is
-        # saved in the same commit as everything else from this chunk.
+        # DDG fallback for whatever StartupMap itself still left empty on
+        # funding_stage/employee_count - zero additional cost, DDG-mediated
+        # (see _ddg_fallback_stage_and_size docstring). DDG snippets don't
+        # carry a usable description, so this fallback never touches that
+        # field - a row whose StartupMap page itself has no description text
+        # just stays without one. Applied before the upsert below so a
+        # filled-in gap is saved in the same commit as everything else from
+        # this chunk.
         ddg_filled = await _fill_gaps_with_ddg(chunk_discovered)
         ddg_filled_total += ddg_filled
         still_empty = sum(1 for c in chunk_discovered if c.funding_stage is None and c.employee_count_min is None)
@@ -169,19 +184,23 @@ async def backfill_company_metadata(ctx: dict) -> None:
 
         logger.info(
             "backfill_company_metadata: chunk %d/%d - %d/%d pages fetched (%d failed), "
-            "%d filled by the DDG fallback, %d still empty after both attempts",
+            "%d got a description, %d filled by the DDG fallback, %d still have no funding_stage/"
+            "employee_count after both attempts",
             i // chunk_size + 1, total_chunks, len(chunk_discovered), len(chunk), fetch_failed,
-            ddg_filled, still_empty,
+            description_filled, ddg_filled, still_empty,
         )
 
         if i + chunk_size < len(slugs):
             await asyncio.sleep(settings.startup_hunt_backfill_chunk_delay_seconds)
 
     startupmap_direct_total = len(discovered) - ddg_filled_total - still_empty_total
+    description_missing_total = len(discovered) - description_filled_total
     logger.info(
-        "backfill_company_metadata: done - %d row(s) needed data, %d successfully re-fetched from "
-        "StartupMap directly, %d more filled by the DDG fallback, %d still have no funding_stage/"
-        "employee_count after both attempts (their source pages genuinely don't mention it - "
-        "re-running won't change that until StartupMap's own listing is updated).",
-        len(slugs), startupmap_direct_total, ddg_filled_total, still_empty_total,
+        "backfill_company_metadata: done - %d row(s) needed data, %d got a description, %d have "
+        "no description (their source page genuinely doesn't have one). funding_stage/"
+        "employee_count: %d successfully re-fetched from StartupMap directly, %d more filled by "
+        "the DDG fallback, %d still empty after both attempts (re-running won't change that until "
+        "StartupMap's own listing is updated).",
+        len(slugs), description_filled_total, description_missing_total,
+        startupmap_direct_total, ddg_filled_total, still_empty_total,
     )
