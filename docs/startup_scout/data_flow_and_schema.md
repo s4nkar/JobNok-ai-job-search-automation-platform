@@ -1,4 +1,4 @@
-# Startup Scout — Data Flow & Schema Reference
+# Startup Scout: Data Flow & Schema Reference
 
 **Document Version:** 2.0.0  
 **Status:** Approved for Production  

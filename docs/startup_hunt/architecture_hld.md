@@ -1,4 +1,4 @@
-# Startup Hunt — High-Level Architecture (HLD)
+# Startup Hunt: High-Level Architecture (HLD)
 
 **Document Version:** 2.0.0  
 **Status:** Approved for Production  

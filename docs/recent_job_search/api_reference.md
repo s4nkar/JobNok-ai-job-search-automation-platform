@@ -1,4 +1,4 @@
-# Recent Job Search — API Reference
+# Recent Job Search: API Reference
 
 **Base URL**: `/api/v1/job-search`  
 **Authentication**: Bearer JWT Token in `Authorization` header.

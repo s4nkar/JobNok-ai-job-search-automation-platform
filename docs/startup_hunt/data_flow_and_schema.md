@@ -1,4 +1,4 @@
-# Startup Hunt — Data Flow & Schema Reference
+# Startup Hunt: Data Flow & Schema Reference
 
 **Document Version:** 2.0.0  
 **Status:** Approved for Production  
@@ -68,6 +68,7 @@ CREATE TABLE startup_hunt_opportunities (
     source_type TEXT NOT NULL,                     -- 'ats', 'crawler', 'theirstack', 'manual'
     direct_apply_url TEXT,
     canonical_job_url TEXT,
+    portal_job_url TEXT,
     posted_at TIMESTAMP WITH TIME ZONE,
     discovered_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW(),
     opportunity_kind TEXT NOT NULL DEFAULT 'job',  -- Check constraint: 'job', 'outreach_lead'

@@ -1,4 +1,4 @@
-# Startup Hunt — API Reference
+# Startup Hunt: API Reference
 
 **Base URL**: `/api/v1/startup-hunt`  
 **Authentication**: Bearer JWT Token in `Authorization` header.

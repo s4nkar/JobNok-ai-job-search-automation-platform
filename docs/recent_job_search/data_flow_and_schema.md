@@ -1,4 +1,4 @@
-# Recent Job Search — Data Flow & Schema Reference
+# Recent Job Search: Data Flow & Schema Reference
 
 **Document Version:** 2.0.0  
 **Status:** Approved for Production  
@@ -80,7 +80,7 @@ CREATE UNIQUE INDEX job_search_applications_user_job_url_key
 ### 2.1 Hot Response Cache Keys
 - **Key Schema**: `job_search:<sha256_hash>`
 - **Digest Payload Input**: `query|location|country|posted_within_hours|remote_only|result_limit`
-- **TTL**: Jittered 3600s $\pm$ 300s (3300s to 3900s).
+- **TTL**: Jittered 3600s +- 300s (3300s to 3900s).
 
 ### 2.2 Single-Flight Mutex Keys
 - **Key Schema**: `lock:job_search:<sha256_hash>`

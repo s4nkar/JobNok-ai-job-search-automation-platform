@@ -1,4 +1,4 @@
-# Startup Hunt — Production Hardening Playbook
+# Startup Hunt: Production Hardening Playbook
 
 **Status:** Production-Ready  
 **Last Audited:** 2026-08-27  

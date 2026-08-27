@@ -1,4 +1,4 @@
-# Recent Job Search — Low-Level Design (LLD)
+# Recent Job Search: Low-Level Design (LLD)
 
 **Document Version:** 2.0.0  
 **Status:** Approved for Production  
@@ -64,7 +64,7 @@ async def search_recent_jobs(
 
 ### 3.1 Title Keyword Scoring Algorithm (`scoring.py`)
 
-Job title relevance is calculated using word-boundary regex patterns to avoid partial string false positives (e.g., preventing "ML" from matching "VML Company"):
+Job title relevance is calculated using word-boundary regex patterns to avoid partial string false positives (e.g. preventing "ML" from matching "VML Company"):
 
 ```python
 def score_title_match(query: str, title: str) -> float:
@@ -93,7 +93,7 @@ def score_title_match(query: str, title: str) -> float:
 ### 3.2 Strict Country Precision Gate (`scoring.py`)
 
 To prevent cross-border listing leaks:
-- If `country_code` is explicitly provided in the user's request (e.g., `"DE"`), candidate jobs with a non-matching non-null country code are discarded immediately (`score = 0.0`).
+- If `country_code` is explicitly provided in the user's request (e.g. `"DE"`), candidate jobs with a non-matching non-null country code are discarded immediately (`score = 0.0`).
 - Jobs with `country_code = None` are excluded from primary search results and routed strictly to the bonus pipeline.
 
 ### 3.3 Deduplication & Fingerprinting (`dedup.py`)

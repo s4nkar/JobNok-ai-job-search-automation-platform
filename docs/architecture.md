@@ -1,4 +1,4 @@
-# 🏗️ Platform System Architecture — Master Reference (HLD)
+# Platform System Architecture: Master Reference (HLD)
 
 **Document Version:** 2.0.0  
 **Status:** Production Baseline  
@@ -22,9 +22,9 @@ flowchart TD
     end
 
     subgraph DataPersistence ["2. Persistence & Cache Topology"]
-        PostgresDB[(PostgreSQL / Supabase - SQLAlchemy Async ORM)]
-        UpstashRedis[(Upstash Redis REST - Rate Limits & Single-Flight Locks)]
-        TCPRedis[(Redis TCP Instance - ARQ Queue Broker)]
+        PostgresDB[(PostgreSQL / Supabase: SQLAlchemy Async ORM)]
+        UpstashRedis[(Upstash Redis REST: Rate Limits & Single-Flight Locks)]
+        TCPRedis[(Redis TCP Instance: ARQ Queue Broker)]
     end
 
     subgraph AsyncExecution ["3. Worker Subsystems"]
@@ -95,7 +95,7 @@ flowchart TD
 
 ### 2.2 Modular Monolith Backend (`apps/api`)
 - **Framework**: FastAPI (Python 3.12) running on Uvicorn.
-- **Composition Root**: `apps/api/app/main.py` registers all 16 feature module routers (`job_search`, `startup_hunt`, `startup_scout`, `tracker`, `bulk_email`, `templates`, `profile`, `auth`, `usage`, `admin`, `cover_letter`, `interview_prep`, `salary`, `resume_tailor`, `linkedin_fill`).
+- **Composition Root**: `apps/api/app/main.py` registers all feature module routers (`job_search`, `startup_hunt`, `startup_scout`, `tracker`, `bulk_email`, `templates`, `profile`, `auth`, `usage`, `admin`, `cover_letter`, `interview_prep`, `salary`, `resume_tailor`, `linkedin_fill`).
 - **Data Access Pattern**: SQLAlchemy 2.0 Async Session (`asyncpg` driver). Tenant isolation enforced at the service layer by `UserScopedRepository` (`app/shared/repository.py`), requiring an explicit `user_id` filter on every query.
 
 ### 2.3 AI & Embedding Multi-Provider Fallback Architecture
@@ -115,15 +115,15 @@ flowchart TD
 
 Specific feature tools maintain dedicated production documentation packages in their `docs/` subdirectories:
 
-1. 📂 [Recent Job Search Architecture](file:///d:/Projects/Vibe%20Code/quickjob-ai-job-search-automation-platform/docs/recent_job_search/architecture_hld.md)
+1. [Recent Job Search Architecture](file:///d:/Projects/Vibe%20Code/quickjob-ai-job-search-automation-platform/docs/recent_job_search/architecture_hld.md)
    - Real-time job search across Adzuna, Bundesagentur für Arbeit, and Arbeitnow bonus pipeline.
    - Word-boundary title relevance scoring, strict country isolation, and fingerprint deduplication.
 
-2. 📂 [Startup Hunt Architecture](file:///d:/Projects/Vibe%20Code/quickjob-ai-job-search-automation-platform/docs/startup_hunt/architecture_hld.md)
+2. [Startup Hunt Architecture](file:///d:/Projects/Vibe%20Code/quickjob-ai-job-search-automation-platform/docs/startup_hunt/architecture_hld.md)
    - Multi-ATS job board crawler (Greenhouse, Lever, Ashby, Personio, Workable).
    - SSRF protection layer (`ssrf_guard.py`), DNS pinning, and async background workers (`discovery_worker`, `resolution_worker`, `sync_worker`).
 
-3. 📂 [Startup Scout Architecture](file:///d:/Projects/Vibe%20Code/quickjob-ai-job-search-automation-platform/docs/startup_scout/architecture_hld.md)
+3. [Startup Scout Architecture](file:///d:/Projects/Vibe%20Code/quickjob-ai-job-search-automation-platform/docs/startup_scout/architecture_hld.md)
    - AI startup intelligence engine querying DuckDuckGo HTML endpoints.
    - Domain noise blacklist (`_NEWS_DOMAINS`) and Apollo API executive contact discovery.
 

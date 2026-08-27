@@ -1,4 +1,4 @@
-# 🗄️ Database Architecture & Schema Master Reference
+# Database Architecture & Schema Master Reference
 
 **Document Version:** 2.0.0  
 **Status:** Production Baseline  
@@ -114,6 +114,6 @@ The backend utilizes **Supabase-hosted PostgreSQL** managed via **SQLAlchemy 2.0
 
 For complete schema DDLs, index definitions, and entity relationship diagrams, see:
 
-- 📊 [Recent Job Search Schema Reference](file:///d:/Projects/Vibe%20Code/quickjob-ai-job-search-automation-platform/docs/recent_job_search/data_flow_and_schema.md)
-- 📊 [Startup Hunt Schema Reference](file:///d:/Projects/Vibe%20Code/quickjob-ai-job-search-automation-platform/docs/startup_hunt/data_flow_and_schema.md)
-- 📊 [Startup Scout Schema Reference](file:///d:/Projects/Vibe%20Code/quickjob-ai-job-search-automation-platform/docs/startup_scout/data_flow_and_schema.md)
+- [Recent Job Search Schema Reference](file:///d:/Projects/Vibe%20Code/quickjob-ai-job-search-automation-platform/docs/recent_job_search/data_flow_and_schema.md)
+- [Startup Hunt Schema Reference](file:///d:/Projects/Vibe%20Code/quickjob-ai-job-search-automation-platform/docs/startup_hunt/data_flow_and_schema.md)
+- [Startup Scout Schema Reference](file:///d:/Projects/Vibe%20Code/quickjob-ai-job-search-automation-platform/docs/startup_scout/data_flow_and_schema.md)

@@ -1,4 +1,4 @@
-# 📁 Repository & Monorepo Structure
+# Repository & Monorepo Structure
 
 ```
 quickjob-ai-job-search-automation-platform/

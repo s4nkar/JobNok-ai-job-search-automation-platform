@@ -1,4 +1,4 @@
-# 🔄 API Architecture & Workflows Master Reference
+# API Architecture & Workflows Master Reference
 
 **Document Version:** 2.0.0  
 **Status:** Production Baseline  
@@ -88,6 +88,6 @@ Configured in `app/core/config.py` via Redis token buckets:
 
 For detailed REST endpoints, request bodies, and error response schemas, see:
 
-- 📡 [Recent Job Search API Reference](file:///d:/Projects/Vibe%20Code/quickjob-ai-job-search-automation-platform/docs/recent_job_search/api_reference.md)
-- 📡 [Startup Hunt API Reference](file:///d:/Projects/Vibe%20Code/quickjob-ai-job-search-automation-platform/docs/startup_hunt/api_reference.md)
-- 📡 [Startup Scout API Reference](file:///d:/Projects/Vibe%20Code/quickjob-ai-job-search-automation-platform/docs/startup_scout/api_reference.md)
+- [Recent Job Search API Reference](file:///d:/Projects/Vibe%20Code/quickjob-ai-job-search-automation-platform/docs/recent_job_search/api_reference.md)
+- [Startup Hunt API Reference](file:///d:/Projects/Vibe%20Code/quickjob-ai-job-search-automation-platform/docs/startup_hunt/api_reference.md)
+- [Startup Scout API Reference](file:///d:/Projects/Vibe%20Code/quickjob-ai-job-search-automation-platform/docs/startup_scout/api_reference.md)
