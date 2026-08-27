@@ -108,3 +108,46 @@ async def sweep_stuck_resolutions(ctx: dict) -> None:
     for company_id in ids:
         await ctx["redis"].enqueue_job("resolve_company_task", company_id=str(company_id))
     logger.info("Re-enqueued %d stuck resolution(s)", len(ids))
+
+
+async def select_undiscovered_companies(db: AsyncSession, limit: int) -> list[CompanyRegistry]:
+    """Companies sitting at status='discovered' with no resolution enqueued
+    for them yet - catches rows from ANY pipeline, not just
+    discovery_worker.py's own StartupMap discoveries. That worker enqueues
+    resolve_company_task inline, right after its own upsert, using the ARQ
+    worker's ctx["redis"] - fine for a job already running inside an ARQ
+    worker, but startup_scout's company_registry write-back
+    (service.py::_store_discovered_companies) runs inside an HTTP request
+    handler with no ARQ context to enqueue through directly. This sweep is
+    what actually gets those rows resolved instead.
+
+    The grace window (startup_hunt_discovery_sweep_after_minutes) exists so
+    this never races a row's own just-committed insert, and doubles as
+    protection against re-enqueueing a resolution that's already in flight:
+    resolve_company_task flips status to 'resolving' before doing any real
+    work (see resolution_worker.py), so once picked up once, a row simply
+    stops matching this query on the next tick - no separate "already
+    enqueued" bookkeeping needed.
+    """
+    cutoff = datetime.now(timezone.utc) - timedelta(minutes=settings.startup_hunt_discovery_sweep_after_minutes)
+    rows = (
+        await db.execute(
+            select(CompanyRegistry)
+            .where(CompanyRegistry.status == "discovered", CompanyRegistry.last_discovered_at < cutoff)
+            .order_by(CompanyRegistry.last_discovered_at)
+            .limit(limit)
+        )
+    ).scalars().all()
+    return list(rows)
+
+
+async def sweep_undiscovered_companies(ctx: dict) -> None:
+    """ARQ cron entrypoint (see arq_worker.py's cron_jobs)."""
+    async with AsyncSessionLocal() as db:
+        undiscovered = await select_undiscovered_companies(db, settings.startup_hunt_discovery_sweep_batch_size)
+    if not undiscovered:
+        return
+
+    for company in undiscovered:
+        await ctx["redis"].enqueue_job("resolve_company_task", company_id=str(company.id))
+    logger.info("Enqueued resolution for %d undiscovered company(ies)", len(undiscovered))

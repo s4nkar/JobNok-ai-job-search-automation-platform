@@ -5,9 +5,9 @@ from __future__ import annotations
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Request
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.config import settings
 from app.core.database import get_db
-from app.services.cache import check_rate_limit
-from app.modules.startup_scout.engine import search_startups
+from app.services.cache import check_burst_limit, check_rate_limit
 from app.core.security import get_current_user_id
 from app.modules.startup_scout.schemas import ScoutSearchRequest, SaveCompanyRequest
 from app.modules.startup_scout import service
@@ -31,17 +31,37 @@ async def _rate_check(user_id: str, action: str, limit: int) -> None:
         )
 
 
+async def _burst_check(user_id: str, action: str) -> None:
+    """Catches a double-clicked search button or a retry loop with no
+    backoff - the daily quota alone doesn't cap arrival rate, only total
+    volume, so a rapid-fire burst still pays full DDG-scraping cost per
+    request regardless of whether it's request #1 or #20 of the day. Same
+    generic primitive/settings job_search uses (see
+    job_search/service.py::_check_rate_limit_fail_open) - not
+    startup-scout-specific plumbing."""
+    try:
+        burst_ok = await check_burst_limit(
+            user_id, action, settings.rate_limit_burst_limit, settings.rate_limit_burst_window_seconds
+        )
+    except Exception:
+        burst_ok = True  # fail open if Redis is down
+    if not burst_ok:
+        raise HTTPException(status_code=429, detail="Searching too quickly - please wait a few seconds and try again.")
+
+
 @router.post("/search")
 async def scout_search(req: ScoutSearchRequest, request: Request, db: AsyncSession = Depends(get_db)):
     """Phase A: discover startups matching location/stage/industry."""
     user_id = await get_current_user_id(request, db)
+    await _burst_check(user_id, "startup_scout_search")
     await _rate_check(user_id, "startup_scout_search", RATE_LIMIT_SCOUT_SEARCH_PER_DAY)
     await record_tool_usage(db, user_id, "startup-scout")
 
     if not req.location.strip():
         raise HTTPException(status_code=422, detail="location is required")
 
-    result = await search_startups(
+    result = await service.search_startups(
+        db,
         location=req.location.strip(),
         funding_stages=req.funding_stages,
         industry=req.industry.strip(),

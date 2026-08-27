@@ -1,6 +1,6 @@
-"""Admin-only crawler observability endpoints - read-only (Tier 1), consumed
-by the separate apps/admin Next.js app. Every route is gated to
-profiles.role == 'admin' via require_role - see app/modules/auth/service.py.
+"""Admin-only observability endpoints - read-only (Tier 1), consumed by the
+separate apps/admin Next.js app. Every route is gated to profiles.role ==
+'admin' via require_role - see app/modules/auth/service.py.
 """
 
 from __future__ import annotations
@@ -45,3 +45,8 @@ async def list_jobs(
     offset: int = Query(default=0, ge=0),
 ):
     return await service.list_jobs(db, search=search, company_id=company_id, limit=limit, offset=offset)
+
+
+@router.get("/startup-scout/overview")
+async def get_startup_scout_overview():
+    return await service.get_startup_scout_overview()

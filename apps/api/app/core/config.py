@@ -248,6 +248,19 @@ class Settings(BaseSettings):
     startup_hunt_resolution_stuck_after_minutes: int = 30
     startup_hunt_resolution_max_attempts: int = 5
     startup_hunt_resolution_sweep_batch_size: int = 100
+    # Generic discovered-company sweep (ingestion/scheduler.py::
+    # sweep_undiscovered_companies) - catches ANY company_registry row left at
+    # status='discovered' regardless of which pipeline inserted it, not just
+    # discovery_worker.py's own StartupMap rows. Needed because startup_scout
+    # writes rows into company_registry from inside an HTTP request handler,
+    # which has no ARQ worker context to enqueue resolve_company_task through
+    # directly the way discovery_worker.py does inline - this sweep is its
+    # only path to getting resolved. Also hardens discovery_worker.py's own
+    # existing path: if it crashed between its commit() and its inline enqueue
+    # loop, rows would otherwise sit at 'discovered' forever with nothing else
+    # ever picking them up.
+    startup_hunt_discovery_sweep_after_minutes: int = 5
+    startup_hunt_discovery_sweep_batch_size: int = 100
     # ATS boards (esp. Lever, which only exposes createdAt - no repost/update
     # timestamp) can list postings well over a year old that are still
     # technically "open". Sync skips writing/refreshing any posting older
@@ -274,10 +287,18 @@ class Settings(BaseSettings):
     startup_hunt_contact_enrichment_provider: str = ""
     apollo_api_key: str = ""
     people_data_labs_api_key: str = ""
-    # Crunchbase Basic API (free tier: 200 searches/month).
-    # Used by Startup Scout Phase A for structured EU company discovery.
-    # Get from: https://www.crunchbase.com/api
-    crunchbase_api_key: str = ""
+
+    # ── Startup Scout ────────────────────────────────────────────────────────
+    # Redis response cache TTL for identical (location, funding_stages,
+    # industry, size_range, limit) searches - deliberately far longer than
+    # job_search/startup_hunt's ~900s. A company's existence, funding stage,
+    # and team size don't meaningfully change hour to hour the way a job
+    # listing's availability does, so a much longer cache window is safe here.
+    startup_scout_response_cache_ttl_seconds: int = 21600  # 6 hours
+    # Explicit, not just relying on the ddgs library's own default (5s,
+    # verified by reading its source) - declared here so it's visible/tunable
+    # without reading a third-party library to find out what it currently is.
+    startup_scout_ddg_timeout_seconds: int = 8
 
     # ── Bulk Email ───────────────────────────────────────────────────────────
     # Minimum delay between individual emails to avoid spam flags (seconds)

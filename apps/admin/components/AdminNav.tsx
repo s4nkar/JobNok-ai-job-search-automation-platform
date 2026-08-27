@@ -9,6 +9,7 @@ const links = [
   { href: '/', label: 'Overview' },
   { href: '/crawler/companies', label: 'Companies' },
   { href: '/crawler/jobs', label: 'Jobs' },
+  { href: '/startup-scout', label: 'Startup Scout' },
 ]
 
 export function AdminNav() {

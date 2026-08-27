@@ -98,7 +98,7 @@ export default function OverviewPage() {
         </CardHeader>
         <CardContent>
           <div className="flex flex-wrap gap-3">
-            {data.provider_health.map((provider: ProviderHealth) => (
+            {(data.provider_health ?? []).map((provider: ProviderHealth) => (
               <div key={provider.provider} className="flex items-center gap-2 rounded-lg border px-3 py-2">
                 <Badge variant={provider.open ? 'destructive' : 'success'}>
                   {PROVIDER_LABELS[provider.provider] || provider.provider}

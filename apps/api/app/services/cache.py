@@ -312,6 +312,37 @@ async def increment_with_ttl(key: str, ttl_seconds: int) -> int:
     return new_count
 
 
+def _search_outcome_key(scope: str, outcome: str) -> str:
+    return f"{scope}:search_outcome:{outcome}"
+
+
+async def record_search_outcome(scope: str, outcome: str) -> None:
+    """Best-effort counter of which layer a search was actually served from
+    (e.g. "l1_hit", "l2_full", "live") - for admin observability only (see
+    app/modules/admin/service.py), never load-bearing for the search itself.
+    Resets at midnight UTC, same convention as check_rate_limit's daily
+    quota - a rolling "today" breakdown is more useful for "is caching
+    working" than an ever-growing all-time count. Fails silently - a
+    tracking failure must never break the actual search."""
+    try:
+        await increment_with_ttl(_search_outcome_key(scope, outcome), _midnight_utc_seconds())
+    except Exception:
+        pass
+
+
+async def get_search_outcome_counts(scope: str, outcomes: list[str]) -> dict[str, int]:
+    """Read-only counterpart to record_search_outcome - fails open to 0 per
+    outcome on a Redis error, matching every other read in this file."""
+    counts: dict[str, int] = {}
+    for outcome in outcomes:
+        try:
+            raw = await get_cached(_search_outcome_key(scope, outcome))
+            counts[outcome] = int(raw) if raw else 0
+        except Exception:
+            counts[outcome] = 0
+    return counts
+
+
 async def acquire_lock(key: str, ttl_seconds: int) -> bool:
     """Single-flight lock: True if this call acquired it, False if another
     caller already holds it. Never explicitly released - it just expires

@@ -262,6 +262,18 @@ class CompanyRegistry(Base, UUIDPKMixin, CreatedAtMixin):
             "company_registry_next_crawl_idx", "next_crawl_at",
             postgresql_where=Text("status = 'active'"),
         ),
+        # startup_scout/service.py::_company_registry_candidates filters with
+        # ILIKE '%token%' on city/country - a leading-wildcard ILIKE can't use
+        # a plain B-tree index, so this must be a GIN trigram index instead
+        # (same pattern as jobs.title/description, see job_search/models.py)
+        # - must stay declared here too, or a future `alembic revision
+        # --autogenerate` would propose dropping an index it doesn't know
+        # about (see migration 524f297bbadf).
+        Index("company_registry_city_trgm_idx", "city", postgresql_using="gin", postgresql_ops={"city": "gin_trgm_ops"}),
+        Index(
+            "company_registry_country_trgm_idx", "country",
+            postgresql_using="gin", postgresql_ops={"country": "gin_trgm_ops"},
+        ),
     )
 
     name: Mapped[str] = mapped_column(Text, nullable=False)

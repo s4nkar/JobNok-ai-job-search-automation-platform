@@ -21,7 +21,11 @@ from app.shared import model_registry  # noqa: F401 — registers every table on
 from app.modules.bulk_email.tasks import send_campaign_email, sweep_stuck_email_sends
 from app.modules.job_search.tasks import sweep_expired_jobs
 from app.modules.startup_hunt.tasks import resolve_startup_hunt_source_task
-from app.modules.startup_hunt.ingestion.scheduler import dispatch_due_companies, sweep_stuck_resolutions
+from app.modules.startup_hunt.ingestion.scheduler import (
+    dispatch_due_companies,
+    sweep_stuck_resolutions,
+    sweep_undiscovered_companies,
+)
 from app.modules.startup_hunt.workers.discovery_worker import run_discovery
 from app.modules.startup_hunt.workers.resolution_worker import resolve_company_task
 from app.modules.startup_hunt.workers.sync_worker import sync_company_task
@@ -77,6 +81,14 @@ class WorkerSettings:
         # resolve_company_task - see scheduler.py's docstring for why ARQ's
         # own retry mechanism doesn't cover this on its own.
         cron(sweep_stuck_resolutions, minute={0, 30}),
+        # Catches company_registry rows at status='discovered' with no
+        # resolution enqueued yet, regardless of which pipeline inserted them
+        # - specifically what gets startup_scout's own DB write-back
+        # (service.py::_store_discovered_companies, called from an HTTP
+        # request handler with no ARQ context of its own) resolved at all.
+        # Cheap DB-only query until there's actually something to enqueue, so
+        # a frequent tick costs nothing.
+        cron(sweep_undiscovered_companies, minute={0, 5, 10, 15, 20, 25, 30, 35, 40, 45, 50, 55}),
         # Same class of gap, for bulk email sends - see
         # bulk_email/tasks.py::sweep_stuck_email_sends's docstring.
         cron(sweep_stuck_email_sends, minute={0, 10, 20, 30, 40, 50}),

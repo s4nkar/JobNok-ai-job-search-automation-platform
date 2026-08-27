@@ -97,3 +97,8 @@ export interface JobListResponse {
   total: number
   items: JobRow[]
 }
+
+export interface StartupScoutOverview {
+  search_outcomes: Record<string, number>
+  total_searches_today: number
+}

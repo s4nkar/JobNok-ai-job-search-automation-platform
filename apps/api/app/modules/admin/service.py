@@ -1,7 +1,7 @@
-"""Read-only crawler observability queries for the admin app (Tier 1 -
-dashboard visibility only, no writes). Reads directly off company_registry
-and the shared jobs table - no new tables, this module owns no state of its
-own.
+"""Read-only observability queries for the admin app (Tier 1 - dashboard
+visibility only, no writes). Reads directly off company_registry, the shared
+jobs table, and Redis-tracked counters - no new tables, this module owns no
+state of its own.
 """
 
 from __future__ import annotations
@@ -13,10 +13,16 @@ from sqlalchemy import func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import settings
-from app.services.cache import get_circuit_state
+from app.services.cache import get_circuit_state, get_search_outcome_counts
 from app.shared.utils import row_to_dict
 from app.modules.job_search.models import Job
 from app.modules.startup_hunt.models import CompanyRegistry
+
+# The outcomes startup_scout/service.py::search_startups actually records
+# (see its record_search_outcome calls) - kept here as the single source of
+# truth for what this dashboard displays, so a new outcome added there isn't
+# silently invisible here until someone remembers to update both places.
+_SEARCH_OUTCOMES = ["l1_hit", "l2_full", "live"]
 
 MAX_PAGE_SIZE = 200
 
@@ -205,3 +211,18 @@ async def list_jobs(
     ).scalars().all()
 
     return {"total": total, "items": [row_to_dict(r) for r in rows]}
+
+
+async def get_startup_scout_overview() -> dict:
+    """"Mini" observability for startup_scout's search caching (Redis-only,
+    no DB query) - answers "where are searches actually returning from
+    today": the L1 Redis response cache, the L2 company_registry DB-first
+    layer, or a live DDG scrape. See
+    startup_scout/service.py::search_startups' record_search_outcome calls
+    for where these counts come from - resets at midnight UTC, same
+    convention as every other daily counter in this app, so this always
+    reflects "today," not an ever-growing all-time total.
+    """
+    counts = await get_search_outcome_counts("startup_scout", _SEARCH_OUTCOMES)
+    total = sum(counts.values())
+    return {"search_outcomes": counts, "total_searches_today": total}
