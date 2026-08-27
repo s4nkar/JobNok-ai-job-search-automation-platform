@@ -1,4 +1,4 @@
-# Startup Hunt — Low-Level Design (LLD)
+# Startup Hunt: Low-Level Design (LLD)
 
 **Document Version:** 2.0.0  
 **Status:** Approved for Production  
@@ -82,11 +82,11 @@ def validate_target_url(url: str) -> str:
 Identifies target company ATS platforms without requiring predefined configuration:
 
 1. **Host Marker Matching**: Inspects domain against known ATS domains:
-   - `boards.greenhouse.io` / `grnh.se` $\rightarrow$ Greenhouse
-   - `jobs.lever.co` $\rightarrow$ Lever
-   - `jobs.ashbyhq.com` $\rightarrow$ Ashby
-   - `*.personio.de` / `jobs.personio.de` $\rightarrow$ Personio
-   - `*.workable.com` $\rightarrow$ Workable
+   - `boards.greenhouse.io` / `grnh.se` -> Greenhouse
+   - `jobs.lever.co` -> Lever
+   - `jobs.ashbyhq.com` -> Ashby
+   - `*.personio.de` / `jobs.personio.de` -> Personio
+   - `*.workable.com` -> Workable
 2. **HTML Meta-Tag Inspection**: If host is custom (e.g. `careers.techcorp.com`), fetches home page HTML and checks DOM meta markers:
    - `<meta name="generator" content="Greenhouse">`
    - Script sources matching `cdn.ashbyhq.com` or `lever-jobs-widget`.

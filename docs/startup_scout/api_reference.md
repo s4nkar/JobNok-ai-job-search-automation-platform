@@ -1,4 +1,4 @@
-# Startup Scout — API Reference
+# Startup Scout: API Reference
 
 **Base URL**: `/api/v1/startup-scout`  
 **Authentication**: Bearer JWT Token in `Authorization` header.

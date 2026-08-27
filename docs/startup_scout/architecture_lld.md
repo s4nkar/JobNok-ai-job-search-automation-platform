@@ -1,4 +1,4 @@
-# Startup Scout — Low-Level Design (LLD)
+# Startup Scout: Low-Level Design (LLD)
 
 **Document Version:** 2.0.0  
 **Status:** Approved for Production  

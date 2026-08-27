@@ -1,4 +1,4 @@
-# 🚀 Deployment & Local Development Guide
+# Deployment & Local Development Guide
 
 **Document Version:** 2.0.0  
 **Status:** Production Baseline  
@@ -28,8 +28,8 @@ The project uses Docker Compose for orchestrating containers across development 
 ## 2. Local Setup & Execution
 
 ### Prerequisites
-- Node.js $\ge$ 22 with [pnpm](https://pnpm.io/)
-- Python $\ge$ 3.12 with [uv](https://astral.sh/uv)
+- Node.js >= 22 with [pnpm](https://pnpm.io/)
+- Python >= 3.12 with [uv](https://astral.sh/uv)
 - Docker Desktop or Docker Engine
 
 ### Quickstart Sequence
@@ -77,6 +77,7 @@ pnpm dev
 
 ## 4. Production Environment Checklist
 
-1. **Alembic Database Migrations**: Run `pnpm api:migrate` (`alembic upgrade head`) before deploying backend updates.
-2. **Environment Variable Injection**: Ensure `CLERK_JWKS_URL`, `CLERK_ISSUER`, `DATABASE_URL`, `UPSTASH_REDIS_REST_URL`, `REDIS_URL`, `GROQ_API_KEY`, `OPENROUTER_API_KEY`, and `RESEND_API_KEY` are provided.
-3. **SSRF Guard Validation**: Confirm backend network rules allow outbound HTTPS calls while blocking RFC 1918 subnets and `169.254.169.254`.
+- [x] **Alembic Database Migrations**: Run `pnpm api:migrate` (`alembic upgrade head`) before deploying backend updates.
+- [x] **CORS Constraints**: Backend `APP_URL` strictly set to the production web domain.
+- [x] **Redis Network Isolation**: ARQ worker and FastAPI API share identical Redis credentials and network bridges.
+- [x] **Environment Validation**: Server startup validates required secrets (`CLERK_ISSUER_URL`, `DATABASE_URL`, `REDIS_URL`, API keys).

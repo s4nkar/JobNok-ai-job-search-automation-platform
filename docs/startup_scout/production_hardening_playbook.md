@@ -1,4 +1,4 @@
-# Startup Scout — Production Hardening Playbook
+# Startup Scout: Production Hardening Playbook
 
 **Status:** Production-Ready  
 **Last Audited:** 2026-08-28  
