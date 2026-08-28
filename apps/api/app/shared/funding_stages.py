@@ -31,6 +31,13 @@ _STAGE_ALIASES: dict[str, str] = {
     "series-e": "series-e", "series e": "series-e",
 }
 
+# Earliest to latest - used by stages_at_or_below to turn a single ceiling
+# selection ("seed") into every stage a search for it should also surface
+# ("angel", "pre-seed", "seed") - someone hunting for early-stage companies
+# almost always wants everything earlier too, not just an exact-stage match
+# that misses a Pre-Seed company purely because it hasn't progressed yet.
+STAGE_ORDER: list[str] = ["angel", "pre-seed", "seed", "series-a", "series-b", "series-c", "series-d", "series-e"]
+
 STAGE_DISPLAY: dict[str, str] = {
     "angel": "Angel",
     "pre-seed": "Pre-Seed",
@@ -66,6 +73,17 @@ def detect_stage(text: str) -> str | None:
     if not m:
         return None
     return canonical_stage(m.group(0))
+
+
+def stages_at_or_below(ceiling: str) -> list[str]:
+    """Expands a single ceiling stage into every canonical stage at or
+    before it in STAGE_ORDER. Falls back to a single-element exact-match
+    list if `ceiling` isn't a recognized stage - a search still runs, it
+    just won't broaden beyond the literal value given."""
+    canonical = canonical_stage(ceiling)
+    if canonical not in STAGE_ORDER:
+        return [canonical]
+    return STAGE_ORDER[: STAGE_ORDER.index(canonical) + 1]
 
 
 def display_stage(canonical: str) -> str:

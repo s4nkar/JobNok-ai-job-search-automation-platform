@@ -15,6 +15,7 @@ from app.core.security import get_current_user_id
 from app.modules.startup_scout.schemas import ScoutSearchRequest, SaveCompanyRequest
 from app.modules.startup_scout import service
 from app.modules.usage.service import record_event as record_tool_usage
+from app.shared import funding_stages
 
 router = APIRouter()
 
@@ -74,13 +75,19 @@ async def scout_search(req: ScoutSearchRequest, request: Request, db: AsyncSessi
         raise HTTPException(status_code=422, detail="location is required")
 
     location = req.location.strip()
-    funding_stages = req.funding_stages
+    # "series-c" is exposed in the UI as "Series C+" - already meant to
+    # include anything later, not just an exact Series C match - so its
+    # ceiling expansion goes all the way to the top of STAGE_ORDER instead
+    # of stopping at series-c the way every other (strictly "at or below")
+    # selection does.
+    ceiling = "series-e" if req.funding_stage == "series-c" else req.funding_stage
+    stages = funding_stages.stages_at_or_below(ceiling)
     industry = req.industry.strip()
     limit = req.limit
 
     async def generate():
         async for event in service.search_startups_stream(
-            location=location, funding_stages=funding_stages, industry=industry, limit=limit,
+            location=location, funding_stages=stages, industry=industry, limit=limit,
         ):
             if "companies" in event:
                 event = {**event, "count": len(event["companies"])}

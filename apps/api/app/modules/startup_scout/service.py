@@ -299,10 +299,14 @@ async def search_startups_stream(
             "location": location, "industry": industry.strip() or None,
             "funding_stages": funding_stages,
         }
-        yield {"type": "partial", "companies": db_candidates, "meta": partial_meta}
+        # L2 rows always have a confirmed (non-NULL) funding_stage when a
+        # stage filter is active - see _company_registry_candidates - so
+        # there's no "unconfirmed" concept for this layer, unlike the live
+        # DDG top-up below.
+        yield {"type": "partial", "companies": db_candidates, "unconfirmed": [], "meta": partial_meta}
 
         if db_candidates and len(db_candidates) >= limit:
-            result = {"companies": db_candidates[:limit], "meta": {**partial_meta, "total": limit}}
+            result = {"companies": db_candidates[:limit], "unconfirmed": [], "meta": {**partial_meta, "total": limit}}
             try:
                 await set_cached(cache_key, json.dumps(result), jittered_ttl(settings.startup_scout_response_cache_ttl_seconds))
             except Exception:
@@ -317,7 +321,16 @@ async def search_startups_stream(
             limit=live_limit,
         )
         live_companies = live_result["companies"]
+        live_unconfirmed = live_result["unconfirmed"]
 
+        # Only the confirmed bucket is written back to company_registry -
+        # `live_unconfirmed` (no detectable stage) deliberately never reaches
+        # this call. Writing those back would let a company like OpenAI (also
+        # has no detectable stage in its Crunchbase snippet) get swept into
+        # the shared registry via a "seed" search, and from there into
+        # startup_hunt's own resolution/sync pipeline showing up as a
+        # "startup" job source - the confirmed/unconfirmed split doubles as
+        # the fix for that, not just a display nicety.
         await _store_discovered_companies(db, location, live_companies)
 
         seen: set[str] = set()
@@ -330,6 +343,18 @@ async def search_startups_stream(
             merged.append(c)
         merged = merged[:limit]
 
+        # Unconfirmed results never count toward `limit` and are deduped
+        # against the confirmed list too, in case the same company shows up
+        # both ways (already-known via L2 with a confirmed stage, and again
+        # in this live batch with an undetected one).
+        unconfirmed_merged: list[dict] = []
+        for c in live_unconfirmed:
+            key = _dedupe_key(c)
+            if key in seen:
+                continue
+            seen.add(key)
+            unconfirmed_merged.append(c)
+
         sources = dict(live_result["meta"]["sources"])
         company_registry_count = sum(1 for c in merged if c.get("source") == "company_registry")
         if company_registry_count:
@@ -337,6 +362,7 @@ async def search_startups_stream(
 
         result = {
             "companies": merged,
+            "unconfirmed": unconfirmed_merged,
             "meta": {
                 "total": len(merged), "limit": limit,
                 "queries_run": live_result["meta"]["queries_run"],

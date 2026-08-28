@@ -34,6 +34,10 @@ interface DiscoveredCompany {
 
 // ── Constants ─────────────────────────────────────────────────────────────────
 
+// Single-select, not multi - each option is a ceiling ("Seed" also matches
+// Pre-Seed/Angel companies, see funding_stages.py::stages_at_or_below on the
+// backend), so picking more than one wouldn't mean anything the higher pick
+// doesn't already cover.
 const FUNDING_STAGES = [
   { value: 'pre-seed', label: 'Pre-Seed' },
   { value: 'seed', label: 'Seed' },
@@ -121,13 +125,20 @@ export default function StartupScoutPage() {
 
   // ── Form state ────────────────────────────────────────────────────────────
   const [location, setLocation] = useState('')
-  const [selectedStages, setSelectedStages] = useState<string[]>(['seed'])
+  const [selectedStage, setSelectedStage] = useState('seed')
   const [industry, setIndustry] = useState('')
   const [limit, setLimit] = useState('50')
   const [filtersOpen, setFiltersOpen] = useState(false)
 
   // ── Result state ──────────────────────────────────────────────────────────
   const [results, setResults] = useState<DiscoveredCompany[]>([])
+  // Companies DDG found but couldn't confirm a matching stage for (no stage
+  // text detectable at all - not the same as a confirmed mismatch, which is
+  // dropped entirely on the backend). Shown separately, never counted toward
+  // `limit`, so a search never silently pads its count with unverifiable
+  // matches - see engine.py::search_startups' "unconfirmed" bucket.
+  const [unconfirmedResults, setUnconfirmedResults] = useState<DiscoveredCompany[]>([])
+  const [showUnconfirmed, setShowUnconfirmed] = useState(false)
   const [searching, setSearching] = useState(false)
   const [toppingUp, setToppingUp] = useState(false)
   const [hasSearched, setHasSearched] = useState(false)
@@ -150,12 +161,6 @@ export default function StartupScoutPage() {
 
   // ── Handlers ──────────────────────────────────────────────────────────────
 
-  function toggleStage(stage: string) {
-    setSelectedStages(prev =>
-      prev.includes(stage) ? prev.filter(s => s !== stage) : [...prev, stage]
-    )
-  }
-
   function goToPage(page: number) {
     setCurrentPage(page)
     window.scrollTo({ top: 0, behavior: 'smooth' })
@@ -175,15 +180,12 @@ export default function StartupScoutPage() {
       toast({ title: 'Location required', description: 'Enter a city or country to search.', variant: 'destructive' })
       return
     }
-    if (selectedStages.length === 0) {
-      toast({ title: 'Select a funding stage', variant: 'destructive' })
-      return
-    }
-
     setSearching(true)
     setToppingUp(false)
     setHasSearched(true)
     setResults([])
+    setUnconfirmedResults([])
+    setShowUnconfirmed(false)
     setExpandedDescriptions(new Set())
     setCurrentPage(1)
 
@@ -192,7 +194,7 @@ export default function StartupScoutPage() {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         location: location.trim(),
-        funding_stages: selectedStages,
+        funding_stage: selectedStage,
         industry: industry.trim(),
         limit: parseInt(limit, 10),
       }),
@@ -229,7 +231,7 @@ export default function StartupScoutPage() {
       buffer = lines.pop() ?? ''
       for (const line of lines) {
         if (!line.trim()) continue
-        let event: { type: string; companies?: DiscoveredCompany[] }
+        let event: { type: string; companies?: DiscoveredCompany[]; unconfirmed?: DiscoveredCompany[] }
         try {
           event = JSON.parse(line)
         } catch {
@@ -240,6 +242,7 @@ export default function StartupScoutPage() {
           setToppingUp(true)
         } else if (event.type === 'done') {
           setResults(event.companies || [])
+          setUnconfirmedResults(event.unconfirmed || [])
           setToppingUp(false)
           finalCount = (event.companies || []).length
         }
@@ -281,7 +284,8 @@ export default function StartupScoutPage() {
 
   // ── Render ────────────────────────────────────────────────────────────────
 
-  const filterSummary = [location || 'No location', selectedStages.join(', ') || 'No stage']
+  const selectedStageLabel = FUNDING_STAGES.find(s => s.value === selectedStage)?.label || selectedStage
+  const filterSummary = [location || 'No location', selectedStageLabel]
     .filter(Boolean)
     .join(' · ')
 
@@ -365,7 +369,8 @@ export default function StartupScoutPage() {
               />
             </div>
 
-            {/* Funding stages */}
+            {/* Funding stage - single select, it's a ceiling not an exact
+                match: picking "Seed" also surfaces Pre-Seed/Angel companies. */}
             <div className="space-y-2">
               <Label className="text-xs font-medium text-slate-600">
                 Funding stage <span className="text-red-500">*</span>
@@ -374,10 +379,10 @@ export default function StartupScoutPage() {
                 {FUNDING_STAGES.map(({ value, label }) => (
                   <button
                     key={value}
-                    onClick={() => toggleStage(value)}
+                    onClick={() => setSelectedStage(value)}
                     className={cn(
                       'px-2.5 py-1 rounded-lg text-[11px] font-semibold border transition-all',
-                      selectedStages.includes(value)
+                      selectedStage === value
                         ? 'bg-indigo-600 text-white border-indigo-600 shadow-sm'
                         : 'bg-white text-slate-500 border-slate-200 hover:border-indigo-300 hover:text-indigo-600',
                     )}
@@ -386,6 +391,9 @@ export default function StartupScoutPage() {
                   </button>
                 ))}
               </div>
+              <p className="text-[11px] text-slate-400">
+                Includes earlier stages too - Seed also shows Pre-Seed &amp; Angel.
+              </p>
             </div>
 
             {/* Industry */}
@@ -664,6 +672,128 @@ export default function StartupScoutPage() {
                 </div>
               )}
             </>
+          )}
+
+          {/* Unconfirmed stage - companies DDG found but couldn't confirm a
+              matching funding stage for (see engine.py's "unconfirmed"
+              bucket). Never folded into the count above or the tally that
+              feeds company_registry - shown separately so nothing found is
+              silently thrown away, but nothing here is claimed as a match
+              either. Independent of the confirmed results block above (can
+              render even when that one's empty). */}
+          {!searching && unconfirmedResults.length > 0 && (
+            <div className="bg-white rounded-2xl border border-dashed border-slate-200 overflow-hidden">
+              <button
+                type="button"
+                onClick={() => setShowUnconfirmed(v => !v)}
+                className="w-full flex items-center justify-between gap-3 px-4 py-3 text-left hover:bg-slate-50/60 transition-colors"
+              >
+                <span className="text-xs font-medium text-slate-500">
+                  {unconfirmedResults.length} more found - funding stage couldn&apos;t be confirmed
+                </span>
+                {showUnconfirmed ? <ChevronUp className="h-3.5 w-3.5 text-slate-400" /> : <ChevronDown className="h-3.5 w-3.5 text-slate-400" />}
+              </button>
+              {showUnconfirmed && (
+                <div className="border-t border-slate-100 divide-y divide-slate-100">
+                  {unconfirmedResults.map((company, i) => {
+                    const saved = savedNames.has(company.name)
+                    const saving = savingName === company.name
+                    const descKey = `unconfirmed-${company.website}-${i}`
+                    const descExpanded = expandedDescriptions.has(descKey)
+                    return (
+                      <div key={descKey} className="p-4 flex items-start gap-3">
+                        <div className="w-8 h-8 rounded-lg bg-slate-50 border border-slate-100 flex items-center justify-center flex-shrink-0">
+                          <Building2 className="h-4 w-4 text-slate-300" />
+                        </div>
+                        <div className="flex-1 min-w-0">
+                          <div className="flex items-start justify-between gap-3">
+                            <div className="min-w-0">
+                              <p className="font-medium text-slate-700 text-sm truncate">{company.name}</p>
+                              <div className="flex flex-wrap items-center gap-1.5 mt-1">
+                                {company.location && (
+                                  <span className="flex items-center gap-0.5 text-[11px] text-slate-400">
+                                    <MapPin className="h-2.5 w-2.5" />
+                                    {company.location}
+                                  </span>
+                                )}
+                                <span className="px-2 py-0.5 rounded-full text-[10px] font-medium bg-slate-50 text-slate-400 ring-1 ring-slate-200">
+                                  Stage unconfirmed
+                                </span>
+                              </div>
+                            </div>
+                            <div className="flex items-center gap-1.5 flex-shrink-0">
+                              {company.website && (
+                                <Link
+                                  href={company.website}
+                                  target="_blank"
+                                  className="h-8 w-8 rounded-lg flex items-center justify-center text-slate-300 hover:text-slate-600 hover:bg-slate-50 border border-transparent hover:border-slate-200 transition-all"
+                                  title="Open profile"
+                                >
+                                  <ExternalLink className="h-3.5 w-3.5" />
+                                </Link>
+                              )}
+                              <Button
+                                size="sm"
+                                variant={saved ? 'outline' : 'default'}
+                                disabled={saved || saving}
+                                onClick={() => saveToTracker(company)}
+                                className={cn(
+                                  'h-8 px-3 rounded-xl text-[11px] font-semibold',
+                                  saved
+                                    ? 'border-emerald-200 text-emerald-600 bg-emerald-50 hover:bg-emerald-50'
+                                    : 'gradient-brand text-white border-0 hover:opacity-90 shadow-sm',
+                                )}
+                              >
+                                {saving ? (
+                                  <Loader2 className="h-3 w-3 animate-spin" />
+                                ) : saved ? (
+                                  <><CheckCircle className="h-3 w-3 mr-1" />Saved</>
+                                ) : (
+                                  <><BookmarkPlus className="h-3 w-3 mr-1" />Save</>
+                                )}
+                              </Button>
+                            </div>
+                          </div>
+                          <div className="mt-2">
+                            <p
+                              ref={el => {
+                                if (!el || descExpanded) return
+                                const isOverflowing = el.scrollHeight > el.clientHeight + 1
+                                setOverflowingDescriptions(prev => {
+                                  const already = prev.has(descKey)
+                                  if (isOverflowing === already) return prev
+                                  const next = new Set(prev)
+                                  if (isOverflowing) next.add(descKey)
+                                  else next.delete(descKey)
+                                  return next
+                                })
+                              }}
+                              className={cn(
+                                'text-[12px] text-slate-500 leading-relaxed',
+                                !descExpanded && 'line-clamp-2',
+                              )}
+                            >
+                              {company.description || (
+                                <span className="italic text-slate-400">No description available</span>
+                              )}
+                            </p>
+                            {company.description && (overflowingDescriptions.has(descKey) || descExpanded) && (
+                              <button
+                                type="button"
+                                onClick={() => toggleDescription(descKey)}
+                                className="text-[11px] font-medium text-indigo-500 hover:text-indigo-600 mt-0.5"
+                              >
+                                {descExpanded ? 'See less' : 'See more'}
+                              </button>
+                            )}
+                          </div>
+                        </div>
+                      </div>
+                    )
+                  })}
+                </div>
+              )}
+            </div>
           )}
         </div>
       </div>

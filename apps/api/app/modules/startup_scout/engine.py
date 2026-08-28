@@ -905,6 +905,14 @@ async def search_startups(
 
     seen: set[str] = set()
     companies: list[dict[str, Any]] = []
+    # Companies a stage filter can't confirm OR reject - no stage text was
+    # detectable at all, so it would be dishonest to either claim they match
+    # or silently throw them away. Kept separate from `companies` (never
+    # counted toward `limit`, never written back to company_registry - see
+    # service.py::_store_discovered_companies) so a search for "seed" can't
+    # accidentally sweep in a company like OpenAI (which also has no
+    # detectable stage in its Crunchbase snippet) as if it were confirmed.
+    unconfirmed: list[dict[str, Any]] = []
     source_counts: dict[str, int] = {}
     queries_run: int = 0
 
@@ -926,20 +934,18 @@ async def search_startups(
 
             detected = raw_stage_pre or _detect_funding_stage(c.get("description", ""))
             c["funding_stage"] = detected
+            c["location"] = loc
+            c["size_range"] = raw_size_pre or _detect_employee_range(c.get("description", ""))
 
-            # Stage post-filter: when a stage was requested, an UNDETECTED
-            # stage is skipped too, not just a detected-and-mismatched one -
-            # "unknown" isn't evidence of a match (same philosophy
-            # _company_registry_candidates already applies to L2 rows with a
-            # NULL funding_stage, see service.py). Previously this only
-            # skipped a detected mismatch, so a company whose snippet had no
-            # usable stage text slipped through a stage-filtered search
-            # unfiltered - and since stage detection runs off the same
-            # description text, that same empty snippet usually meant no
-            # description either, showing up as a card with neither field.
+            # Stage post-filter: when a stage was requested, a detected
+            # mismatch is dropped outright, but an UNDETECTED stage goes to
+            # `unconfirmed` instead of either bucket - "no stage text found"
+            # isn't evidence the company doesn't qualify, but it also isn't
+            # proof it does (same philosophy _company_registry_candidates
+            # already applies to L2 rows with a NULL funding_stage).
             if funding_stages:
                 if not detected:
-                    log.debug("Stage post-filter: skipping %r - no stage detected", c["name"])
+                    unconfirmed.append(c)
                     continue
                 detected_norm = _canonical_stage(detected)
                 requested_norms = {_canonical_stage(s) for s in funding_stages}
@@ -950,8 +956,6 @@ async def search_startups(
                     )
                     continue
 
-            c["location"] = loc
-            c["size_range"] = raw_size_pre or _detect_employee_range(c.get("description", ""))
             companies.append(c)
             source_counts[source] = source_counts.get(source, 0) + 1
 
@@ -1059,7 +1063,11 @@ async def search_startups(
         _ingest(results, label)
 
     final = companies[:limit]
-    log.info("search_startups: %d companies total", len(final))
+    final_unconfirmed = unconfirmed[:limit]
+    log.info(
+        "search_startups: %d companies total, %d more with an unconfirmed stage",
+        len(final), len(final_unconfirmed),
+    )
 
     meta = {
         "total": len(final),
@@ -1070,7 +1078,7 @@ async def search_startups(
         "industry": industry.strip() or None,
         "funding_stages": funding_stages,
     }
-    return {"companies": final, "meta": meta}
+    return {"companies": final, "unconfirmed": final_unconfirmed, "meta": meta}
 
 
 # ── Phase B: contact crawl ────────────────────────────────────────────────────
