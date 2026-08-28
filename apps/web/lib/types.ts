@@ -123,6 +123,7 @@ export interface ResumeTailorResult {
   transferable_strengths?: string[]
   critical_missing?: string[]
   degraded?: boolean
+  prose_degraded?: boolean
 }
 
 export type TemplateId =

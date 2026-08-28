@@ -17,7 +17,7 @@ import fitz  # PyMuPDF
 import httpx
 import numpy as np
 from fastapi import APIRouter, Depends, Request, HTTPException, UploadFile, File, Form
-from fastapi.responses import StreamingResponse, Response, HTMLResponse
+from fastapi.responses import Response, HTMLResponse
 from jinja2 import Environment, FileSystemLoader
 from sqlalchemy.ext.asyncio import AsyncSession
 from weasyprint import HTML as WeasyHTML
@@ -181,7 +181,17 @@ async def tailor_resume(
     )
 
     # ─── LLM call — only for AI-generated prose ───────────────────────
-    ai_fields = await _generate_tailor_prose(resume_text, jd_for_processing, analysis)
+    # The deterministic analysis above is already complete and useful on its own
+    # (score, matched/missing keywords, gaps). A full AI-provider outage must not
+    # take that down with it — degrade to empty prose fields instead of a 500,
+    # mirroring how embedding failures degrade to keyword-only matching.
+    try:
+        ai_fields = await _generate_tailor_prose(resume_text, jd_for_processing, analysis)
+        prose_degraded = False
+    except Exception as exc:
+        logger.warning("Tailor prose generation failed: %r — returning deterministic analysis only", exc)
+        ai_fields = {}
+        prose_degraded = True
 
     # ─── Merge deterministic + AI into the wire format the frontend expects ──
     response_payload = {
@@ -204,17 +214,11 @@ async def tailor_resume(
         "critical_missing": analysis.critical_missing,
         "matches": [m.as_dict() for m in analysis.matches],
         "degraded": analysis.degraded,
+        "prose_degraded": prose_degraded,
     }
 
-    # Wrap in StreamingResponse so frontend's existing reader loop keeps working;
-    # we just emit one chunk. The frontend regex-extracts the JSON object.
-    body = json.dumps(response_payload)
-
-    async def emit():
-        yield body
-
-    return StreamingResponse(
-        emit(),
+    return Response(
+        content=json.dumps(response_payload),
         media_type="application/json",
         headers={"X-Resume-Hash": resume_hash},
     )

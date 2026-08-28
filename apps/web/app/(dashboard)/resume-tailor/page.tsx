@@ -14,30 +14,9 @@ import {
 } from 'lucide-react'
 import { apiFetch } from '@/lib/api'
 import { cn } from '@jobnok/ui'
-import { StartupHuntSavedOpportunity, JobSearchApplication } from '@/lib/types'
+import { StartupHuntSavedOpportunity, JobSearchApplication, ResumeTailorResult } from '@/lib/types'
 
-interface TailorResult {
-  match_score: number
-  matched_keywords: string[]
-  missing_keywords: Array<{ keyword: string; suggested_placement: string }>
-  bullet_rewrites: Array<{ original: string; improved: string }>
-  summary: string
-  target_role?: string
-  target_company?: string
-  profile_headline?: string
-  tailored_summary?: string
-  // Phase 4 additions — produced by the deterministic matcher
-  score_breakdown?: {
-    core_skills?: number
-    responsibilities?: number
-    domain?: number
-    ats_keywords?: number
-    seniority?: number
-  }
-  transferable_strengths?: string[]
-  critical_missing?: string[]
-  degraded?: boolean
-}
+type TailorResult = ResumeTailorResult
 
 const SCORE_LABELS: Record<string, string> = {
   core_skills: 'Core Skills',
@@ -51,6 +30,33 @@ function scoreBarTone(score: number): string {
   if (score >= 70) return 'bg-emerald-500'
   if (score >= 40) return 'bg-amber-500'
   return 'bg-red-500'
+}
+
+function ResultSkeleton() {
+  return (
+    <div className="space-y-4 animate-pulse">
+      <div className="bg-white rounded-2xl border border-slate-100 shadow-card p-5">
+        <div className="flex items-center justify-between mb-3">
+          <div className="h-3.5 w-32 bg-slate-100 rounded-full" />
+          <div className="h-7 w-14 bg-slate-100 rounded-full" />
+        </div>
+        <div className="h-2.5 bg-slate-100 rounded-full" />
+      </div>
+      <div className="bg-white rounded-2xl border border-slate-100 shadow-card p-5 space-y-2.5">
+        <div className="h-3.5 w-40 bg-slate-100 rounded-full" />
+        <div className="h-3 w-full bg-slate-100 rounded-full" />
+        <div className="h-3 w-3/4 bg-slate-100 rounded-full" />
+      </div>
+      <div className="bg-white rounded-2xl border border-slate-100 shadow-card p-5">
+        <div className="h-3.5 w-36 bg-slate-100 rounded-full mb-3" />
+        <div className="flex flex-wrap gap-1.5">
+          {Array.from({ length: 6 }).map((_, i) => (
+            <div key={i} className="h-6 w-16 bg-slate-100 rounded-full" />
+          ))}
+        </div>
+      </div>
+    </div>
+  )
 }
 
 function buildJdFromOpportunity(lead: StartupHuntSavedOpportunity): string {
@@ -83,7 +89,6 @@ function ResumeTailorInner() {
   const [jd, setJd] = useState('')
   const [loading, setLoading] = useState(false)
   const [prefilling, setPrefilling] = useState(false)
-  const [streamText, setStreamText] = useState('')
   const [result, setResult] = useState<TailorResult | null>(null)
   const [error, setError] = useState<string | null>(null)
 
@@ -136,7 +141,6 @@ function ResumeTailorInner() {
   async function analyzeResume() {
     if (!file || !jd.trim()) return
     setLoading(true)
-    setStreamText('')
     setResult(null)
     setError(null)
 
@@ -146,36 +150,19 @@ function ResumeTailorInner() {
 
     try {
       const res = await apiFetch('/api/ai/tailor', { method: 'POST', body: formData })
+      const parsed: TailorResult | null = await res.json().catch(() => null)
 
       if (!res.ok) {
-        const json = await res.json()
-        setError(json.detail || 'Analysis failed. Please try again.')
+        setError((parsed as unknown as { detail?: string })?.detail || 'Analysis failed. Please try again.')
         setLoading(false)
         return
       }
 
-      if (!res.body) { setLoading(false); return }
-
-      const reader = res.body.getReader()
-      const decoder = new TextDecoder()
-      let fullText = ''
-
-      while (true) {
-        const { done, value } = await reader.read()
-        if (done) break
-        const chunk = decoder.decode(value)
-        fullText += chunk
-        setStreamText(fullText)
-      }
-
-      let parsed: TailorResult | null = null
-      try {
-        const jsonMatch = fullText.match(/\{[\s\S]*\}/)
-        if (jsonMatch) parsed = JSON.parse(jsonMatch[0])
-      } catch { /* raw stream fallback */ }
-
       if (parsed) {
         setResult(parsed)
+        if (parsed.prose_degraded) {
+          toast({ title: 'AI prose unavailable', description: 'Showing the deterministic match score and keywords only.' })
+        }
         if (opportunityId) {
           await apiFetch(`/api/startup-hunt/opportunities/${opportunityId}/artifacts`, {
             method: 'POST',
@@ -330,20 +317,16 @@ function ResumeTailorInner() {
           )}
 
           {loading && !result && (
-            <div className="bg-white rounded-2xl border border-slate-100 shadow-card min-h-[300px] flex items-center justify-center p-8">
-              <div className="text-center space-y-3">
-                <Loader2 className="h-10 w-10 animate-spin mx-auto text-indigo-500" />
+            <>
+              <div className="bg-white rounded-2xl border border-slate-100 shadow-sm p-4 flex items-center gap-3">
+                <Loader2 className="h-4 w-4 animate-spin text-indigo-400 flex-shrink-0" />
                 <div>
-                  <p className="font-semibold text-slate-700">Analysing your resume…</p>
-                  <p className="text-slate-400 text-sm mt-1">Streaming response in real-time</p>
+                  <p className="text-sm font-medium text-slate-600">Analysing your resume…</p>
+                  <p className="text-xs text-slate-400 mt-0.5">Matching against the job description, this takes a few seconds.</p>
                 </div>
-                {streamText && (
-                  <pre className="text-left text-xs text-slate-500 bg-slate-50 p-3 rounded-xl mt-2 max-h-40 overflow-y-auto whitespace-pre-wrap">
-                    {streamText.slice(-500)}
-                  </pre>
-                )}
               </div>
-            </div>
+              <ResultSkeleton />
+            </>
           )}
 
           {!result && !loading && (
@@ -403,6 +386,14 @@ function ResumeTailorInner() {
                 <div className="flex items-start gap-2.5 bg-amber-50 border border-amber-100 text-amber-800 rounded-xl px-4 py-3 text-sm">
                   <AlertTriangle className="h-4 w-4 flex-shrink-0 text-amber-500 mt-0.5" />
                   <span>Semantic matching unavailable — scores are based on keyword overlap only. Results are still useful but less nuanced than usual.</span>
+                </div>
+              )}
+
+              {/* Prose degraded notice — AI providers were unavailable, deterministic score/keywords still shown */}
+              {result.prose_degraded && (
+                <div className="flex items-start gap-2.5 bg-amber-50 border border-amber-100 text-amber-800 rounded-xl px-4 py-3 text-sm">
+                  <AlertTriangle className="h-4 w-4 flex-shrink-0 text-amber-500 mt-0.5" />
+                  <span>AI-generated content (headline, summary, bullet rewrites) is temporarily unavailable. The match score, keywords, and gaps below are unaffected — try again shortly for the full report.</span>
                 </div>
               )}
 
