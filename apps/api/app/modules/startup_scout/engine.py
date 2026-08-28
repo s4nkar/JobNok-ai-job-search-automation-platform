@@ -28,6 +28,7 @@ except ImportError:
 from app.core.config import settings
 from app.services.cache import circuit_is_open, record_provider_result
 from app.shared import funding_stages
+from app.shared.utils import clean_truncated_text
 
 log = logging.getLogger(__name__)
 
@@ -280,15 +281,20 @@ def _normalize_description(text: str) -> str:
     each having to re-clean it. No AI/LLM call: this only fixes
     capitalization/whitespace/trailing punctuation left over after all the
     source-specific noise-stripping above, it doesn't rewrite content.
+
+    The caller already slices the raw snippet to a fixed character count
+    (see _parse_company's body[:500]) before this runs, which usually lands
+    mid-word/mid-sentence, not on a clean boundary - clean_truncated_text
+    trims that back to the last complete sentence (or word, as a fallback)
+    instead of this function papering over it with a bare "." tacked onto a
+    half-finished word.
     """
     text = re.sub(r"\s+", " ", text).strip()
     if not text:
         return ""
     if text[0].islower():
         text = text[0].upper() + text[1:]
-    if text[-1] not in ".!?":
-        text += "."
-    return text
+    return clean_truncated_text(text)
 
 
 def _extract_domain(url: str) -> str | None:
@@ -921,9 +927,20 @@ async def search_startups(
             detected = raw_stage_pre or _detect_funding_stage(c.get("description", ""))
             c["funding_stage"] = detected
 
-            # Stage post-filter: if a stage was detected AND it doesn't match any of
-            # the requested stages, skip this company.
-            if detected and funding_stages:
+            # Stage post-filter: when a stage was requested, an UNDETECTED
+            # stage is skipped too, not just a detected-and-mismatched one -
+            # "unknown" isn't evidence of a match (same philosophy
+            # _company_registry_candidates already applies to L2 rows with a
+            # NULL funding_stage, see service.py). Previously this only
+            # skipped a detected mismatch, so a company whose snippet had no
+            # usable stage text slipped through a stage-filtered search
+            # unfiltered - and since stage detection runs off the same
+            # description text, that same empty snippet usually meant no
+            # description either, showing up as a card with neither field.
+            if funding_stages:
+                if not detected:
+                    log.debug("Stage post-filter: skipping %r - no stage detected", c["name"])
+                    continue
                 detected_norm = _canonical_stage(detected)
                 requested_norms = {_canonical_stage(s) for s in funding_stages}
                 if detected_norm not in requested_norms:

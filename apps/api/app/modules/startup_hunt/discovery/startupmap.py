@@ -38,6 +38,7 @@ from app.modules.startup_hunt.discovery.startup_source import DiscoveredStartup
 from app.modules.startup_hunt.engine import extract_domain
 from app.modules.startup_hunt.ingestion.ssrf_guard import SSRFBlockedError, safe_fetch
 from app.shared import funding_stages
+from app.shared.utils import clean_truncated_text
 
 logger = logging.getLogger(__name__)
 
@@ -137,7 +138,11 @@ def _to_discovered(slug: str, org: dict[str, Any]) -> DiscoveredStartup | None:
         # Real prose, verified present on a live page (dance_de) - was never
         # captured before, which is why a company_registry-served search
         # result always showed no description even when this page has one.
-        description=str(org.get("description") or "").strip() or None,
+        # StartupMap's own field is hard-capped at exactly 300 characters
+        # server-side (verified live - it ends mid-word with no more text to
+        # fetch), so clean_truncated_text trims the trailing incomplete
+        # sentence rather than showing it cut off mid-word.
+        description=clean_truncated_text(str(org.get("description") or "").strip()) or None,
     )
 
 

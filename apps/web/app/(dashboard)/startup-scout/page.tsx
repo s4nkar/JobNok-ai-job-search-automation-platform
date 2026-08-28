@@ -129,7 +129,15 @@ export default function StartupScoutPage() {
   // ── Result state ──────────────────────────────────────────────────────────
   const [results, setResults] = useState<DiscoveredCompany[]>([])
   const [searching, setSearching] = useState(false)
+  const [toppingUp, setToppingUp] = useState(false)
   const [hasSearched, setHasSearched] = useState(false)
+  const [expandedDescriptions, setExpandedDescriptions] = useState<Set<string>>(new Set())
+  // Whether a card's description is actually being clipped by line-clamp-2
+  // right now (measured via scrollHeight vs clientHeight, not guessed from
+  // character count - a character threshold doesn't account for the card's
+  // actual rendered width, so it either hid "See more" on text that really
+  // was clipped or showed it on text that already fit in 2 lines).
+  const [overflowingDescriptions, setOverflowingDescriptions] = useState<Set<string>>(new Set())
 
   // ── Pagination ────────────────────────────────────────────────────────────
   const [currentPage, setCurrentPage] = useState(1)
@@ -153,6 +161,15 @@ export default function StartupScoutPage() {
     window.scrollTo({ top: 0, behavior: 'smooth' })
   }
 
+  function toggleDescription(key: string) {
+    setExpandedDescriptions(prev => {
+      const next = new Set(prev)
+      if (next.has(key)) next.delete(key)
+      else next.add(key)
+      return next
+    })
+  }
+
   async function handleSearch() {
     if (!location.trim()) {
       toast({ title: 'Location required', description: 'Enter a city or country to search.', variant: 'destructive' })
@@ -164,8 +181,10 @@ export default function StartupScoutPage() {
     }
 
     setSearching(true)
+    setToppingUp(false)
     setHasSearched(true)
     setResults([])
+    setExpandedDescriptions(new Set())
     setCurrentPage(1)
 
     const res = await apiFetch('/api/startup-scout/search', {
@@ -179,18 +198,60 @@ export default function StartupScoutPage() {
       }),
     })
 
-    if (res.ok) {
-      const data = await res.json()
-      setResults(data.companies || [])
-      if ((data.companies || []).length === 0) {
-        toast({ title: 'No results', description: 'Try a broader location or different stage.' })
-      }
-    } else {
+    if (!res.ok) {
       const err = await res.json().catch(() => ({}))
       toast({ title: 'Search failed', description: err.detail || 'Something went wrong.', variant: 'destructive' })
+      setSearching(false)
+      return
+    }
+
+    if (!res.body) {
+      setSearching(false)
+      return
+    }
+
+    // Server streams newline-delimited JSON events (see
+    // routes.py::scout_search) - an L2-only "partial" event almost
+    // instantly, then a "done" event once the slow live DDG top-up (if
+    // needed) finishes. Same fetch + ReadableStream pattern this app
+    // already uses for LLM streaming (see cover-letter/page.tsx), just with
+    // JSON lines instead of raw prose chunks.
+    const reader = res.body.getReader()
+    const decoder = new TextDecoder()
+    let buffer = ''
+    let finalCount: number | null = null
+
+    while (true) {
+      const { done, value } = await reader.read()
+      if (done) break
+      buffer += decoder.decode(value, { stream: true })
+      const lines = buffer.split('\n')
+      buffer = lines.pop() ?? ''
+      for (const line of lines) {
+        if (!line.trim()) continue
+        let event: { type: string; companies?: DiscoveredCompany[] }
+        try {
+          event = JSON.parse(line)
+        } catch {
+          continue
+        }
+        if (event.type === 'partial') {
+          setResults(event.companies || [])
+          setToppingUp(true)
+        } else if (event.type === 'done') {
+          setResults(event.companies || [])
+          setToppingUp(false)
+          finalCount = (event.companies || []).length
+        }
+      }
+    }
+
+    if (finalCount === 0) {
+      toast({ title: 'No results', description: 'Try a broader location or different stage.' })
     }
 
     setSearching(false)
+    setToppingUp(false)
   }
 
   async function saveToTracker(company: DiscoveredCompany) {
@@ -387,19 +448,21 @@ export default function StartupScoutPage() {
               </div>
               <p className="font-semibold text-slate-700 text-base">Find your next startup</p>
               <p className="text-sm text-slate-400 mt-1 max-w-xs leading-relaxed">
-                Set a location and funding stage, then hit Discover. <span className="text-indigo-600">Save interesting companies to your tracker to crawl for founder contacts.</span>
+                Set a location and funding stage, then hit Discover. <span className="text-indigo-600">Save interesting startups to tracker to find founders to network with.</span>
               </p>
             </div>
           )}
 
-          {/* Skeleton loading */}
-          {searching && (
+          {/* Skeleton loading - only until we have something to show, even
+              partial (L2) results; once results.length > 0 the "topping up"
+              banner below takes over instead of blocking the page. */}
+          {searching && results.length === 0 && (
             <>
               <div className="bg-white rounded-2xl border border-slate-100 shadow-sm p-4 flex items-center gap-3">
                 <Loader2 className="h-4 w-4 animate-spin text-indigo-400 flex-shrink-0" />
                 <div>
                   <p className="text-sm font-medium text-slate-600">Scanning startup directories…</p>
-                  <p className="text-xs text-slate-400 mt-0.5">Running {limit === '200' ? '14+' : limit === '100' ? '10+' : '6'} queries across Crunchbase, Wellfound, Dealroom &amp; more</p>
+                  <p className="text-xs text-slate-400 mt-0.5">This might take a while based on the limit!</p>
                 </div>
               </div>
               {Array.from({ length: 6 }).map((_, i) => <SkeletonCard key={i} />)}
@@ -419,9 +482,18 @@ export default function StartupScoutPage() {
             </div>
           )}
 
-          {/* Results */}
-          {!searching && results.length > 0 && (
+          {/* Results - shown as soon as L2's "partial" results are in, even
+              while the live DDG top-up is still running in the background. */}
+          {results.length > 0 && (
             <>
+              {toppingUp && (
+                <div className="bg-indigo-50/60 rounded-2xl border border-indigo-100 p-3 flex items-center gap-2.5">
+                  <Loader2 className="h-3.5 w-3.5 animate-spin text-indigo-400 flex-shrink-0" />
+                  <p className="text-xs text-indigo-600">
+                    Found {results.length} so far - searching for more…
+                  </p>
+                </div>
+              )}
               {/* ── Citation card ──────────────────────────────────────── */}
               {/* ── Result count + top pagination ──────────────────────── */}
               {/* flex-wrap - up to 9 pagination buttons (7 numbered + prev/
@@ -444,6 +516,8 @@ export default function StartupScoutPage() {
                 const saved = savedNames.has(company.name)
                 const saving = savingName === company.name
                 const stagePill = STAGE_PILL[company.funding_stage] || ''
+                const descKey = `${company.website}-${i}`
+                const descExpanded = expandedDescriptions.has(descKey)
 
                 return (
                   <article
@@ -541,11 +615,43 @@ export default function StartupScoutPage() {
                       </div>
 
                       {/* Description */}
-                      <p className="text-[12px] text-slate-500 mt-2 leading-relaxed line-clamp-2">
-                        {company.description || (
-                          <span className="italic text-slate-400">No description available</span>
+                      <div className="mt-2">
+                        <p
+                          ref={el => {
+                            // Only measure while clamped - once expanded the
+                            // clamp class is gone, so scrollHeight would
+                            // always equal clientHeight and wrongly look
+                            // "not overflowing".
+                            if (!el || descExpanded) return
+                            const isOverflowing = el.scrollHeight > el.clientHeight + 1
+                            setOverflowingDescriptions(prev => {
+                              const already = prev.has(descKey)
+                              if (isOverflowing === already) return prev
+                              const next = new Set(prev)
+                              if (isOverflowing) next.add(descKey)
+                              else next.delete(descKey)
+                              return next
+                            })
+                          }}
+                          className={cn(
+                            'text-[12px] text-slate-500 leading-relaxed',
+                            !descExpanded && 'line-clamp-2',
+                          )}
+                        >
+                          {company.description || (
+                            <span className="italic text-slate-400">No description available</span>
+                          )}
+                        </p>
+                        {company.description && (overflowingDescriptions.has(descKey) || descExpanded) && (
+                          <button
+                            type="button"
+                            onClick={() => toggleDescription(descKey)}
+                            className="text-[11px] font-medium text-indigo-500 hover:text-indigo-600 mt-0.5"
+                          >
+                            {descExpanded ? 'See less' : 'See more'}
+                          </button>
                         )}
-                      </p>
+                      </div>
                     </div>
                   </article>
                 )
