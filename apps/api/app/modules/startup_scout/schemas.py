@@ -12,16 +12,20 @@ _VALID_FUNDING_STAGES = {"angel", "pre-seed", "seed", "series-a", "series-b", "s
 
 class ScoutSearchRequest(BaseModel):
     location: str = Field(min_length=1, max_length=300)
-    funding_stages: list[str] = Field(default_factory=list, max_length=8)
+    # Singular, not a list - this is a ceiling, not an exact-match set (see
+    # app/shared/funding_stages.py::stages_at_or_below): "seed" also
+    # surfaces angel/pre-seed companies, so letting someone pick more than
+    # one stage wouldn't mean anything a single higher pick doesn't already
+    # cover.
+    funding_stage: str = Field(default="seed", max_length=20)
     industry: str = Field(default="", max_length=100)
     limit: int = Field(default=50, ge=10, le=200)
 
-    @field_validator("funding_stages")
+    @field_validator("funding_stage")
     @classmethod
-    def validate_funding_stages(cls, value: list[str]) -> list[str]:
-        for stage in value:
-            if stage not in _VALID_FUNDING_STAGES:
-                raise ValueError(f"Unknown funding stage: {stage!r}")
+    def validate_funding_stage(cls, value: str) -> str:
+        if value not in _VALID_FUNDING_STAGES:
+            raise ValueError(f"Unknown funding stage: {value!r}")
         return value
 
 

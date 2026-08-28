@@ -697,6 +697,13 @@ export default function StartupHuntPage() {
 
           {loading && results.length === 0 && (
             <div className="space-y-4">
+              <div className="bg-white rounded-2xl border border-slate-100 shadow-sm p-4 flex items-center gap-3">
+                <Loader2 className="h-4 w-4 animate-spin text-indigo-400 flex-shrink-0" />
+                <div>
+                  <p className="text-sm font-medium text-slate-600">Scanning job boards…</p>
+                  <p className="text-xs text-slate-400 mt-0.5">This might take a moment depending on your filters.</p>
+                </div>
+              </div>
               {Array.from({ length: 6 }).map((_, i) => (
                 <div key={i} className="bg-white rounded-2xl border border-slate-100 shadow-sm p-5 animate-pulse">
                   <div className="flex flex-col sm:flex-row sm:items-start sm:justify-between gap-4">

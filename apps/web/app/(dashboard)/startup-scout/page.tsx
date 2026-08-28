@@ -34,6 +34,10 @@ interface DiscoveredCompany {
 
 // ── Constants ─────────────────────────────────────────────────────────────────
 
+// Single-select, not multi - each option is a ceiling ("Seed" also matches
+// Pre-Seed/Angel companies, see funding_stages.py::stages_at_or_below on the
+// backend), so picking more than one wouldn't mean anything the higher pick
+// doesn't already cover.
 const FUNDING_STAGES = [
   { value: 'pre-seed', label: 'Pre-Seed' },
   { value: 'seed', label: 'Seed' },
@@ -121,15 +125,30 @@ export default function StartupScoutPage() {
 
   // ── Form state ────────────────────────────────────────────────────────────
   const [location, setLocation] = useState('')
-  const [selectedStages, setSelectedStages] = useState<string[]>(['seed'])
+  const [selectedStage, setSelectedStage] = useState('seed')
   const [industry, setIndustry] = useState('')
   const [limit, setLimit] = useState('50')
   const [filtersOpen, setFiltersOpen] = useState(false)
 
   // ── Result state ──────────────────────────────────────────────────────────
   const [results, setResults] = useState<DiscoveredCompany[]>([])
+  // Companies DDG found but couldn't confirm a matching stage for (no stage
+  // text detectable at all - not the same as a confirmed mismatch, which is
+  // dropped entirely on the backend). Shown separately, never counted toward
+  // `limit`, so a search never silently pads its count with unverifiable
+  // matches - see engine.py::search_startups' "unconfirmed" bucket.
+  const [unconfirmedResults, setUnconfirmedResults] = useState<DiscoveredCompany[]>([])
+  const [showUnconfirmed, setShowUnconfirmed] = useState(false)
   const [searching, setSearching] = useState(false)
+  const [toppingUp, setToppingUp] = useState(false)
   const [hasSearched, setHasSearched] = useState(false)
+  const [expandedDescriptions, setExpandedDescriptions] = useState<Set<string>>(new Set())
+  // Whether a card's description is actually being clipped by line-clamp-2
+  // right now (measured via scrollHeight vs clientHeight, not guessed from
+  // character count - a character threshold doesn't account for the card's
+  // actual rendered width, so it either hid "See more" on text that really
+  // was clipped or showed it on text that already fit in 2 lines).
+  const [overflowingDescriptions, setOverflowingDescriptions] = useState<Set<string>>(new Set())
 
   // ── Pagination ────────────────────────────────────────────────────────────
   const [currentPage, setCurrentPage] = useState(1)
@@ -142,15 +161,18 @@ export default function StartupScoutPage() {
 
   // ── Handlers ──────────────────────────────────────────────────────────────
 
-  function toggleStage(stage: string) {
-    setSelectedStages(prev =>
-      prev.includes(stage) ? prev.filter(s => s !== stage) : [...prev, stage]
-    )
-  }
-
   function goToPage(page: number) {
     setCurrentPage(page)
     window.scrollTo({ top: 0, behavior: 'smooth' })
+  }
+
+  function toggleDescription(key: string) {
+    setExpandedDescriptions(prev => {
+      const next = new Set(prev)
+      if (next.has(key)) next.delete(key)
+      else next.add(key)
+      return next
+    })
   }
 
   async function handleSearch() {
@@ -158,14 +180,13 @@ export default function StartupScoutPage() {
       toast({ title: 'Location required', description: 'Enter a city or country to search.', variant: 'destructive' })
       return
     }
-    if (selectedStages.length === 0) {
-      toast({ title: 'Select a funding stage', variant: 'destructive' })
-      return
-    }
-
     setSearching(true)
+    setToppingUp(false)
     setHasSearched(true)
     setResults([])
+    setUnconfirmedResults([])
+    setShowUnconfirmed(false)
+    setExpandedDescriptions(new Set())
     setCurrentPage(1)
 
     const res = await apiFetch('/api/startup-scout/search', {
@@ -173,24 +194,67 @@ export default function StartupScoutPage() {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         location: location.trim(),
-        funding_stages: selectedStages,
+        funding_stage: selectedStage,
         industry: industry.trim(),
         limit: parseInt(limit, 10),
       }),
     })
 
-    if (res.ok) {
-      const data = await res.json()
-      setResults(data.companies || [])
-      if ((data.companies || []).length === 0) {
-        toast({ title: 'No results', description: 'Try a broader location or different stage.' })
-      }
-    } else {
+    if (!res.ok) {
       const err = await res.json().catch(() => ({}))
       toast({ title: 'Search failed', description: err.detail || 'Something went wrong.', variant: 'destructive' })
+      setSearching(false)
+      return
+    }
+
+    if (!res.body) {
+      setSearching(false)
+      return
+    }
+
+    // Server streams newline-delimited JSON events (see
+    // routes.py::scout_search) - an L2-only "partial" event almost
+    // instantly, then a "done" event once the slow live DDG top-up (if
+    // needed) finishes. Same fetch + ReadableStream pattern this app
+    // already uses for LLM streaming (see cover-letter/page.tsx), just with
+    // JSON lines instead of raw prose chunks.
+    const reader = res.body.getReader()
+    const decoder = new TextDecoder()
+    let buffer = ''
+    let finalCount: number | null = null
+
+    while (true) {
+      const { done, value } = await reader.read()
+      if (done) break
+      buffer += decoder.decode(value, { stream: true })
+      const lines = buffer.split('\n')
+      buffer = lines.pop() ?? ''
+      for (const line of lines) {
+        if (!line.trim()) continue
+        let event: { type: string; companies?: DiscoveredCompany[]; unconfirmed?: DiscoveredCompany[] }
+        try {
+          event = JSON.parse(line)
+        } catch {
+          continue
+        }
+        if (event.type === 'partial') {
+          setResults(event.companies || [])
+          setToppingUp(true)
+        } else if (event.type === 'done') {
+          setResults(event.companies || [])
+          setUnconfirmedResults(event.unconfirmed || [])
+          setToppingUp(false)
+          finalCount = (event.companies || []).length
+        }
+      }
+    }
+
+    if (finalCount === 0) {
+      toast({ title: 'No results', description: 'Try a broader location or different stage.' })
     }
 
     setSearching(false)
+    setToppingUp(false)
   }
 
   async function saveToTracker(company: DiscoveredCompany) {
@@ -220,7 +284,8 @@ export default function StartupScoutPage() {
 
   // ── Render ────────────────────────────────────────────────────────────────
 
-  const filterSummary = [location || 'No location', selectedStages.join(', ') || 'No stage']
+  const selectedStageLabel = FUNDING_STAGES.find(s => s.value === selectedStage)?.label || selectedStage
+  const filterSummary = [location || 'No location', selectedStageLabel]
     .filter(Boolean)
     .join(' · ')
 
@@ -304,7 +369,8 @@ export default function StartupScoutPage() {
               />
             </div>
 
-            {/* Funding stages */}
+            {/* Funding stage - single select, it's a ceiling not an exact
+                match: picking "Seed" also surfaces Pre-Seed/Angel companies. */}
             <div className="space-y-2">
               <Label className="text-xs font-medium text-slate-600">
                 Funding stage <span className="text-red-500">*</span>
@@ -313,10 +379,10 @@ export default function StartupScoutPage() {
                 {FUNDING_STAGES.map(({ value, label }) => (
                   <button
                     key={value}
-                    onClick={() => toggleStage(value)}
+                    onClick={() => setSelectedStage(value)}
                     className={cn(
                       'px-2.5 py-1 rounded-lg text-[11px] font-semibold border transition-all',
-                      selectedStages.includes(value)
+                      selectedStage === value
                         ? 'bg-indigo-600 text-white border-indigo-600 shadow-sm'
                         : 'bg-white text-slate-500 border-slate-200 hover:border-indigo-300 hover:text-indigo-600',
                     )}
@@ -325,6 +391,9 @@ export default function StartupScoutPage() {
                   </button>
                 ))}
               </div>
+              <p className="text-[11px] text-slate-400">
+                Includes earlier stages too - Seed also shows Pre-Seed &amp; Angel.
+              </p>
             </div>
 
             {/* Industry */}
@@ -387,19 +456,21 @@ export default function StartupScoutPage() {
               </div>
               <p className="font-semibold text-slate-700 text-base">Find your next startup</p>
               <p className="text-sm text-slate-400 mt-1 max-w-xs leading-relaxed">
-                Set a location and funding stage, then hit Discover. <span className="text-indigo-600">Save interesting companies to your tracker to crawl for founder contacts.</span>
+                Set a location and funding stage, then hit Discover. <span className="text-indigo-600">Save interesting startups to tracker to find founders to network with.</span>
               </p>
             </div>
           )}
 
-          {/* Skeleton loading */}
-          {searching && (
+          {/* Skeleton loading - only until we have something to show, even
+              partial (L2) results; once results.length > 0 the "topping up"
+              banner below takes over instead of blocking the page. */}
+          {searching && results.length === 0 && (
             <>
               <div className="bg-white rounded-2xl border border-slate-100 shadow-sm p-4 flex items-center gap-3">
                 <Loader2 className="h-4 w-4 animate-spin text-indigo-400 flex-shrink-0" />
                 <div>
                   <p className="text-sm font-medium text-slate-600">Scanning startup directories…</p>
-                  <p className="text-xs text-slate-400 mt-0.5">Running {limit === '200' ? '14+' : limit === '100' ? '10+' : '6'} queries across Crunchbase, Wellfound, Dealroom &amp; more</p>
+                  <p className="text-xs text-slate-400 mt-0.5">This might take a while based on the limit!</p>
                 </div>
               </div>
               {Array.from({ length: 6 }).map((_, i) => <SkeletonCard key={i} />)}
@@ -419,9 +490,18 @@ export default function StartupScoutPage() {
             </div>
           )}
 
-          {/* Results */}
-          {!searching && results.length > 0 && (
+          {/* Results - shown as soon as L2's "partial" results are in, even
+              while the live DDG top-up is still running in the background. */}
+          {results.length > 0 && (
             <>
+              {toppingUp && (
+                <div className="bg-indigo-50/60 rounded-2xl border border-indigo-100 p-3 flex items-center gap-2.5">
+                  <Loader2 className="h-3.5 w-3.5 animate-spin text-indigo-400 flex-shrink-0" />
+                  <p className="text-xs text-indigo-600">
+                    Found {results.length} so far - searching for more…
+                  </p>
+                </div>
+              )}
               {/* ── Citation card ──────────────────────────────────────── */}
               {/* ── Result count + top pagination ──────────────────────── */}
               {/* flex-wrap - up to 9 pagination buttons (7 numbered + prev/
@@ -444,6 +524,8 @@ export default function StartupScoutPage() {
                 const saved = savedNames.has(company.name)
                 const saving = savingName === company.name
                 const stagePill = STAGE_PILL[company.funding_stage] || ''
+                const descKey = `${company.website}-${i}`
+                const descExpanded = expandedDescriptions.has(descKey)
 
                 return (
                   <article
@@ -541,11 +623,43 @@ export default function StartupScoutPage() {
                       </div>
 
                       {/* Description */}
-                      <p className="text-[12px] text-slate-500 mt-2 leading-relaxed line-clamp-2">
-                        {company.description || (
-                          <span className="italic text-slate-400">No description available</span>
+                      <div className="mt-2">
+                        <p
+                          ref={el => {
+                            // Only measure while clamped - once expanded the
+                            // clamp class is gone, so scrollHeight would
+                            // always equal clientHeight and wrongly look
+                            // "not overflowing".
+                            if (!el || descExpanded) return
+                            const isOverflowing = el.scrollHeight > el.clientHeight + 1
+                            setOverflowingDescriptions(prev => {
+                              const already = prev.has(descKey)
+                              if (isOverflowing === already) return prev
+                              const next = new Set(prev)
+                              if (isOverflowing) next.add(descKey)
+                              else next.delete(descKey)
+                              return next
+                            })
+                          }}
+                          className={cn(
+                            'text-[12px] text-slate-500 leading-relaxed',
+                            !descExpanded && 'line-clamp-2',
+                          )}
+                        >
+                          {company.description || (
+                            <span className="italic text-slate-400">No description available</span>
+                          )}
+                        </p>
+                        {company.description && (overflowingDescriptions.has(descKey) || descExpanded) && (
+                          <button
+                            type="button"
+                            onClick={() => toggleDescription(descKey)}
+                            className="text-[11px] font-medium text-indigo-500 hover:text-indigo-600 mt-0.5"
+                          >
+                            {descExpanded ? 'See less' : 'See more'}
+                          </button>
                         )}
-                      </p>
+                      </div>
                     </div>
                   </article>
                 )
@@ -558,6 +672,128 @@ export default function StartupScoutPage() {
                 </div>
               )}
             </>
+          )}
+
+          {/* Unconfirmed stage - companies DDG found but couldn't confirm a
+              matching funding stage for (see engine.py's "unconfirmed"
+              bucket). Never folded into the count above or the tally that
+              feeds company_registry - shown separately so nothing found is
+              silently thrown away, but nothing here is claimed as a match
+              either. Independent of the confirmed results block above (can
+              render even when that one's empty). */}
+          {!searching && unconfirmedResults.length > 0 && (
+            <div className="bg-white rounded-2xl border border-dashed border-slate-200 overflow-hidden">
+              <button
+                type="button"
+                onClick={() => setShowUnconfirmed(v => !v)}
+                className="w-full flex items-center justify-between gap-3 px-4 py-3 text-left hover:bg-slate-50/60 transition-colors"
+              >
+                <span className="text-xs font-medium text-slate-500">
+                  {unconfirmedResults.length} more found - funding stage couldn&apos;t be confirmed
+                </span>
+                {showUnconfirmed ? <ChevronUp className="h-3.5 w-3.5 text-slate-400" /> : <ChevronDown className="h-3.5 w-3.5 text-slate-400" />}
+              </button>
+              {showUnconfirmed && (
+                <div className="border-t border-slate-100 divide-y divide-slate-100">
+                  {unconfirmedResults.map((company, i) => {
+                    const saved = savedNames.has(company.name)
+                    const saving = savingName === company.name
+                    const descKey = `unconfirmed-${company.website}-${i}`
+                    const descExpanded = expandedDescriptions.has(descKey)
+                    return (
+                      <div key={descKey} className="p-4 flex items-start gap-3">
+                        <div className="w-8 h-8 rounded-lg bg-slate-50 border border-slate-100 flex items-center justify-center flex-shrink-0">
+                          <Building2 className="h-4 w-4 text-slate-300" />
+                        </div>
+                        <div className="flex-1 min-w-0">
+                          <div className="flex items-start justify-between gap-3">
+                            <div className="min-w-0">
+                              <p className="font-medium text-slate-700 text-sm truncate">{company.name}</p>
+                              <div className="flex flex-wrap items-center gap-1.5 mt-1">
+                                {company.location && (
+                                  <span className="flex items-center gap-0.5 text-[11px] text-slate-400">
+                                    <MapPin className="h-2.5 w-2.5" />
+                                    {company.location}
+                                  </span>
+                                )}
+                                <span className="px-2 py-0.5 rounded-full text-[10px] font-medium bg-slate-50 text-slate-400 ring-1 ring-slate-200">
+                                  Stage unconfirmed
+                                </span>
+                              </div>
+                            </div>
+                            <div className="flex items-center gap-1.5 flex-shrink-0">
+                              {company.website && (
+                                <Link
+                                  href={company.website}
+                                  target="_blank"
+                                  className="h-8 w-8 rounded-lg flex items-center justify-center text-slate-300 hover:text-slate-600 hover:bg-slate-50 border border-transparent hover:border-slate-200 transition-all"
+                                  title="Open profile"
+                                >
+                                  <ExternalLink className="h-3.5 w-3.5" />
+                                </Link>
+                              )}
+                              <Button
+                                size="sm"
+                                variant={saved ? 'outline' : 'default'}
+                                disabled={saved || saving}
+                                onClick={() => saveToTracker(company)}
+                                className={cn(
+                                  'h-8 px-3 rounded-xl text-[11px] font-semibold',
+                                  saved
+                                    ? 'border-emerald-200 text-emerald-600 bg-emerald-50 hover:bg-emerald-50'
+                                    : 'gradient-brand text-white border-0 hover:opacity-90 shadow-sm',
+                                )}
+                              >
+                                {saving ? (
+                                  <Loader2 className="h-3 w-3 animate-spin" />
+                                ) : saved ? (
+                                  <><CheckCircle className="h-3 w-3 mr-1" />Saved</>
+                                ) : (
+                                  <><BookmarkPlus className="h-3 w-3 mr-1" />Save</>
+                                )}
+                              </Button>
+                            </div>
+                          </div>
+                          <div className="mt-2">
+                            <p
+                              ref={el => {
+                                if (!el || descExpanded) return
+                                const isOverflowing = el.scrollHeight > el.clientHeight + 1
+                                setOverflowingDescriptions(prev => {
+                                  const already = prev.has(descKey)
+                                  if (isOverflowing === already) return prev
+                                  const next = new Set(prev)
+                                  if (isOverflowing) next.add(descKey)
+                                  else next.delete(descKey)
+                                  return next
+                                })
+                              }}
+                              className={cn(
+                                'text-[12px] text-slate-500 leading-relaxed',
+                                !descExpanded && 'line-clamp-2',
+                              )}
+                            >
+                              {company.description || (
+                                <span className="italic text-slate-400">No description available</span>
+                              )}
+                            </p>
+                            {company.description && (overflowingDescriptions.has(descKey) || descExpanded) && (
+                              <button
+                                type="button"
+                                onClick={() => toggleDescription(descKey)}
+                                className="text-[11px] font-medium text-indigo-500 hover:text-indigo-600 mt-0.5"
+                              >
+                                {descExpanded ? 'See less' : 'See more'}
+                              </button>
+                            )}
+                          </div>
+                        </div>
+                      </div>
+                    )
+                  })}
+                </div>
+              )}
+            </div>
           )}
         </div>
       </div>

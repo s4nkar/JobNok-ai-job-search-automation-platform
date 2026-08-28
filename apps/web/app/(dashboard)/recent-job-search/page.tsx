@@ -375,6 +375,19 @@ export default function RecentJobSearchPage() {
             </div>
 
             <div className="space-y-1.5">
+              <Label className="text-xs font-medium text-slate-600">Country</Label>
+              <Select value={country} onValueChange={(v) => setValue('country', v)}>
+                <SelectTrigger className="rounded-xl h-9 text-sm border-slate-200"><SelectValue /></SelectTrigger>
+                <SelectContent>
+                  {ADZUNA_COUNTRIES.map(({ value, label }) => (
+                    <SelectItem key={value} value={value} className="text-sm">{label}</SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+              {errors.country && <p className="text-xs text-destructive">{errors.country.message}</p>}
+            </div>
+
+            <div className="space-y-1.5">
               <Label className="text-xs font-medium text-slate-600">Location</Label>
               <Input
                 placeholder="e.g. Berlin, or Remote"
@@ -388,19 +401,6 @@ export default function RecentJobSearchPage() {
                 ))}
               </datalist>
               {errors.location && <p className="text-xs text-destructive">{errors.location.message}</p>}
-            </div>
-
-            <div className="space-y-1.5">
-              <Label className="text-xs font-medium text-slate-600">Country</Label>
-              <Select value={country} onValueChange={(v) => setValue('country', v)}>
-                <SelectTrigger className="rounded-xl h-9 text-sm border-slate-200"><SelectValue /></SelectTrigger>
-                <SelectContent>
-                  {ADZUNA_COUNTRIES.map(({ value, label }) => (
-                    <SelectItem key={value} value={value} className="text-sm">{label}</SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-              {errors.country && <p className="text-xs text-destructive">{errors.country.message}</p>}
             </div>
 
             <div className="grid grid-cols-2 gap-3">
@@ -491,6 +491,13 @@ export default function RecentJobSearchPage() {
 
           {loading && (
             <div className="space-y-4">
+              <div className="bg-white rounded-2xl border border-slate-100 shadow-sm p-4 flex items-center gap-3">
+                <Loader2 className="h-4 w-4 animate-spin text-indigo-400 flex-shrink-0" />
+                <div>
+                  <p className="text-sm font-medium text-slate-600">Scanning job boards…</p>
+                  <p className="text-xs text-slate-400 mt-0.5">This might take a moment depending on your filters.</p>
+                </div>
+              </div>
               {Array.from({ length: 3 }).map((_, i) => (
                 <div key={i} className="bg-white rounded-2xl border border-slate-100 shadow-sm p-5 space-y-4 animate-pulse">
                   <div className="flex items-start justify-between gap-4">

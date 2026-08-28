@@ -2,7 +2,10 @@
 
 from __future__ import annotations
 
+import json
+
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Request
+from fastapi.responses import StreamingResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import settings
@@ -12,6 +15,7 @@ from app.core.security import get_current_user_id
 from app.modules.startup_scout.schemas import ScoutSearchRequest, SaveCompanyRequest
 from app.modules.startup_scout import service
 from app.modules.usage.service import record_event as record_tool_usage
+from app.shared import funding_stages
 
 router = APIRouter()
 
@@ -51,7 +55,17 @@ async def _burst_check(user_id: str, action: str) -> None:
 
 @router.post("/search")
 async def scout_search(req: ScoutSearchRequest, request: Request, db: AsyncSession = Depends(get_db)):
-    """Phase A: discover startups matching location/stage/industry."""
+    """Phase A: discover startups matching location/stage/industry.
+
+    Streams newline-delimited JSON events rather than one final response -
+    an L2 (company_registry)-only "partial" event fires almost instantly,
+    then a "done" event once any live DDG top-up (the slow part) finishes -
+    see service.py::search_startups_stream. Each line is one JSON object;
+    the frontend reads the response body progressively (same fetch +
+    ReadableStream pattern this app already uses for LLM streaming, see
+    cover_letter/routes.py), not via EventSource (this is a POST with a JSON
+    body, which EventSource can't send).
+    """
     user_id = await get_current_user_id(request, db)
     await _burst_check(user_id, "startup_scout_search")
     await _rate_check(user_id, "startup_scout_search", RATE_LIMIT_SCOUT_SEARCH_PER_DAY)
@@ -60,15 +74,26 @@ async def scout_search(req: ScoutSearchRequest, request: Request, db: AsyncSessi
     if not req.location.strip():
         raise HTTPException(status_code=422, detail="location is required")
 
-    result = await service.search_startups(
-        db,
-        location=req.location.strip(),
-        funding_stages=req.funding_stages,
-        industry=req.industry.strip(),
-        limit=req.limit,
-    )
-    companies = result["companies"]
-    return {"companies": companies, "count": len(companies), "meta": result["meta"]}
+    location = req.location.strip()
+    # "series-c" is exposed in the UI as "Series C+" - already meant to
+    # include anything later, not just an exact Series C match - so its
+    # ceiling expansion goes all the way to the top of STAGE_ORDER instead
+    # of stopping at series-c the way every other (strictly "at or below")
+    # selection does.
+    ceiling = "series-e" if req.funding_stage == "series-c" else req.funding_stage
+    stages = funding_stages.stages_at_or_below(ceiling)
+    industry = req.industry.strip()
+    limit = req.limit
+
+    async def generate():
+        async for event in service.search_startups_stream(
+            location=location, funding_stages=stages, industry=industry, limit=limit,
+        ):
+            if "companies" in event:
+                event = {**event, "count": len(event["companies"])}
+            yield json.dumps(event) + "\n"
+
+    return StreamingResponse(generate(), media_type="application/x-ndjson")
 
 
 @router.post("/companies")

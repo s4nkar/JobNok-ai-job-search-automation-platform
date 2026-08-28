@@ -28,6 +28,7 @@ except ImportError:
 from app.core.config import settings
 from app.services.cache import circuit_is_open, record_provider_result
 from app.shared import funding_stages
+from app.shared.utils import clean_truncated_text
 
 log = logging.getLogger(__name__)
 
@@ -280,15 +281,20 @@ def _normalize_description(text: str) -> str:
     each having to re-clean it. No AI/LLM call: this only fixes
     capitalization/whitespace/trailing punctuation left over after all the
     source-specific noise-stripping above, it doesn't rewrite content.
+
+    The caller already slices the raw snippet to a fixed character count
+    (see _parse_company's body[:500]) before this runs, which usually lands
+    mid-word/mid-sentence, not on a clean boundary - clean_truncated_text
+    trims that back to the last complete sentence (or word, as a fallback)
+    instead of this function papering over it with a bare "." tacked onto a
+    half-finished word.
     """
     text = re.sub(r"\s+", " ", text).strip()
     if not text:
         return ""
     if text[0].islower():
         text = text[0].upper() + text[1:]
-    if text[-1] not in ".!?":
-        text += "."
-    return text
+    return clean_truncated_text(text)
 
 
 def _extract_domain(url: str) -> str | None:
@@ -899,6 +905,14 @@ async def search_startups(
 
     seen: set[str] = set()
     companies: list[dict[str, Any]] = []
+    # Companies a stage filter can't confirm OR reject - no stage text was
+    # detectable at all, so it would be dishonest to either claim they match
+    # or silently throw them away. Kept separate from `companies` (never
+    # counted toward `limit`, never written back to company_registry - see
+    # service.py::_store_discovered_companies) so a search for "seed" can't
+    # accidentally sweep in a company like OpenAI (which also has no
+    # detectable stage in its Crunchbase snippet) as if it were confirmed.
+    unconfirmed: list[dict[str, Any]] = []
     source_counts: dict[str, int] = {}
     queries_run: int = 0
 
@@ -920,10 +934,19 @@ async def search_startups(
 
             detected = raw_stage_pre or _detect_funding_stage(c.get("description", ""))
             c["funding_stage"] = detected
+            c["location"] = loc
+            c["size_range"] = raw_size_pre or _detect_employee_range(c.get("description", ""))
 
-            # Stage post-filter: if a stage was detected AND it doesn't match any of
-            # the requested stages, skip this company.
-            if detected and funding_stages:
+            # Stage post-filter: when a stage was requested, a detected
+            # mismatch is dropped outright, but an UNDETECTED stage goes to
+            # `unconfirmed` instead of either bucket - "no stage text found"
+            # isn't evidence the company doesn't qualify, but it also isn't
+            # proof it does (same philosophy _company_registry_candidates
+            # already applies to L2 rows with a NULL funding_stage).
+            if funding_stages:
+                if not detected:
+                    unconfirmed.append(c)
+                    continue
                 detected_norm = _canonical_stage(detected)
                 requested_norms = {_canonical_stage(s) for s in funding_stages}
                 if detected_norm not in requested_norms:
@@ -933,8 +956,6 @@ async def search_startups(
                     )
                     continue
 
-            c["location"] = loc
-            c["size_range"] = raw_size_pre or _detect_employee_range(c.get("description", ""))
             companies.append(c)
             source_counts[source] = source_counts.get(source, 0) + 1
 
@@ -1042,7 +1063,11 @@ async def search_startups(
         _ingest(results, label)
 
     final = companies[:limit]
-    log.info("search_startups: %d companies total", len(final))
+    final_unconfirmed = unconfirmed[:limit]
+    log.info(
+        "search_startups: %d companies total, %d more with an unconfirmed stage",
+        len(final), len(final_unconfirmed),
+    )
 
     meta = {
         "total": len(final),
@@ -1053,7 +1078,7 @@ async def search_startups(
         "industry": industry.strip() or None,
         "funding_stages": funding_stages,
     }
-    return {"companies": final, "meta": meta}
+    return {"companies": final, "unconfirmed": final_unconfirmed, "meta": meta}
 
 
 # ── Phase B: contact crawl ────────────────────────────────────────────────────

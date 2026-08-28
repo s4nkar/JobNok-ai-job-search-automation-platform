@@ -193,32 +193,60 @@ async def _store_discovered_companies(db: AsyncSession, location: str, companies
 
 
 def _dedupe_key(c: dict) -> str:
-    domain_or_url = (c.get("domain") or c.get("website") or "").rstrip("/").lower()
-    return domain_or_url or c.get("name", "").strip().lower()
+    """Prefers a real registrable domain, EXCEPT for a known startup-
+    directory host (crunchbase.com, wellfound.com, ... - see
+    engine.py::_DIRECTORY_PROFILE_PATHS) - there, "domain" is the
+    DIRECTORY's own domain, not the startup's (a scraped live "website" for
+    these is really a directory profile page, see
+    _store_discovered_companies' docstring above), so every company sourced
+    from the same directory would otherwise collapse onto one shared
+    bare-domain key ("crunchbase.com") and wrongly dedupe against each
+    other - verified live: a London/AI/seed search's live top-up found 3
+    distinct Crunchbase-listed companies but only 1 survived the old logic,
+    the other 2 silently vanishing as "duplicates" of the first. Falls back
+    to the full profile URL (unique per company) for those hosts instead.
+    """
+    domain = (c.get("domain") or "").rstrip("/").lower()
+    if domain and domain not in engine._DIRECTORY_PROFILE_PATHS:
+        return domain
+    website = (c.get("website") or "").rstrip("/").lower()
+    return website or domain or c.get("name", "").strip().lower()
 
 
-async def search_startups(
-    db: AsyncSession,
+async def search_startups_stream(
     *,
     location: str,
     funding_stages: list[str],
     industry: str,
     limit: int,
-) -> dict:
-    """Phase A orchestration: L1 Redis response cache -> L2 company_registry
-    DB-first check -> live DDG scrape (engine.search_startups) only for
-    whatever shortfall remains, mirroring job_search/startup_hunt's own
-    DB-first, pay-only-for-the-shortfall pattern (see
-    job_search/service.py::search_recent_jobs,
-    startup_hunt/service.py::search_startup_hunt_opportunities for the same
-    cache-key/single-flight-lock shape reused here).
+):
+    """Phase A orchestration, as an async generator of progressive events
+    instead of one final dict - L2 company_registry is near-instant (a local
+    DB query), while the live DDG top-up (engine.search_startups) is the slow
+    part (observed several seconds, sometimes more, per search) - see
+    routes.py::scout_search, which streams these events straight to the
+    frontend as newline-delimited JSON so the UI can render L2's results the
+    moment they're known instead of blocking the whole page on DDG.
 
-    L2 now verifies funding_stage itself (both discovery paths populate it -
-    see app/shared/funding_stages.py), so it's consulted for every search
-    shape, not just stage-agnostic ones - a row still missing that data (not
-    yet backfilled/re-discovered) just won't match a filtered request, the
-    same as any other non-matching row would. There is no company-size
-    filter - it's display-only (see _company_registry_candidates).
+    Yields:
+      {"type": "partial", "companies": [...], "meta": {...}} - L2 results
+        only, "meta" reflects L2-so-far (queries_run always 0 here).
+      {"type": "done", "companies": [...], "meta": {...}} - the same shape
+        callers got from the old non-streaming version, either the L2-only
+        result (if L2 alone met `limit`, no "partial" event's companies
+        change) or L2 merged with the live DDG top-up.
+
+    Manages its own DB session (AsyncSessionLocal, not Depends(get_db)) -
+    this generator keeps running (and yields further events) after the route
+    handler's own function body has already returned the StreamingResponse,
+    the same reason run_crawl (a BackgroundTask, see this module's own
+    docstring) can't reuse a request-scoped session either.
+
+    Caching/single-flight-lock/outcome-recording semantics are unchanged
+    from the old non-streaming version - only followers (a second identical
+    search arriving while another is already in flight) don't get the
+    "partial" event, since they're just waiting on the leader's cache write;
+    they still get one "done" event once it appears, same as before.
     """
     cache_key = _response_cache_key(location, funding_stages, industry, limit)
     try:
@@ -229,7 +257,8 @@ async def search_startups(
         try:
             result = json.loads(cached)
             await record_search_outcome("startup_scout", "l1_hit")
-            return result
+            yield {"type": "done", **result}
+            return
         except json.JSONDecodeError:
             pass
 
@@ -251,73 +280,102 @@ async def search_startups(
                 try:
                     result = json.loads(cached)
                     await record_search_outcome("startup_scout", "l1_hit")
-                    return result
+                    yield {"type": "done", **result}
+                    return
                 except json.JSONDecodeError:
                     break
 
-    # Note: this function's own `funding_stages` parameter (the request's
-    # list of stages) intentionally shadows the app.shared.funding_stages
-    # module imported at the top of this file - that module is only used
-    # inside _company_registry_candidates/_store_discovered_companies below,
-    # never directly in this function's body.
-    db_candidates = await _company_registry_candidates(db, location, funding_stages, limit)
+    async with AsyncSessionLocal() as db:
+        # Note: this function's own `funding_stages` parameter (the request's
+        # list of stages) intentionally shadows the app.shared.funding_stages
+        # module imported at the top of this file - that module is only used
+        # inside _company_registry_candidates/_store_discovered_companies
+        # below, never directly in this function's body.
+        db_candidates = await _company_registry_candidates(db, location, funding_stages, limit)
 
-    if db_candidates and len(db_candidates) >= limit:
+        partial_meta = {
+            "total": len(db_candidates), "limit": limit, "queries_run": 0,
+            "sources": {"company_registry": len(db_candidates)} if db_candidates else {},
+            "location": location, "industry": industry.strip() or None,
+            "funding_stages": funding_stages,
+        }
+        # L2 rows always have a confirmed (non-NULL) funding_stage when a
+        # stage filter is active - see _company_registry_candidates - so
+        # there's no "unconfirmed" concept for this layer, unlike the live
+        # DDG top-up below.
+        yield {"type": "partial", "companies": db_candidates, "unconfirmed": [], "meta": partial_meta}
+
+        if db_candidates and len(db_candidates) >= limit:
+            result = {"companies": db_candidates[:limit], "unconfirmed": [], "meta": {**partial_meta, "total": limit}}
+            try:
+                await set_cached(cache_key, json.dumps(result), jittered_ttl(settings.startup_scout_response_cache_ttl_seconds))
+            except Exception:
+                pass
+            await record_search_outcome("startup_scout", "l2_full")
+            yield {"type": "done", **result}
+            return
+
+        live_limit = max(10, limit - len(db_candidates))
+        live_result = await engine.search_startups(
+            location=location, funding_stages=funding_stages, industry=industry,
+            limit=live_limit,
+        )
+        live_companies = live_result["companies"]
+        live_unconfirmed = live_result["unconfirmed"]
+
+        # Only the confirmed bucket is written back to company_registry -
+        # `live_unconfirmed` (no detectable stage) deliberately never reaches
+        # this call. Writing those back would let a company like OpenAI (also
+        # has no detectable stage in its Crunchbase snippet) get swept into
+        # the shared registry via a "seed" search, and from there into
+        # startup_hunt's own resolution/sync pipeline showing up as a
+        # "startup" job source - the confirmed/unconfirmed split doubles as
+        # the fix for that, not just a display nicety.
+        await _store_discovered_companies(db, location, live_companies)
+
+        seen: set[str] = set()
+        merged: list[dict] = []
+        for c in db_candidates + live_companies:
+            key = _dedupe_key(c)
+            if key in seen:
+                continue
+            seen.add(key)
+            merged.append(c)
+        merged = merged[:limit]
+
+        # Unconfirmed results never count toward `limit` and are deduped
+        # against the confirmed list too, in case the same company shows up
+        # both ways (already-known via L2 with a confirmed stage, and again
+        # in this live batch with an undetected one).
+        unconfirmed_merged: list[dict] = []
+        for c in live_unconfirmed:
+            key = _dedupe_key(c)
+            if key in seen:
+                continue
+            seen.add(key)
+            unconfirmed_merged.append(c)
+
+        sources = dict(live_result["meta"]["sources"])
+        company_registry_count = sum(1 for c in merged if c.get("source") == "company_registry")
+        if company_registry_count:
+            sources["company_registry"] = company_registry_count
+
         result = {
-            "companies": db_candidates[:limit],
+            "companies": merged,
+            "unconfirmed": unconfirmed_merged,
             "meta": {
-                "total": limit, "limit": limit, "queries_run": 0,
-                "sources": {"company_registry": limit},
-                "location": location, "industry": industry.strip() or None,
-                "funding_stages": funding_stages,
+                "total": len(merged), "limit": limit,
+                "queries_run": live_result["meta"]["queries_run"],
+                "sources": sources, "location": location,
+                "industry": industry.strip() or None, "funding_stages": funding_stages,
             },
         }
         try:
             await set_cached(cache_key, json.dumps(result), jittered_ttl(settings.startup_scout_response_cache_ttl_seconds))
         except Exception:
             pass
-        await record_search_outcome("startup_scout", "l2_full")
-        return result
-
-    live_limit = max(10, limit - len(db_candidates))
-    live_result = await engine.search_startups(
-        location=location, funding_stages=funding_stages, industry=industry,
-        limit=live_limit,
-    )
-    live_companies = live_result["companies"]
-
-    await _store_discovered_companies(db, location, live_companies)
-
-    seen: set[str] = set()
-    merged: list[dict] = []
-    for c in db_candidates + live_companies:
-        key = _dedupe_key(c)
-        if key in seen:
-            continue
-        seen.add(key)
-        merged.append(c)
-    merged = merged[:limit]
-
-    sources = dict(live_result["meta"]["sources"])
-    company_registry_count = sum(1 for c in merged if c.get("source") == "company_registry")
-    if company_registry_count:
-        sources["company_registry"] = company_registry_count
-
-    result = {
-        "companies": merged,
-        "meta": {
-            "total": len(merged), "limit": limit,
-            "queries_run": live_result["meta"]["queries_run"],
-            "sources": sources, "location": location,
-            "industry": industry.strip() or None, "funding_stages": funding_stages,
-        },
-    }
-    try:
-        await set_cached(cache_key, json.dumps(result), jittered_ttl(settings.startup_scout_response_cache_ttl_seconds))
-    except Exception:
-        pass
-    await record_search_outcome("startup_scout", "live")
-    return result
+        await record_search_outcome("startup_scout", "live")
+        yield {"type": "done", **result}
 
 
 async def list_companies(db: AsyncSession, user_id: str) -> list[dict]:
