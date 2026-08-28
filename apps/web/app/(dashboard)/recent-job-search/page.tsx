@@ -375,6 +375,19 @@ export default function RecentJobSearchPage() {
             </div>
 
             <div className="space-y-1.5">
+              <Label className="text-xs font-medium text-slate-600">Country</Label>
+              <Select value={country} onValueChange={(v) => setValue('country', v)}>
+                <SelectTrigger className="rounded-xl h-9 text-sm border-slate-200"><SelectValue /></SelectTrigger>
+                <SelectContent>
+                  {ADZUNA_COUNTRIES.map(({ value, label }) => (
+                    <SelectItem key={value} value={value} className="text-sm">{label}</SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+              {errors.country && <p className="text-xs text-destructive">{errors.country.message}</p>}
+            </div>
+
+            <div className="space-y-1.5">
               <Label className="text-xs font-medium text-slate-600">Location</Label>
               <Input
                 placeholder="e.g. Berlin, or Remote"
@@ -388,19 +401,6 @@ export default function RecentJobSearchPage() {
                 ))}
               </datalist>
               {errors.location && <p className="text-xs text-destructive">{errors.location.message}</p>}
-            </div>
-
-            <div className="space-y-1.5">
-              <Label className="text-xs font-medium text-slate-600">Country</Label>
-              <Select value={country} onValueChange={(v) => setValue('country', v)}>
-                <SelectTrigger className="rounded-xl h-9 text-sm border-slate-200"><SelectValue /></SelectTrigger>
-                <SelectContent>
-                  {ADZUNA_COUNTRIES.map(({ value, label }) => (
-                    <SelectItem key={value} value={value} className="text-sm">{label}</SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-              {errors.country && <p className="text-xs text-destructive">{errors.country.message}</p>}
             </div>
 
             <div className="grid grid-cols-2 gap-3">
