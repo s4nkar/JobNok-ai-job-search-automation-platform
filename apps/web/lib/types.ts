@@ -109,21 +109,37 @@ export interface LinkedInProfile {
   profile_url: string
 }
 
-export interface ResumeTailorResult {
+export interface ResumeAnalysis {
   match_score: number
   matched_keywords: string[]
   missing_keywords: Array<{ keyword: string; suggested_placement: string }>
+  score_breakdown: Record<string, number>
+  transferable_strengths: string[]
+  critical_missing: string[]
+  degraded: boolean
+}
+
+export interface ResumeTailoring {
+  target_role: string
+  target_company: string
+  profile_headline: string
+  tailored_summary: string
   bullet_rewrites: Array<{ original: string; improved: string }>
   summary: string
-  target_role?: string
-  target_company?: string
-  profile_headline?: string
-  tailored_summary?: string
-  score_breakdown?: Record<string, number>
-  transferable_strengths?: string[]
-  critical_missing?: string[]
-  degraded?: boolean
-  prose_degraded?: boolean
+  validation_flags: string[]
+}
+
+export interface ResumeAiStatus {
+  status: 'ok' | 'degraded'
+  provider: string | null
+}
+
+export interface ResumeTailorResult {
+  session_id: string
+  status: 'ready' | 'failed'
+  analysis: ResumeAnalysis
+  tailoring: ResumeTailoring | null
+  ai: ResumeAiStatus
 }
 
 export type TemplateId =
@@ -182,6 +198,11 @@ export interface CvFeaturedProject {
   results: string | null
 }
 
+export interface CvOtherSection {
+  heading: string
+  bullets: string[]
+}
+
 export interface CvData {
   full_name: string
   job_title: string
@@ -201,6 +222,11 @@ export interface CvData {
   publications: CvPublication[]
   languages: string[]
   relocation: string | null
+  // Catch-all for resume sections that don't fit any category above (e.g.
+  // Volunteering, Patents, Awards) — preserved with their original heading
+  // rather than dropped or misfiled. Not yet editable in the editor form;
+  // it passes through untouched and renders in the standard template.
+  other_sections: CvOtherSection[]
 }
 
 export interface InterviewQuestion {

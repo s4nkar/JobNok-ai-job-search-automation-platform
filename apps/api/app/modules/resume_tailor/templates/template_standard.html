@@ -130,6 +130,13 @@
 {% endfor %}
 {% endif %}
 
+{% if other_sections %}
+{% for section in other_sections %}
+<div class="section-title">{{ section.heading }}</div>
+<ul>{% for b in section.bullets %}<li>{{ b }}</li>{% endfor %}</ul>
+{% endfor %}
+{% endif %}
+
 {% if languages or relocation %}
 <div class="section-title">Additional Information</div>
 {% if languages %}<p style="font-size: 9pt; margin-bottom: 3px;"><strong>Languages</strong> &nbsp;&nbsp; {{ languages | join(' · ') }}</p>{% endif %}

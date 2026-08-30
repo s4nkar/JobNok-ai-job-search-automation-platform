@@ -9,7 +9,13 @@ via httpx — no extra SDK needed for either.
 
 Public interface:
     generate_text(prompt, system, max_tokens, tier="heavy") -> str
+    generate_text_with_provider(prompt, system, max_tokens, tier="heavy") -> (str, provider_name)
     stream_text(prompt, system, max_tokens, tier="heavy")   -> AsyncGenerator[str, None]
+
+Both generate_text and stream_text raise AIGenerationError when every provider
+in the chain fails — callers should catch this specifically and degrade
+gracefully (mirrors app.ai.embeddings.EmbeddingError) rather than letting a
+total outage fail the whole request.
 
 tier: "heavy" (default) uses each provider's configured generation model — for
 prose the user reads (resume rewrites, cover letters, interview answers). "light"
@@ -50,6 +56,12 @@ class _ProviderError(Exception):
 
 class _ProviderUnavailable(_ProviderError):
     """Provider is not configured (e.g. missing API key) — skip without logging as error."""
+
+
+class AIGenerationError(RuntimeError):
+    """All LLM providers exhausted for a generate_text/stream_text call. Callers
+    should degrade gracefully (e.g. return deterministic-only results) rather
+    than failing the request entirely. Mirrors embeddings.EmbeddingError."""
 
 
 # ── OpenAI-compatible (Groq, OpenRouter) ────────────────────────────
@@ -194,12 +206,15 @@ def _dispatch_stream(provider: str, prompt: str, system: str, max_tokens: int, t
 
 # ── Public Interface ─────────────────────────────────────────────
 
-async def generate_text(prompt: str, system: str = "", max_tokens: int = 2048, tier: str = "heavy") -> str:
+async def _run_chain(prompt: str, system: str, max_tokens: int, tier: str) -> tuple[str, str]:
+    """Shared dispatch loop for generate_text/generate_text_with_provider. Returns
+    (content, provider_name). Raises AIGenerationError if every provider fails."""
     chain = _provider_chain()
     last_error: Exception | None = None
     for provider in chain:
         try:
-            return await _dispatch_generate(provider, prompt, system, max_tokens, tier)
+            content = await _dispatch_generate(provider, prompt, system, max_tokens, tier)
+            return content, provider
         except _ProviderUnavailable as exc:
             logger.info("ai_provider skip %s: %s", provider, exc)
             last_error = exc
@@ -208,7 +223,21 @@ async def generate_text(prompt: str, system: str = "", max_tokens: int = 2048, t
             logger.warning("ai_provider transient failure on %s: %s", provider, exc)
             last_error = exc
             continue
-    raise RuntimeError(f"All AI providers exhausted ({chain}). Last error: {last_error!r}")
+    raise AIGenerationError(f"All AI providers exhausted ({chain}). Last error: {last_error!r}")
+
+
+async def generate_text(prompt: str, system: str = "", max_tokens: int = 2048, tier: str = "heavy") -> str:
+    content, _ = await _run_chain(prompt, system, max_tokens, tier)
+    return content
+
+
+async def generate_text_with_provider(
+    prompt: str, system: str = "", max_tokens: int = 2048, tier: str = "heavy",
+) -> tuple[str, str]:
+    """Same as generate_text but also returns which provider served the response —
+    for callers surfacing provider-level observability (e.g. resume-tailor's
+    ai.provider field). Most callers should keep using generate_text."""
+    return await _run_chain(prompt, system, max_tokens, tier)
 
 
 async def stream_text(prompt: str, system: str = "", max_tokens: int = 2048, tier: str = "heavy") -> AsyncGenerator[str, None]:
@@ -241,4 +270,4 @@ async def stream_text(prompt: str, system: str = "", max_tokens: int = 2048, tie
             last_error = exc
             continue
 
-    raise RuntimeError(f"All AI providers exhausted ({chain}). Last error: {last_error!r}")
+    raise AIGenerationError(f"All AI providers exhausted ({chain}). Last error: {last_error!r}")

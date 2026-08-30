@@ -1,167 +1,256 @@
-"""AI endpoints — resume tailor + CV generation.
+"""Resume Tailor — session-based API.
 
-All endpoints stream responses via Server-Sent Events.
-Rate limits enforced per user per tool via Upstash Redis.
+/tailor creates a durable TailoringSession (Postgres) instead of stashing
+state behind a bare resume_text:{user_id} Redis key — that legacy key let two
+concurrent tailoring flows (two tabs, or a second upload before the first
+editor visit) silently cross-contaminate. Every downstream endpoint
+(editor/preview/pdf) now addresses a specific {session_id} instead of
+guessing which resume/analysis "the current user" meant.
+
+Six endpoints:
+    POST /tailor                    — analyze resume+JD, create/reuse a session
+    GET  /tailor/{id}               — re-fetch an existing session's analysis
+    GET  /tailor/{id}/editor        — base_cv_data + tailoring overlay + templates
+    POST /tailor/{id}/preview       — render HTML for live preview
+    POST /tailor/{id}/pdf           — render + return the final PDF
+    GET  /tailor/templates          — template registry metadata
 """
 
+from __future__ import annotations
+
 import asyncio
-import base64
+import hashlib
 import json
 import logging
-import re
-from pathlib import Path
-
-logger = logging.getLogger(__name__)
 
 import fitz  # PyMuPDF
-import httpx
 import numpy as np
 from fastapi import APIRouter, Depends, Request, HTTPException, UploadFile, File, Form
 from fastapi.responses import Response, HTMLResponse
-from jinja2 import Environment, FileSystemLoader
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
-from weasyprint import HTML as WeasyHTML
 
 from app.core.config import settings
 from app.core.database import get_db
-from app.services.cache import check_rate_limit, get_cached, set_cached
-from app.modules.resume_tailor.cache import (
-    compute_resume_hash,
-    deserialize_embeddings,
-    get_resume_cache,
-    serialize_embeddings,
-    update_resume_cache,
-)
-from app.modules.resume_tailor.chunker import chunk_jd, chunk_resume, chunks_from_dicts, chunks_to_dicts, clean_jd_text
-from app.modules.resume_tailor.matcher import match_resume_to_jd
-from app.modules.resume_tailor import service as resume_tailor_service
-from app.ai.embeddings import EmbeddingError, embed
 from app.core.security import get_current_user_id
-from app.ai.llm import provider as ai_provider
+from app.services.cache import check_rate_limit, check_burst_limit, get_cached, set_cached
 from app.shared.utils import _rl_error
 from app.modules.usage.service import record_event as record_tool_usage
+from app.modules.resume_tailor import cache as resume_cache
+from app.modules.resume_tailor import generation
+from app.modules.resume_tailor import rendering
+from app.modules.resume_tailor import service as resume_tailor_service
+from app.modules.resume_tailor.chunker import chunk_jd, chunk_resume, chunks_from_dicts, chunks_to_dicts, clean_jd_text, Chunk
+from app.modules.resume_tailor.matcher import match_resume_to_jd
+from app.modules.resume_tailor.models import ResumeVersion, TailoringSession
+from app.modules.resume_tailor.repository import ResumeVersionRepository, TailoringSessionRepository
+from app.modules.resume_tailor.schemas import (
+    DraftSaveRequest,
+    EditorResponse,
+    PdfRequest,
+    PreviewRequest,
+    TailorResponse,
+    TemplateListResponse,
+)
+from app.ai.embeddings import EmbeddingError, embed
+from app.ai.llm.provider import AIGenerationError
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter()
 
-_TEMPLATES_DIR = Path(__file__).parent / "templates"
-_jinja_env = Environment(loader=FileSystemLoader(str(_TEMPLATES_DIR)), autoescape=True)
-
-_BULLET_PREFIX = re.compile(r"^[\s•\-\*▪–]+")
-
-# Private/link-local IP ranges that must not be fetched (SSRF guard)
-_PRIVATE_NETS = re.compile(
-    r"^(10\.|172\.(1[6-9]|2\d|3[01])\.|192\.168\.|127\.|169\.254\.|::1$|fc|fd)",
-    re.IGNORECASE,
-)
+_MAX_PDF_BYTES = 5 * 1024 * 1024  # 5 MB
+# Generous upper bound for a pasted JD (including any tracker-appended role
+# signals) — well past any legitimate posting, bounds worst-case prompt size
+# and DB row size. Mirrored by a DB CHECK constraint on tailoring_sessions.job_text.
+_MAX_JD_LENGTH = 20_000
 
 
-def _safe_photo_url(url: str | None) -> str | None:
-    """Return url only if it is a public https URL. Returns None otherwise."""
-    if not url:
+def _empty_array() -> np.ndarray:
+    return np.zeros((0, 0), dtype="float32")
+
+
+def _embeddings_model_label() -> str:
+    """Config-time embedding model identity, stored on resume_versions to
+    detect staleness on a provider/model config change."""
+    provider = settings.embedding_provider.lower().strip()
+    if provider == "jina":
+        return f"jina:{settings.jina_model}"
+    if provider == "cohere":
+        return f"cohere:{settings.cohere_embedding_model}"
+    return provider
+
+
+# ── Response shaping ────────────────────────────────────────────────
+
+def _analysis_payload(analysis: dict) -> dict:
+    return {
+        "match_score": analysis.get("overall_score", 0),
+        "matched_keywords": analysis.get("matched_keywords", []),
+        "missing_keywords": [
+            {"keyword": kw, "suggested_placement": "skills"} for kw in analysis.get("missing_keywords", [])
+        ],
+        "score_breakdown": analysis.get("score_breakdown", {}),
+        "transferable_strengths": analysis.get("transferable_strengths", []),
+        "critical_missing": analysis.get("critical_missing", []),
+        "matches": analysis.get("matches", []),
+        "degraded": analysis.get("degraded", False),
+    }
+
+
+def _tailoring_payload(prose: dict | None) -> dict | None:
+    if not prose:
         return None
-    import urllib.parse
-    parsed = urllib.parse.urlparse(url)
-    if parsed.scheme != "https":
-        return None
-    host = parsed.hostname or ""
-    if _PRIVATE_NETS.match(host):
-        return None
-    return url
-
-TEMPLATE_REGISTRY: dict[str, dict] = {
-    "standard":             {"label": "Standard",             "desc": "Clean, professional single-column layout",         "font": "Arial, sans-serif",          "columns": 1, "file": "template_standard.html"},
-    "modern":               {"label": "Modern",               "desc": "Two-column layout with sidebar for contact info",   "font": "Arial, sans-serif",          "columns": 2, "file": "template_modern.html"},
-    "creative":             {"label": "Creative",             "desc": "Timeline-based design with icons and visual elements","font": "Arial, sans-serif",         "columns": 1, "file": "template_creative.html"},
-    "classic":              {"label": "Classic",              "desc": "Traditional format with clean typography",          "font": "Times New Roman, serif",     "columns": 1, "file": "template_classic_new.html"},
-    "balanced":             {"label": "Balanced",             "desc": "Professional layout with clear section divisions",  "font": "Arial, sans-serif",          "columns": 1, "file": "template_balanced.html"},
-    "minimalist":           {"label": "Minimalist",           "desc": "Clean, modern design with subtle borders and spacing","font": "system-ui, sans-serif",    "columns": 1, "file": "template_minimalist.html"},
-    "professional":         {"label": "Professional",         "desc": "Executive-style layout with elegant formatting",    "font": "Arial, sans-serif",          "columns": 1, "file": "template_professional.html"},
-    "corporate":            {"label": "Corporate",            "desc": "Two-column corporate layout with header contact section","font": "Arial, sans-serif",     "columns": 2, "file": "template_corporate.html"},
-    "bold":                 {"label": "Bold",                 "desc": "Bold styling with clear hierarchy and modern design","font": "Arial, sans-serif",         "columns": 1, "file": "template_bold.html"},
-    "slate":                {"label": "Slate",                "desc": "Two-column slate accent layout with modern contrast","font": "Arial, sans-serif",         "columns": 2, "file": "template_slate.html"},
-    "professional_compact": {"label": "Professional Compact", "desc": "Centered header with ALL CAPS section titles and clean hierarchy","font": "Arial, sans-serif","columns": 1, "file": "template_professional_compact.html"},
-    "executive":            {"label": "Executive",            "desc": "Two-column sidebar layout with details panel",      "font": "Arial, sans-serif",          "columns": 2, "file": "template_executive.html"},
-    "insight":              {"label": "Insight",              "desc": "Executive sidebar layout with navy accents and reference cards","font": "Inter, sans-serif","columns": 2, "file": "template_insight.html"},
-    "atelier":              {"label": "Atelier",              "desc": "Editorial two-column layout inspired by artisan portfolios","font": "Georgia, serif",      "columns": 2, "file": "template_atelier.html"},
-    "elegant":              {"label": "Elegant",              "desc": "Refined single-column with accent separators and strong hierarchy","font": "Georgia, serif","columns": 1, "file": "template_elegant.html"},
-    "aqua":                 {"label": "Aqua",                 "desc": "Two-column layout with a soft header band and clear sectioning","font": "Arial, sans-serif","columns": 2, "file": "template_aqua.html"},
-    "lebenslauf":           {"label": "Lebenslauf (DE)",      "desc": "Traditional German CV with photo sidebar",          "font": "Arial, sans-serif",          "columns": 2, "file": "template_classic.html", "requires_photo": True},
-}
+    return {
+        "target_role": prose.get("target_role", ""),
+        "target_company": prose.get("target_company", ""),
+        "profile_headline": prose.get("profile_headline", ""),
+        "tailored_summary": prose.get("tailored_summary", ""),
+        "bullet_rewrites": prose.get("bullet_rewrites", []),
+        "summary": prose.get("summary", ""),
+        "validation_flags": prose.get("validation_flags", []),
+    }
 
 
-# ── Resume Tailor ─────────────────────────────────────────────────
+def _session_response(session: TailoringSession) -> dict:
+    return {
+        "session_id": str(session.id),
+        "status": session.status,
+        "analysis": _analysis_payload(session.analysis),
+        "tailoring": _tailoring_payload(session.prose),
+        "ai": {"status": session.ai_status, "provider": session.ai_provider},
+    }
 
-@router.post("/tailor")
+
+# ── Resume ingestion (Postgres source of truth, Redis accelerator) ──
+
+async def _resolve_resume_version(
+    db: AsyncSession, user_id: str, pdf_bytes: bytes, resume_hash: str,
+) -> tuple[ResumeVersion, list[Chunk], np.ndarray]:
+    """Redis hit -> skip Postgres. Miss -> read resume_versions, warm Redis.
+    Absent from both -> extract/chunk/embed, INSERT, write Redis."""
+    repo = ResumeVersionRepository(db)
+    model_label = _embeddings_model_label()
+    cached = await resume_cache.get_resume_cache(user_id, resume_hash)
+
+    if cached and cached.get("text") and cached.get("chunks") and cached.get("embeddings"):
+        resume_version = await repo.get_by_hash(user_id, resume_hash)
+        if resume_version is None:
+            # Redis has it but Postgres doesn't (e.g. cached before this
+            # migration shipped) — backfill Postgres from the Redis blob.
+            resume_version = await _create_resume_version(
+                repo, user_id, resume_hash, cached["text"], cached["chunks"], cached["embeddings"], cached.get("embeddings_model"),
+            )
+        else:
+            await repo.touch_last_used(user_id, str(resume_version.id))
+        return resume_version, chunks_from_dicts(cached["chunks"]), resume_cache.deserialize_embeddings(cached["embeddings"])
+
+    resume_version = await repo.get_by_hash(user_id, resume_hash)
+    if resume_version is not None:
+        resume_chunks = chunks_from_dicts(resume_version.chunks)
+        resume_embeddings = resume_cache.deserialize_embeddings(resume_version.embeddings)
+
+        if resume_version.embeddings_model != model_label or resume_embeddings.size == 0:
+            # Stale or missing embeddings (provider/model config changed since
+            # this row was written, or a prior embedding-provider outage left
+            # it without any) — re-embed and persist.
+            try:
+                resume_embeddings = await embed([c.text for c in resume_chunks], purpose="matching")
+                embeddings_model = model_label
+            except EmbeddingError as exc:
+                logger.warning("Resume embeddings unavailable: %r — falling back to keyword-only matching", exc)
+                resume_embeddings = _empty_array()
+                embeddings_model = None
+            embeddings_list = resume_cache.serialize_embeddings(resume_embeddings) if resume_embeddings.size > 0 else []
+            resume_version = await repo.update(
+                user_id, str(resume_version.id), embeddings=embeddings_list, embeddings_model=embeddings_model,
+            )
+            await resume_cache.update_resume_cache(user_id, resume_hash, embeddings=embeddings_list, embeddings_model=embeddings_model)
+
+        await repo.touch_last_used(user_id, str(resume_version.id))
+        await resume_cache.update_resume_cache(
+            user_id, resume_hash,
+            text=resume_version.raw_text, chunks=resume_version.chunks,
+            embeddings=resume_version.embeddings, embeddings_model=resume_version.embeddings_model,
+        )
+        return resume_version, resume_chunks, resume_embeddings
+
+    # Absent from both — full extract/chunk/embed.
+    def _extract_text() -> str:
+        doc = fitz.open(stream=pdf_bytes, filetype="pdf")
+        return "\n".join(page.get_text() for page in doc)
+
+    try:
+        resume_text = await asyncio.to_thread(_extract_text)
+    except Exception:
+        raise HTTPException(status_code=400, detail="Could not parse PDF. Ensure it's a valid PDF file.")
+
+    resume_chunks = chunk_resume(resume_text)
+    embeddings_model = None
+    try:
+        resume_embeddings = await embed([c.text for c in resume_chunks], purpose="matching")
+        embeddings_model = model_label
+    except EmbeddingError as exc:
+        logger.warning("Resume embeddings unavailable: %r — falling back to keyword-only matching", exc)
+        resume_embeddings = _empty_array()
+
+    chunk_dicts = chunks_to_dicts(resume_chunks)
+    embeddings_list = resume_cache.serialize_embeddings(resume_embeddings) if resume_embeddings.size > 0 else []
+
+    resume_version = await _create_resume_version(
+        repo, user_id, resume_hash, resume_text, chunk_dicts, embeddings_list, embeddings_model,
+    )
+    await resume_cache.update_resume_cache(
+        user_id, resume_hash, text=resume_text, chunks=chunk_dicts, embeddings=embeddings_list, embeddings_model=embeddings_model,
+    )
+    return resume_version, resume_chunks, resume_embeddings
+
+
+async def _create_resume_version(
+    repo: ResumeVersionRepository, user_id: str, resume_hash: str,
+    raw_text: str, chunks: list[dict], embeddings: list[list[float]], embeddings_model: str | None,
+) -> ResumeVersion:
+    """Insert, tolerating the rare race where two concurrent first-ever
+    uploads of the identical PDF both reach this point — the UniqueConstraint
+    on (user_id, sha256) rejects the loser, which then just reads the
+    winner's row instead. Uses a SAVEPOINT so the conflict doesn't poison the
+    request's outer transaction (same pattern as usage/service.py)."""
+    try:
+        async with repo.session.begin_nested():
+            return await repo.create_from_upload(user_id, resume_hash, raw_text, chunks, embeddings, embeddings_model)
+    except IntegrityError:
+        existing = await repo.get_by_hash(user_id, resume_hash)
+        if existing is None:
+            raise
+        return existing
+
+
+# ── POST /tailor ──────────────────────────────────────────────────
+
+@router.post("/tailor", response_model=TailorResponse)
 async def tailor_resume(
     request: Request,
     resume: UploadFile = File(...),
-    job_description: str = Form(...),
+    job_description: str = Form(..., min_length=1, max_length=_MAX_JD_LENGTH),
+    force_refresh: bool = Form(False),
+    opportunity_id: str | None = Form(None),
+    job_search_application_id: str | None = Form(None),
     db: AsyncSession = Depends(get_db),
 ):
     user_id = await get_current_user_id(request, db)
-    allowed, _ = await check_rate_limit(user_id, "resume", settings.rate_limit_resume_per_day)
+    allowed, _ = await check_rate_limit(user_id, "resume_tailor_ai", settings.rate_limit_resume_ai_per_day)
     if not allowed:
-        raise _rl_error("Resume Tailor", settings.rate_limit_resume_per_day)
+        raise _rl_error("Resume Tailor", settings.rate_limit_resume_ai_per_day)
     await record_tool_usage(db, user_id, "resume-tailor")
 
-    _MAX_PDF_BYTES = 5 * 1024 * 1024  # 5 MB
     pdf_bytes = await resume.read(_MAX_PDF_BYTES + 1)
     if len(pdf_bytes) > _MAX_PDF_BYTES:
         raise HTTPException(status_code=413, detail="PDF must be ≤ 5 MB")
-    resume_hash = compute_resume_hash(pdf_bytes)
+    resume_hash = resume_cache.compute_resume_hash(pdf_bytes)
 
-    # Cache hit: skip PyMuPDF re-parse. The cache survives 30 days, so subsequent
-    # tailoring runs against new JDs reuse the extracted text for free.
-    cached = await get_resume_cache(user_id, resume_hash)
-    if cached and cached.get("text"):
-        resume_text = cached["text"]
-    else:
-        def _extract_text() -> str:
-            doc = fitz.open(stream=pdf_bytes, filetype="pdf")
-            return "\n".join(page.get_text() for page in doc)
+    resume_version, resume_chunks, resume_embeddings = await _resolve_resume_version(db, user_id, pdf_bytes, resume_hash)
 
-        try:
-            resume_text = await asyncio.to_thread(_extract_text)
-        except Exception:
-            raise HTTPException(status_code=400, detail="Could not parse PDF. Ensure it's a valid PDF file.")
-        await update_resume_cache(user_id, resume_hash, text=resume_text)
-
-    # Legacy short-TTL key — generate-pdf still reads from here without needing the hash.
-    await set_cached(f"resume_text:{user_id}", resume_text, ttl_seconds=7200)
-
-    # ─── Resume chunks + embeddings (cached per resume hash) ─────────
-    resume_chunks_dicts = (cached or {}).get("chunks") if cached else None
-    if resume_chunks_dicts:
-        resume_chunks = chunks_from_dicts(resume_chunks_dicts)
-        resume_embeddings = deserialize_embeddings((cached or {}).get("embeddings"))
-    else:
-        resume_chunks = chunk_resume(resume_text)
-        resume_embeddings = np.zeros((0, 0), dtype="float32")
-
-    # Re-embed if embeddings are absent — covers first run and cache entries
-    # written before embeddings were available (e.g. after a provider outage).
-    if resume_embeddings.size == 0:
-        try:
-            resume_embeddings = await embed([c.text for c in resume_chunks], purpose="matching")
-        except EmbeddingError as exc:
-            logger.warning("Resume embeddings unavailable: %r — falling back to keyword-only matching", exc)
-            resume_embeddings = np.zeros((0, 0), dtype="float32")
-        await update_resume_cache(
-            user_id, resume_hash,
-            chunks=chunks_to_dicts(resume_chunks),
-            embeddings=serialize_embeddings(resume_embeddings) if resume_embeddings.size > 0 else [],
-        )
-
-    # ─── JD language normalisation (translate to English if needed) ──────
-    jd_for_processing = job_description
-    if not _is_english(job_description):
-        logger.info("Non-English JD detected — translating to English before analysis")
-        try:
-            jd_for_processing = await _translate_jd(job_description)
-        except Exception as exc:
-            logger.warning("JD translation failed: %r — proceeding with original text", exc)
-
-    # ─── JD chunks + embeddings (always fresh) ────────────────────────
+    jd_for_processing = await generation.translate_jd_if_needed(job_description)
     jd_text_clean = clean_jd_text(jd_for_processing)
     jd_chunks = chunk_jd(jd_text_clean)
     try:
@@ -170,524 +259,255 @@ async def tailor_resume(
         logger.warning("JD embeddings unavailable: %r — falling back to keyword-only matching", exc)
         jd_embeddings = _empty_array()
 
-    # ─── Deterministic match + scoring + gap analysis ─────────────────
-    analysis = match_resume_to_jd(
-        resume_chunks=resume_chunks,
-        resume_embeddings=resume_embeddings,
-        jd_chunks=jd_chunks,
-        jd_embeddings=jd_embeddings,
-        resume_text=resume_text,
-        jd_text=jd_text_clean,
-    )
+    job_hash = hashlib.sha256(job_description.strip().encode("utf-8")).hexdigest()
 
-    # ─── LLM call — only for AI-generated prose ───────────────────────
-    # The deterministic analysis above is already complete and useful on its own
-    # (score, matched/missing keywords, gaps). A full AI-provider outage must not
-    # take that down with it — degrade to empty prose fields instead of a 500,
-    # mirroring how embedding failures degrade to keyword-only matching.
-    try:
-        ai_fields = await _generate_tailor_prose(resume_text, jd_for_processing, analysis)
-        prose_degraded = False
-    except Exception as exc:
-        logger.warning("Tailor prose generation failed: %r — returning deterministic analysis only", exc)
-        ai_fields = {}
-        prose_degraded = True
-
-    # ─── Merge deterministic + AI into the wire format the frontend expects ──
-    response_payload = {
-        # AI-generated
-        "target_role": ai_fields.get("target_role", ""),
-        "target_company": ai_fields.get("target_company", ""),
-        "profile_headline": ai_fields.get("profile_headline", ""),
-        "tailored_summary": ai_fields.get("tailored_summary", ""),
-        "bullet_rewrites": ai_fields.get("bullet_rewrites", []),
-        "summary": ai_fields.get("summary", ""),
-
-        # Deterministic — authoritative, never produced by LLM
-        "match_score": analysis.overall_score,
-        "matched_keywords": analysis.matched_keywords,
-        "missing_keywords": [
-            {"keyword": kw, "suggested_placement": "skills"} for kw in analysis.missing_keywords
-        ],
-        "score_breakdown": analysis.score_breakdown,
-        "transferable_strengths": analysis.transferable_strengths,
-        "critical_missing": analysis.critical_missing,
-        "matches": [m.as_dict() for m in analysis.matches],
-        "degraded": analysis.degraded,
-        "prose_degraded": prose_degraded,
-    }
-
-    return Response(
-        content=json.dumps(response_payload),
-        media_type="application/json",
-        headers={"X-Resume-Hash": resume_hash},
-    )
-
-
-def _empty_array():
-    return np.zeros((0, 0), dtype="float32")
-
-
-# German structural words that rarely appear in English technical text.
-# Used to catch German JDs written mostly in ASCII (few umlauts).
-_GERMAN_STRUCTURAL_RE = re.compile(
-    r"\b(deine?[rns]?|kenntnisse[n]?|aufgaben|werkstudent|studium\b|praktikum|"
-    r"bewerbung|erfahrung\b|bereich\b|programmierkenntnisse|abgeschlossenes|"
-    r"mehrjährige|solide\b|fundierte|sicherer|vertrautheit|laufendes)\b",
-    re.I,
-)
-
-
-def _is_english(text: str) -> bool:
-    """Return False if the text appears to be non-English.
-
-    Two-pass check:
-    1. Non-ASCII ratio ≥ 1% → non-English (catches umlauts/accents).
-    2. German structural word count ≥ 3 → non-English (catches ASCII-heavy
-       German JDs like startup postings that use few umlauts).
-    """
-    if not text:
-        return True
-    non_ascii = sum(1 for c in text if ord(c) > 127)
-    if (non_ascii / len(text)) >= 0.01:
-        return False
-    german_hits = len(_GERMAN_STRUCTURAL_RE.findall(text))
-    return german_hits < 3
-
-
-async def _translate_jd(text: str) -> str:
-    """Translate a non-English JD to English via the configured LLM."""
-    system = (
-        "Translate the following job description to English. "
-        "CRITICAL: Preserve ALL original line breaks, bullet points, and list structure exactly — "
-        "each item that was on its own line must remain on its own line after translation. "
-        "If the text contains the SAME content in BOTH German AND English already, "
-        "output ONLY the English version — do NOT translate the German again or duplicate any section. "
-        "Preserve all technical terms, tool names, company names, and section headers exactly. "
-        "Return only the translated text with no commentary or preamble."
-    )
-    return await ai_provider.generate_text(text[:4000], system, max_tokens=4000)
-
-
-async def _generate_tailor_prose(
-    resume_text: str,
-    job_description: str,
-    analysis,  # MatchResult — typed loosely to avoid an import cycle
-) -> dict:
-    """One small LLM call. Receives the deterministic analysis as context and
-    returns only the AI-generated fields. Keeps the LLM scope narrow so cheaper
-    open-weight models (Llama 3.3 via Groq) can hit it reliably.
-    """
-    rewrites_block = (
-        "\n".join(f"- ORIGINAL: {r.resume_bullet}\n  TARGET REQUIREMENT: {r.target_requirement}"
-                  for r in analysis.rewrite_candidates)
-        or "(no bullets in the rewrite band — leave bullet_rewrites empty)"
-    )
-    transferable_block = "; ".join(analysis.transferable_strengths[:6]) or "(none)"
-    critical_block = "; ".join(analysis.critical_missing[:6]) or "(none)"
-    missing_block = ", ".join(analysis.missing_keywords) or "(none)"
-    matched_block = ", ".join(analysis.matched_keywords[:15]) or "(none)"
-
-    system = """You are a CV tailoring assistant. The deterministic ATS analysis is already done —
-you receive its results and must NOT recompute scores, matched keywords, or missing keywords.
-
-Return ONLY valid JSON in this shape:
-{
-  "target_role": "<job title from the JD>",
-  "target_company": "<company name from the JD>",
-  "profile_headline": "<headline in the format: [target job title] | [relevant skill] | [relevant skill] | [relevant skill] — use the exact target job title from the JD as the first segment, then 2–3 skills from the resume most relevant to this specific role>",
-  "tailored_summary": "<professional summary paragraph — see tone rules below>",
-  "bullet_rewrites": [{"original": "<EXACT original bullet from REWRITE CANDIDATES>", "improved": "<sharpened framing>"}],
-  "summary": "<1-paragraph honest fit assessment noting strengths and real gaps>"
-}
-
-Hard rules:
-- bullet_rewrites: ONLY rewrite bullets from the REWRITE CANDIDATES list. Use the original verbatim as the "original" field.
-  * PRESERVE every number, percentage, and metric from the original
-  * NEVER add tools, methods, or domains absent from the original
-  * Adjust only verb / framing / emphasis — the evidence must stay identical
-- profile_headline: lead with the exact job title from the JD, then 2–3 of the candidate's REAL skills most relevant to THIS SPECIFIC ROLE. Prefer specific technical skills (e.g. RAG, NLP, LangChain, Transformers, EU AI Act) over generic acronyms — NEVER use "AI", "ML", or "Machine Learning" as a standalone headline segment; they are redundant when the job title already implies them. Draw from MATCHED KEYWORDS and resume skills when they clearly overlap the JD's domain. Never add skills the resume doesn't show.
-- tailored_summary TONE AND CONTENT — strict CV style, not cover letter style:
-  * Write in NOMINATIVE STYLE ONLY — no pronouns at all. Do NOT use "I", "my", "their", "they", "this candidate", "the candidate". Start directly with a noun phrase: "Applied AI Engineer with 3+ years…".
-  * NO cover-letter phrases: "I am confident", "I am excited", "I look forward to", "I believe".
-  * NO vague filler: "drive innovation", "leveraging expertise", "improve complex workflows", "passionate about".
-  * Lead with years of experience and core specialty, e.g. "Applied AI Engineer with 3+ years of experience building..."
-  * Include at least ONE specific achievement from the resume (a metric, a project name, or a publication). Make it feel like THIS candidate, not any AI engineer.
-  * Reframe genuine transferable experience for this specific role. Never claim domain expertise the resume does not show.
-  * Write in your own words — do NOT copy or paraphrase sentence fragments from the JD requirements. The summary must read as the candidate's own story, not a reflection of the job posting.
-  * NEVER mention any skill from the MISSING KEYWORDS list — those are absent from the resume.
-- summary: ground the fit assessment in the provided CRITICAL GAPS and TRANSFERABLE STRENGTHS.
-- Return ONLY valid JSON, no markdown fences."""
-
-    prompt = f"""DETERMINISTIC ANALYSIS (do not recompute, just use):
-OVERALL SCORE: {analysis.overall_score}
-SCORE BREAKDOWN: {json.dumps(analysis.score_breakdown)}
-MATCHED KEYWORDS (use these to pick headline skills — prefer the ones most role-relevant): {matched_block}
-TRANSFERABLE STRENGTHS: {transferable_block}
-CRITICAL GAPS (do not invent experience to cover these): {critical_block}
-MISSING KEYWORDS — absent from resume, do not mention in any prose field: {missing_block}
-
-REWRITE CANDIDATES (only rewrite these — copy "ORIGINAL" verbatim):
-{rewrites_block}
-
-JOB DESCRIPTION:
-{job_description[:2500]}
-
-RESUME (for extracting target_role/target_company and grounding prose only):
-{resume_text[:3500]}"""
-
-    raw = await ai_provider.generate_text(prompt, system, max_tokens=1200)
-    try:
-        start = raw.find("{")
-        end = raw.rfind("}") + 1
-        return json.loads(raw[start:end])
-    except Exception:
-        logger.warning("LLM tailor prose returned malformed JSON: %r", raw[:300])
-        return {}
-
-
-# ── CV data helpers ───────────────────────────────────────────────
-
-_SYSTEM_STRUCT = """You are a professional CV writer. Parse the resume text into a structured JSON object.
-
-CRITICAL RULES — violating any of these produces a broken CV:
-1. full_name: Extract the COMPLETE name (e.g. "Sankar Dev Santhosh", NOT just "Sankar"). Never truncate.
-2. skills: For EVERY skill category, populate "items" as a non-empty comma-separated string of the actual tools/skills listed. NEVER leave "items" as null, empty string, or an empty list.
-3. languages: Copy language entries EXACTLY as written in the resume. Do NOT substitute, add, or remove languages.
-4. Completeness: Include ALL experience entries, ALL projects, ALL publications found in the resume. Do not omit any.
-5. bullet_rewrites: Replace each original bullet with its improved version verbatim — do not skip any provided rewrite.
-6. If a TAILORED HEADLINE is provided, use it as job_title. If a TAILORED SUMMARY is provided, use it as summary — copy it VERBATIM, do NOT modify it to weave in keywords.
-7. bullets: Each string in ANY bullets array MUST NOT start with a bullet character (•, -, *, ▪, –). The template adds its own markers. Strip any such prefix before including the text.
-8. publications venue: Preserve the COMPLETE venue string verbatim, including any ranking qualifiers (e.g. "Q1-ranked", "Scopus indexed", "SJR"). Never truncate the venue name.
-9. featured_project: If the resume contains a section labelled "FEATURED PROJECT", "HIGHLIGHT PROJECT", or similar, you MUST extract it into the `featured_project` field. NEVER leave featured_project null if the resume shows one. Do NOT duplicate it in the `projects` array.
-10. missing keywords: For any tool or library in the MISSING KEYWORDS list that is clearly implied by the candidate's existing tech stack (e.g. Pandas/NumPy implied by PyTorch/ML work), add it to the most relevant existing skill category's items string. Only do this for standard foundational tools — never invent specialised domain experience.
-
-Return ONLY this JSON structure (no markdown, no extra text):
-{
-  "full_name": "string — complete name",
-  "job_title": "string — headline/tagline",
-  "location": "string (City, Country)",
-  "email": "string",
-  "phone": "string or null",
-  "github": "string or null (path only, e.g. github.com/user)",
-  "linkedin": "string or null (path only, e.g. linkedin.com/in/user)",
-  "website": "string or null",
-  "work_authorization": "string or null",
-  "summary": "string — professional summary paragraph",
-  "featured_project": {
-    "name": "string", "year": "string or null", "tech": "string or null",
-    "bullets": ["string"], "results": "string or null"
-  },
-  "experience": [
-    {"title": "string", "company": "string", "location": "string or null",
-     "period": "string", "bullets": ["string"]}
-  ],
-  "education": [
-    {"degree": "string", "institution": "string", "location": "string or null",
-     "period": "string", "details": "string or null"}
-  ],
-  "skills": [
-    {"category": "string", "items": "SINGLE STRING — skills separated by commas, e.g. \"Python, PyTorch, Docker\". NOT an array. NEVER null or empty."}
-  ],
-  "projects": [
-    {"name": "string", "tech": "string or null", "bullets": ["string"]}
-  ],
-  "publications": [
-    {"title": "string", "venue": "string", "year": "string or null"}
-  ],
-  "languages": ["string — exact language entries from resume"],
-  "relocation": "string or null"
-}"""
-
-
-def _normalize_cv_data(cv_data: dict) -> None:
-    """Strip bullet prefixes and normalise skill items in-place."""
-    for section_key in ("featured_project",):
-        if cv_data.get(section_key) and isinstance(cv_data[section_key].get("bullets"), list):
-            cv_data[section_key]["bullets"] = [
-                _BULLET_PREFIX.sub("", b) for b in cv_data[section_key]["bullets"]
-            ]
-    for section_key in ("experience", "projects"):
-        for entry in cv_data.get(section_key) or []:
-            if isinstance(entry.get("bullets"), list):
-                entry["bullets"] = [_BULLET_PREFIX.sub("", b) for b in entry["bullets"]]
-    if cv_data.get("skills"):
-        normalised = []
-        for s in cv_data["skills"]:
-            items = s.get("items")
-            if isinstance(items, list):
-                items = ", ".join(str(i).strip(" •·-–\t") for i in items if str(i).strip(" •·-–\t"))
-            elif items is not None:
-                items = str(items)
-                items = re.sub(r"<[^>]+>", " ", items)
-                lines = [ln.strip(" •·-–\t") for ln in items.splitlines() if ln.strip(" •·-–\t")]
-                if len(lines) > 1:
-                    items = ", ".join(lines)
-                items = items.strip()
-            if items:
-                normalised.append({**s, "items": items})
-        cv_data["skills"] = normalised
-
-
-async def _apply_profile_overlay(cv_data: dict, profile: dict, profile_headline: str, template_id: str) -> None:
-    """Overlay authoritative profile contact fields onto cv_data in-place."""
-    profile_name = (profile.get("full_name") or "").strip()
-    if profile_name and " " in profile_name:
-        cv_data["full_name"] = profile_name
-    if not profile_headline and profile.get("job_title"):
-        cv_data["job_title"] = profile["job_title"]
-    cv_email = profile.get("cv_email") or profile.get("email")
-    if cv_email:
-        cv_data["email"] = cv_email
-    if profile.get("phone"):
-        cv_data["phone"] = profile["phone"]
-    if profile.get("linkedin_url"):
-        cv_data["linkedin"] = profile["linkedin_url"]
-    if profile.get("github_url"):
-        cv_data["github"] = profile["github_url"]
-    if profile.get("website_url"):
-        cv_data["website"] = profile["website_url"]
-    if profile.get("work_authorization"):
-        cv_data["work_authorization"] = profile["work_authorization"]
-    if profile.get("address_city"):
-        parts = [profile["address_city"]]
-        if profile.get("address_country"):
-            parts.append(profile["address_country"])
-        cv_data["location"] = ", ".join(parts)
-
-    photo_base64 = None
-    if template_id == "lebenslauf":
-        safe_url = _safe_photo_url(profile.get("cv_photo_url"))
-        if safe_url:
-            try:
-                async with httpx.AsyncClient(timeout=8) as client:
-                    r = await client.get(safe_url)
-                    if r.status_code == 200:
-                        photo_base64 = base64.b64encode(r.content).decode()
-            except Exception:
-                pass
-    cv_data["photo_base64"] = photo_base64
-    cv_data["date_of_birth"] = profile.get("date_of_birth")
-    cv_data["nationality"] = profile.get("nationality")
-
-
-async def _llm_structure_resume(resume_text: str, analysis: dict) -> dict:
-    """Call LLM once to parse resume text + analysis into structured cv_data JSON."""
-    bullet_rewrites = {r["original"]: r["improved"] for r in (analysis.get("bullet_rewrites") or [])}
-    missing_kw = [m["keyword"] for m in (analysis.get("missing_keywords") or [])]
-    target_role = analysis.get("target_role") or ""
-    target_company = analysis.get("target_company") or ""
-    profile_headline = analysis.get("profile_headline") or ""
-    tailored_summary = analysis.get("tailored_summary") or ""
-
-    tailoring_block = ""
-    if target_role or target_company:
-        tailoring_block += f"\nTARGET ROLE: {target_role} at {target_company}"
-    if profile_headline:
-        tailoring_block += f"\nTAILORED HEADLINE TO USE AS job_title: {profile_headline}"
-    if tailored_summary:
-        tailoring_block += f"\nTAILORED SUMMARY TO USE AS summary: {tailored_summary}"
-
-    rewrites_block = "\n".join(f'  ORIGINAL: {o}\n  IMPROVED: {i}' for o, i in bullet_rewrites.items()) if bullet_rewrites else "None"
-    kw_block = ", ".join(missing_kw) if missing_kw else "None"
-
-    prompt = f"""Parse this resume into the required JSON format.
-{tailoring_block}
-
-BULLET REWRITES TO APPLY (replace originals with improved versions verbatim):
-{rewrites_block}
-
-MISSING KEYWORDS — add foundational tools (e.g. Pandas, NumPy, SciKit-learn) to the relevant skills category if implied by existing tech stack. Do NOT invent domain experience:
-{kw_block}
-
-IMPORTANT: If the resume has a "FEATURED PROJECT" section, it MUST be in featured_project (not in projects).
-
-RESUME TEXT:
-{resume_text[:6000]}"""
-
-    raw = await ai_provider.generate_text(prompt, _SYSTEM_STRUCT, max_tokens=4000)
-    try:
-        start = raw.find("{")
-        end = raw.rfind("}") + 1
-        cv_data = json.loads(raw[start:end])
-    except Exception:
-        raise HTTPException(status_code=500, detail="Failed to structure resume. Please try again.")
-
-    if tailored_summary:
-        cv_data["summary"] = tailored_summary
-
-    return cv_data
-
-
-# ── CV PDF Generation ─────────────────────────────────────────────
-
-@router.get("/tailor/templates")
-async def list_templates():
-    """Return template registry metadata (no internal file paths)."""
-    return {
-        "templates": [
-            {"id": k, **{kk: vv for kk, vv in v.items() if kk != "file"}}
-            for k, v in TEMPLATE_REGISTRY.items()
-        ]
-    }
-
-
-@router.post("/tailor/structure-resume")
-async def structure_resume(request: Request, body: dict, db: AsyncSession = Depends(get_db)):
-    """LLM-structure the cached resume into cv_data JSON. Called once when the editor loads."""
-    user_id = await get_current_user_id(request, db)
-    allowed, _ = await check_rate_limit(user_id, "resume", settings.rate_limit_resume_per_day)
-    if not allowed:
-        raise _rl_error("Resume Tailor", settings.rate_limit_resume_per_day)
-
-    resume_text = await get_cached(f"resume_text:{user_id}")
-    if not resume_text:
-        raise HTTPException(
-            status_code=400,
-            detail="No recent analysis found. Please run the Resume Tailor analysis first.",
+    session_repo = TailoringSessionRepository(db)
+    session = None
+    if not force_refresh:
+        session = await session_repo.get_or_create_session(
+            user_id, str(resume_version.id), job_hash,
+            matcher_version=generation.MATCHER_VERSION, prompt_version=generation.PROSE_PROMPT_VERSION,
         )
 
-    analysis = body.get("analysis") or {}
-    template_id = body.get("template_id", "standard")
-    if template_id not in TEMPLATE_REGISTRY:
-        template_id = "standard"
+    if session is None:
+        analysis = match_resume_to_jd(
+            resume_chunks=resume_chunks, resume_embeddings=resume_embeddings,
+            jd_chunks=jd_chunks, jd_embeddings=jd_embeddings,
+            resume_text=resume_version.raw_text, jd_text=jd_text_clean,
+        )
+        prose = await generation.generate_tailor_prose(
+            user_id, resume_hash, job_hash, resume_version.raw_text, resume_chunks, jd_for_processing, analysis,
+        )
 
-    cv_data = await _llm_structure_resume(resume_text, analysis)
-    _normalize_cv_data(cv_data)
+        source_opportunity_id = None
+        if opportunity_id and await resume_tailor_service.verify_opportunity_ownership(db, user_id, opportunity_id):
+            source_opportunity_id = opportunity_id
+        source_application_id = None
+        if job_search_application_id and await resume_tailor_service.verify_application_ownership(db, user_id, job_search_application_id):
+            source_application_id = job_search_application_id
+
+        session = await session_repo.create_session(
+            user_id, str(resume_version.id),
+            job_hash=job_hash,
+            job_text=job_description,
+            job_text_clean=jd_text_clean,
+            job_chunks=chunks_to_dicts(jd_chunks),
+            job_embeddings=resume_cache.serialize_embeddings(jd_embeddings) if jd_embeddings.size > 0 else [],
+            analysis=analysis.as_dict(),
+            prose=prose.as_dict() if prose.ai_status == "ok" else None,
+            matcher_version=generation.MATCHER_VERSION,
+            prompt_version=generation.PROSE_PROMPT_VERSION,
+            ai_status=prose.ai_status,
+            ai_provider=prose.ai_provider,
+            ai_error=prose.ai_error,
+            source_opportunity_id=source_opportunity_id,
+            source_application_id=source_application_id,
+        )
+
+    return _session_response(session)
+
+
+# ── GET /tailor/{session_id} ──────────────────────────────────────
+
+@router.get("/tailor/{session_id}", response_model=TailorResponse)
+async def get_tailor_session(session_id: str, request: Request, db: AsyncSession = Depends(get_db)):
+    user_id = await get_current_user_id(request, db)
+    session = await TailoringSessionRepository(db).get(user_id, session_id)
+    if session is None:
+        raise HTTPException(status_code=404, detail="Session not found.")
+    return _session_response(session)
+
+
+# ── GET /tailor/{session_id}/editor ───────────────────────────────
+
+@router.get("/tailor/{session_id}/editor", response_model=EditorResponse)
+async def get_tailor_editor(session_id: str, request: Request, db: AsyncSession = Depends(get_db)):
+    """Returns the saved draft if one exists (re-opening the editor resumes
+    exactly where the user left off, at zero AI cost — no LLM call, no rate
+    limit), otherwise computes the base_cv_data + tailoring overlay fresh."""
+    user_id = await get_current_user_id(request, db)
+
+    session = await TailoringSessionRepository(db).get(user_id, session_id)
+    if session is None:
+        raise HTTPException(status_code=404, detail="Session not found.")
+
+    if session.draft_cv_data:
+        return {
+            "cv_data": session.draft_cv_data,
+            "session_id": str(session.id),
+            "template_id": session.template_id or "standard",
+            "templates": rendering.list_templates(),
+            "is_draft": True,
+        }
+
+    resume_repo = ResumeVersionRepository(db)
+    resume_version = await resume_repo.get(user_id, str(session.resume_version_id))
+    if resume_version is None:
+        raise HTTPException(status_code=404, detail="Resume not found.")
+
+    if resume_version.base_cv_data and resume_version.base_cv_data_prompt_version == generation.STRUCT_PROMPT_VERSION:
+        base_cv_data = resume_version.base_cv_data
+    else:
+        # Only the actual structuring LLM call counts against the AI quota —
+        # a cache/draft hit above is a plain read and shouldn't cost part of
+        # the daily budget.
+        allowed, _ = await check_rate_limit(user_id, "resume_tailor_ai", settings.rate_limit_resume_ai_per_day)
+        if not allowed:
+            raise _rl_error("Resume Tailor", settings.rate_limit_resume_ai_per_day)
+        try:
+            base_cv_data = await generation.generate_base_cv_data(resume_version.raw_text)
+        except (ValueError, AIGenerationError) as exc:
+            raise HTTPException(status_code=500, detail="Failed to structure resume. Please try again.") from exc
+        rendering.normalize_cv_data(base_cv_data)
+        await resume_repo.set_base_cv_data(user_id, str(resume_version.id), base_cv_data, generation.STRUCT_PROMPT_VERSION)
+        await resume_cache.update_resume_cache(
+            user_id, resume_version.sha256,
+            base_cv_data=base_cv_data, base_cv_data_prompt_version=generation.STRUCT_PROMPT_VERSION,
+        )
+
+    prose = generation.TailorProseResult(**session.prose) if session.prose else generation.TailorProseResult(ai_status=session.ai_status)
+    cv_data = rendering.apply_tailoring_overlay(base_cv_data, prose)
 
     profile = await resume_tailor_service.get_profile_for_overlay(db, user_id)
-    profile_headline = analysis.get("profile_headline") or ""
-    await _apply_profile_overlay(cv_data, profile, profile_headline, template_id)
+    template_id = session.template_id or "standard"
+    await rendering.apply_profile_overlay(cv_data, profile, prose.profile_headline, template_id)
 
-    return {"cv_data": cv_data}
-
-
-@router.post("/tailor/generate-pdf")
-async def generate_cv_pdf(request: Request, body: dict, db: AsyncSession = Depends(get_db)):
-    user_id = await get_current_user_id(request, db)
-    allowed, _ = await check_rate_limit(user_id, "resume", settings.rate_limit_resume_per_day)
-    if not allowed:
-        raise _rl_error("Resume Tailor", settings.rate_limit_resume_per_day)
-
-    template_id = body.get("template_id", "standard")
-    if template_id not in TEMPLATE_REGISTRY:
-        raise HTTPException(
-            status_code=422,
-            detail=f"Unknown template_id '{template_id}'. Valid: {', '.join(TEMPLATE_REGISTRY)}",
-        )
-
-    cv_data_override = body.get("cv_data")
-
-    if cv_data_override:
-        cv_data = dict(cv_data_override)
-        _normalize_cv_data(cv_data)
-        if template_id == "lebenslauf":
-            profile = await resume_tailor_service.get_profile_photo_fields(db, user_id)
-            photo_base64 = None
-            safe_url = _safe_photo_url(profile.get("cv_photo_url"))
-            if safe_url:
-                try:
-                    async with httpx.AsyncClient(timeout=8) as client:
-                        r = await client.get(safe_url)
-                        if r.status_code == 200:
-                            photo_base64 = base64.b64encode(r.content).decode()
-                except Exception:
-                    pass
-            cv_data["photo_base64"] = photo_base64
-            cv_data["date_of_birth"] = profile.get("date_of_birth")
-            cv_data["nationality"] = profile.get("nationality")
-        else:
-            cv_data.setdefault("photo_base64", None)
-            cv_data.setdefault("date_of_birth", None)
-            cv_data.setdefault("nationality", None)
-    else:
-        resume_text = await get_cached(f"resume_text:{user_id}")
-        if not resume_text:
-            raise HTTPException(
-                status_code=400,
-                detail="No recent analysis found. Please run the Resume Tailor analysis first.",
-            )
-        analysis = body.get("analysis") or {}
-        cv_data = await _llm_structure_resume(resume_text, analysis)
-        _normalize_cv_data(cv_data)
-
-        profile = await resume_tailor_service.get_profile_for_overlay(db, user_id)
-        profile_headline = analysis.get("profile_headline") or ""
-        await _apply_profile_overlay(cv_data, profile, profile_headline, template_id)
-
-    logger.info("CV render: template=%s name=%s", template_id, cv_data.get("full_name"))
-
-    template_file = TEMPLATE_REGISTRY[template_id]["file"]
-    tmpl = _jinja_env.get_template(template_file)
-    html_out = tmpl.render(**cv_data)
-
-    pdf_bytes = await asyncio.to_thread(lambda: WeasyHTML(string=html_out).write_pdf())
-
-    opportunity_id = body.get("opportunity_id")
-    if opportunity_id:
-        await resume_tailor_service.save_resume_artifact(
-            db, user_id, opportunity_id, template_id, (body.get("analysis") or {}).get("match_score")
-        )
-
-    return Response(
-        content=pdf_bytes,
-        media_type="application/pdf",
-        headers={"Content-Disposition": f'attachment; filename="tailored_cv_{template_id}.pdf"'},
-    )
+    return {
+        "cv_data": cv_data,
+        "session_id": str(session.id),
+        "template_id": template_id,
+        "templates": rendering.list_templates(),
+        "is_draft": False,
+    }
 
 
-@router.post("/tailor/preview-html")
-async def preview_cv_html(request: Request, body: dict, db: AsyncSession = Depends(get_db)):
-    """Render CV template to HTML for live preview — no PDF conversion, no rate limit."""
+# ── PATCH /tailor/{session_id}/draft ──────────────────────────────
+
+@router.patch("/tailor/{session_id}/draft")
+async def save_tailor_draft(session_id: str, request: Request, body: DraftSaveRequest, db: AsyncSession = Depends(get_db)):
+    """Debounced autosave of in-progress editor edits — burst-limited only
+    (cheap DB write, no LLM, no PDF conversion). Uses its own bucket name
+    (not "resume_tailor_preview") so autosave and live-preview firing close
+    together on every edit don't cannibalize each other's burst budget."""
     user_id = await get_current_user_id(request, db)
 
-    template_id = body.get("template_id", "standard")
-    if template_id not in TEMPLATE_REGISTRY:
+    session_repo = TailoringSessionRepository(db)
+    session = await session_repo.get(user_id, session_id)
+    if session is None:
+        raise HTTPException(status_code=404, detail="Session not found.")
+
+    try:
+        burst_ok = await check_burst_limit(
+            user_id, "resume_tailor_draft", settings.rate_limit_burst_limit, settings.rate_limit_burst_window_seconds,
+        )
+    except Exception:
+        burst_ok = True
+    if not burst_ok:
+        raise HTTPException(status_code=429, detail="Too many save requests — please wait a few seconds and try again.")
+
+    await session_repo.save_draft(user_id, session_id, body.cv_data)
+    return {"saved": True}
+
+
+# ── POST /tailor/{session_id}/preview ─────────────────────────────
+
+@router.post("/tailor/{session_id}/preview")
+async def preview_tailor_html(session_id: str, request: Request, body: PreviewRequest, db: AsyncSession = Depends(get_db)):
+    """Render CV template to HTML for live preview — burst-limited only (cheap
+    Jinja-only render, no LLM, no PDF conversion)."""
+    user_id = await get_current_user_id(request, db)
+
+    session = await TailoringSessionRepository(db).get(user_id, session_id)
+    if session is None:
+        raise HTTPException(status_code=404, detail="Session not found.")
+
+    try:
+        burst_ok = await check_burst_limit(
+            user_id, "resume_tailor_preview", settings.rate_limit_burst_limit, settings.rate_limit_burst_window_seconds,
+        )
+    except Exception:
+        burst_ok = True
+    if not burst_ok:
+        raise HTTPException(status_code=429, detail="Too many preview requests — please wait a few seconds and try again.")
+
+    if body.template_id not in rendering.TEMPLATE_REGISTRY:
         raise HTTPException(
             status_code=422,
-            detail=f"Unknown template_id '{template_id}'. Valid: {', '.join(TEMPLATE_REGISTRY)}",
+            detail=f"Unknown template_id '{body.template_id}'. Valid: {', '.join(rendering.TEMPLATE_REGISTRY)}",
         )
 
-    cv_data_override = body.get("cv_data")
-    if not cv_data_override:
-        raise HTTPException(status_code=400, detail="cv_data is required for preview.")
+    cv_data = dict(body.cv_data)
+    rendering.normalize_cv_data(cv_data)
 
-    cv_data = dict(cv_data_override)
-    _normalize_cv_data(cv_data)
-
-    if template_id == "lebenslauf":
+    if body.template_id == "lebenslauf":
         lebenslauf_cache_key = f"lebenslauf_profile:{user_id}"
         cached_profile = await get_cached(lebenslauf_cache_key)
         if cached_profile:
             lp = json.loads(cached_profile)
         else:
             profile = await resume_tailor_service.get_profile_photo_fields(db, user_id)
-            photo_base64 = ""
-            safe_url = _safe_photo_url(profile.get("cv_photo_url"))
-            if safe_url:
-                try:
-                    async with httpx.AsyncClient(timeout=8) as client:
-                        r = await client.get(safe_url)
-                        if r.status_code == 200:
-                            photo_base64 = base64.b64encode(r.content).decode()
-                except Exception:
-                    pass
-            lp = {
-                "photo_base64": photo_base64 or None,
-                "date_of_birth": profile.get("date_of_birth"),
-                "nationality": profile.get("nationality"),
-            }
+            lp = await rendering.fetch_lebenslauf_photo_fields(profile)
             await set_cached(lebenslauf_cache_key, json.dumps(lp), ttl_seconds=3600)
-        cv_data["photo_base64"] = lp["photo_base64"]
-        cv_data["date_of_birth"] = lp["date_of_birth"]
-        cv_data["nationality"] = lp["nationality"]
+        cv_data.update(lp)
     else:
         cv_data.setdefault("photo_base64", None)
         cv_data.setdefault("date_of_birth", None)
         cv_data.setdefault("nationality", None)
 
-    template_file = TEMPLATE_REGISTRY[template_id]["file"]
-    tmpl = _jinja_env.get_template(template_file)
-    html_out = tmpl.render(**cv_data)
-
+    html_out = rendering.render_html(body.template_id, cv_data)
     return HTMLResponse(content=html_out)
+
+
+# ── POST /tailor/{session_id}/pdf ─────────────────────────────────
+
+@router.post("/tailor/{session_id}/pdf")
+async def generate_tailor_pdf(session_id: str, request: Request, body: PdfRequest, db: AsyncSession = Depends(get_db)):
+    user_id = await get_current_user_id(request, db)
+    allowed, _ = await check_rate_limit(user_id, "resume_tailor_pdf", settings.rate_limit_resume_pdf_per_day)
+    if not allowed:
+        raise _rl_error("Resume Tailor PDF", settings.rate_limit_resume_pdf_per_day)
+
+    session_repo = TailoringSessionRepository(db)
+    session = await session_repo.get(user_id, session_id)
+    if session is None:
+        raise HTTPException(status_code=404, detail="Session not found.")
+
+    if body.template_id not in rendering.TEMPLATE_REGISTRY:
+        raise HTTPException(
+            status_code=422,
+            detail=f"Unknown template_id '{body.template_id}'. Valid: {', '.join(rendering.TEMPLATE_REGISTRY)}",
+        )
+
+    cv_data = dict(body.cv_data)
+    rendering.normalize_cv_data(cv_data)
+
+    if body.template_id == "lebenslauf":
+        profile = await resume_tailor_service.get_profile_photo_fields(db, user_id)
+        cv_data.update(await rendering.fetch_lebenslauf_photo_fields(profile))
+    else:
+        cv_data.setdefault("photo_base64", None)
+        cv_data.setdefault("date_of_birth", None)
+        cv_data.setdefault("nationality", None)
+
+    logger.info("CV render: template=%s name=%s", body.template_id, cv_data.get("full_name"))
+    pdf_bytes = await rendering.render_pdf(body.template_id, cv_data)
+
+    await session_repo.set_template(user_id, session_id, body.template_id)
+
+    if body.opportunity_id:
+        await resume_tailor_service.save_resume_artifact(
+            db, user_id, body.opportunity_id, body.template_id, session.analysis.get("overall_score"),
+        )
+
+    return Response(
+        content=pdf_bytes,
+        media_type="application/pdf",
+        headers={"Content-Disposition": f'attachment; filename="tailored_cv_{body.template_id}.pdf"'},
+    )
+
+
+# ── GET /tailor/templates ─────────────────────────────────────────
+
+@router.get("/tailor/templates", response_model=TemplateListResponse)
+async def list_tailor_templates():
+    return {"templates": rendering.list_templates()}

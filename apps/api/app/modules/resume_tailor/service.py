@@ -8,7 +8,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.shared.utils import row_to_dict
 from app.modules.profile.models import Profile
-from app.modules.startup_hunt.models import OpportunityArtifact
+from app.modules.job_search.models import JobSearchApplication
+from app.modules.startup_hunt.models import OpportunityArtifact, StartupHuntOpportunity
 
 
 def _stringify_date(d):
@@ -39,6 +40,33 @@ async def get_profile_photo_fields(db: AsyncSession, user_id: str) -> dict:
         "date_of_birth": _stringify_date(row.date_of_birth),
         "nationality": row.nationality,
     }
+
+
+async def verify_opportunity_ownership(db: AsyncSession, user_id: str, opportunity_id: str) -> bool:
+    """True if opportunity_id exists and belongs to user_id. Used to validate
+    the optional source_opportunity_id linkage on a new tailoring session —
+    never trust a client-supplied id without re-checking ownership."""
+    row = (
+        await db.execute(
+            select(StartupHuntOpportunity.id).where(
+                StartupHuntOpportunity.id == opportunity_id, StartupHuntOpportunity.user_id == user_id
+            )
+        )
+    ).scalar_one_or_none()
+    return row is not None
+
+
+async def verify_application_ownership(db: AsyncSession, user_id: str, application_id: str) -> bool:
+    """True if application_id exists and belongs to user_id. Used to validate
+    the optional source_application_id linkage on a new tailoring session."""
+    row = (
+        await db.execute(
+            select(JobSearchApplication.id).where(
+                JobSearchApplication.id == application_id, JobSearchApplication.user_id == user_id
+            )
+        )
+    ).scalar_one_or_none()
+    return row is not None
 
 
 async def save_resume_artifact(

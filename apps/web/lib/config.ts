@@ -9,7 +9,8 @@ export const config = {
 
   rateLimits: {
     linkedinScrapesPerDay: parseInt(process.env.NEXT_PUBLIC_RATE_LIMIT_LINKEDIN || '10', 10),
-    resumeTailorPerDay:    parseInt(process.env.NEXT_PUBLIC_RATE_LIMIT_RESUME || '5', 10),
+    resumeTailorAiPerDay:  parseInt(process.env.NEXT_PUBLIC_RATE_LIMIT_RESUME_AI || '8', 10),
+    resumeTailorPdfPerDay: parseInt(process.env.NEXT_PUBLIC_RATE_LIMIT_RESUME_PDF || '20', 10),
     coverLetterPerDay:     parseInt(process.env.NEXT_PUBLIC_RATE_LIMIT_COVER_LETTER || '5', 10),
     interviewPrepPerDay:   parseInt(process.env.NEXT_PUBLIC_RATE_LIMIT_INTERVIEW || '10', 10),
     salaryResearchPerDay:  parseInt(process.env.NEXT_PUBLIC_RATE_LIMIT_SALARY || '5', 10),

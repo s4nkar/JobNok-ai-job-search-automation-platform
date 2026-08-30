@@ -16,8 +16,6 @@ import { apiFetch } from '@/lib/api'
 import { cn } from '@jobnok/ui'
 import { StartupHuntSavedOpportunity, JobSearchApplication, ResumeTailorResult } from '@/lib/types'
 
-type TailorResult = ResumeTailorResult
-
 const SCORE_LABELS: Record<string, string> = {
   core_skills: 'Core Skills',
   responsibilities: 'Responsibilities',
@@ -89,7 +87,7 @@ function ResumeTailorInner() {
   const [jd, setJd] = useState('')
   const [loading, setLoading] = useState(false)
   const [prefilling, setPrefilling] = useState(false)
-  const [result, setResult] = useState<TailorResult | null>(null)
+  const [result, setResult] = useState<ResumeTailorResult | null>(null)
   const [error, setError] = useState<string | null>(null)
 
   const [generating, setGenerating] = useState(false)
@@ -147,10 +145,12 @@ function ResumeTailorInner() {
     const formData = new FormData()
     formData.append('resume', file)
     formData.append('job_description', jd)
+    if (opportunityId) formData.append('opportunity_id', opportunityId)
+    if (jobSearchApplicationId) formData.append('job_search_application_id', jobSearchApplicationId)
 
     try {
       const res = await apiFetch('/api/ai/tailor', { method: 'POST', body: formData })
-      const parsed: TailorResult | null = await res.json().catch(() => null)
+      const parsed: ResumeTailorResult | null = await res.json().catch(() => null)
 
       if (!res.ok) {
         setError((parsed as unknown as { detail?: string })?.detail || 'Analysis failed. Please try again.')
@@ -160,7 +160,7 @@ function ResumeTailorInner() {
 
       if (parsed) {
         setResult(parsed)
-        if (parsed.prose_degraded) {
+        if (parsed.ai.status === 'degraded') {
           toast({ title: 'AI prose unavailable', description: 'Showing the deterministic match score and keywords only.' })
         }
         if (opportunityId) {
@@ -171,7 +171,7 @@ function ResumeTailorInner() {
               artifact_type: 'resume_analysis',
               tool_used: 'resume-tailor',
               content: JSON.stringify(parsed),
-              metadata: { match_score: parsed.match_score, company: lead?.company_name, role: lead?.role_title },
+              metadata: { match_score: parsed.analysis.match_score, company: lead?.company_name, role: lead?.role_title },
             }),
           })
           toast({ title: 'Analysis saved to lead' })
@@ -188,12 +188,19 @@ function ResumeTailorInner() {
     if (!result) return
     setGenerating(true)
     try {
-      const res = await apiFetch('/api/ai/tailor/generate-pdf', {
+      const editorRes = await apiFetch(`/api/ai/tailor/${result.session_id}/editor`)
+      if (!editorRes.ok) {
+        toast({ title: 'Failed to load resume data', variant: 'destructive' })
+        return
+      }
+      const { cv_data } = await editorRes.json()
+
+      const res = await apiFetch(`/api/ai/tailor/${result.session_id}/pdf`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           template_id: 'standard',
-          analysis: result,
+          cv_data,
           opportunity_id: opportunityId || undefined,
         }),
       })
@@ -217,11 +224,12 @@ function ResumeTailorInner() {
     }
   }
 
+  const matchScore = result?.analysis.match_score ?? 0
   const scoreColor = result
-    ? result.match_score >= 70 ? 'text-emerald-600' : result.match_score >= 40 ? 'text-amber-600' : 'text-red-600'
+    ? matchScore >= 70 ? 'text-emerald-600' : matchScore >= 40 ? 'text-amber-600' : 'text-red-600'
     : ''
   const scoreBarColor = result
-    ? result.match_score >= 70 ? 'bg-emerald-500' : result.match_score >= 40 ? 'bg-amber-500' : 'bg-red-500'
+    ? matchScore >= 70 ? 'bg-emerald-500' : matchScore >= 40 ? 'bg-amber-500' : 'bg-red-500'
     : ''
 
   return (
@@ -254,7 +262,7 @@ function ResumeTailorInner() {
 
       <div className="flex items-center gap-2.5 bg-indigo-50 border border-indigo-100 text-indigo-700 rounded-xl px-4 py-3 mb-6 text-sm">
         <Info className="h-4 w-4 flex-shrink-0 text-indigo-500" />
-        <span><strong>{config.rateLimits.resumeTailorPerDay} analyses/day</strong> on the free tier.</span>
+        <span><strong>{config.rateLimits.resumeTailorAiPerDay} analyses/day</strong> on the free tier.</span>
       </div>
 
       <div className="grid grid-cols-2 gap-6 items-start">
@@ -344,26 +352,26 @@ function ResumeTailorInner() {
           {result && (
             <>
               {/* Target role banner */}
-              {(result.target_role || result.target_company) && (
+              {(result.tailoring?.target_role || result.tailoring?.target_company) && (
                 <div className="flex items-center gap-2.5 bg-indigo-50 border border-indigo-100 text-indigo-800 rounded-xl px-4 py-3 text-sm">
                   <FileText className="h-4 w-4 flex-shrink-0 text-indigo-500" />
-                  <span>Tailored for <strong>{result.target_role}{result.target_company ? ` at ${result.target_company}` : ''}</strong></span>
+                  <span>Tailored for <strong>{result.tailoring.target_role}{result.tailoring.target_company ? ` at ${result.tailoring.target_company}` : ''}</strong></span>
                 </div>
               )}
 
               {/* Proposed headline */}
-              {result.profile_headline && (
+              {result.tailoring?.profile_headline && (
                 <div className="bg-white rounded-2xl border border-indigo-100 shadow-card p-4">
                   <p className="text-xs font-semibold text-slate-500 uppercase tracking-wide mb-1">Suggested CV Headline</p>
-                  <p className="text-sm font-medium text-indigo-700">{result.profile_headline}</p>
+                  <p className="text-sm font-medium text-indigo-700">{result.tailoring.profile_headline}</p>
                 </div>
               )}
 
               {/* Tailored summary */}
-              {result.tailored_summary && (
+              {result.tailoring?.tailored_summary && (
                 <div className="bg-white rounded-2xl border border-indigo-100 shadow-card p-4">
                   <p className="text-xs font-semibold text-slate-500 uppercase tracking-wide mb-1">Tailored Summary</p>
-                  <p className="text-sm text-slate-600 leading-relaxed">{result.tailored_summary}</p>
+                  <p className="text-sm text-slate-600 leading-relaxed">{result.tailoring.tailored_summary}</p>
                 </div>
               )}
 
@@ -371,26 +379,26 @@ function ResumeTailorInner() {
               <div className="bg-white rounded-2xl border border-slate-100 shadow-card p-5">
                 <div className="flex items-center justify-between mb-3">
                   <p className="text-sm font-semibold text-slate-600">ATS Match Score</p>
-                  <span className={cn('text-3xl font-bold', scoreColor)}>{result.match_score}%</span>
+                  <span className={cn('text-3xl font-bold', scoreColor)}>{matchScore}%</span>
                 </div>
                 <div className="h-2.5 bg-slate-100 rounded-full overflow-hidden">
-                  <div className={cn('h-full rounded-full transition-all duration-700', scoreBarColor)} style={{ width: `${result.match_score}%` }} />
+                  <div className={cn('h-full rounded-full transition-all duration-700', scoreBarColor)} style={{ width: `${matchScore}%` }} />
                 </div>
                 <p className="text-xs text-slate-400 mt-2">
-                  {result.match_score >= 70 ? "Strong match — you're a great fit!" : result.match_score >= 40 ? 'Moderate match — some gaps to address' : 'Weak match — needs significant tailoring'}
+                  {matchScore >= 70 ? "Strong match — you're a great fit!" : matchScore >= 40 ? 'Moderate match — some gaps to address' : 'Weak match — needs significant tailoring'}
                 </p>
               </div>
 
               {/* Degraded mode notice — embeddings were unavailable */}
-              {result.degraded && (
+              {result.analysis.degraded && (
                 <div className="flex items-start gap-2.5 bg-amber-50 border border-amber-100 text-amber-800 rounded-xl px-4 py-3 text-sm">
                   <AlertTriangle className="h-4 w-4 flex-shrink-0 text-amber-500 mt-0.5" />
                   <span>Semantic matching unavailable — scores are based on keyword overlap only. Results are still useful but less nuanced than usual.</span>
                 </div>
               )}
 
-              {/* Prose degraded notice — AI providers were unavailable, deterministic score/keywords still shown */}
-              {result.prose_degraded && (
+              {/* AI degraded notice — providers were unavailable, deterministic score/keywords still shown */}
+              {result.ai.status === 'degraded' && (
                 <div className="flex items-start gap-2.5 bg-amber-50 border border-amber-100 text-amber-800 rounded-xl px-4 py-3 text-sm">
                   <AlertTriangle className="h-4 w-4 flex-shrink-0 text-amber-500 mt-0.5" />
                   <span>AI-generated content (headline, summary, bullet rewrites) is temporarily unavailable. The match score, keywords, and gaps below are unaffected — try again shortly for the full report.</span>
@@ -398,14 +406,14 @@ function ResumeTailorInner() {
               )}
 
               {/* Score breakdown by category */}
-              {result.score_breakdown && Object.values(result.score_breakdown).some((v) => typeof v === 'number') && (
+              {Object.values(result.analysis.score_breakdown).some((v) => typeof v === 'number') && (
                 <div className="bg-white rounded-2xl border border-slate-100 shadow-card p-5">
                   <div className="flex items-center gap-2 mb-3">
                     <BarChart3 className="h-4 w-4 text-indigo-500" />
                     <p className="text-sm font-semibold text-slate-700">Score Breakdown</p>
                   </div>
                   <div className="space-y-2.5">
-                    {Object.entries(result.score_breakdown)
+                    {Object.entries(result.analysis.score_breakdown)
                       .filter(([, v]) => typeof v === 'number')
                       .map(([key, value]) => (
                         <div key={key}>
@@ -426,15 +434,15 @@ function ResumeTailorInner() {
               )}
 
               {/* Transferable strengths — partial matches the user can lean into */}
-              {result.transferable_strengths && result.transferable_strengths.length > 0 && (
+              {result.analysis.transferable_strengths.length > 0 && (
                 <div className="bg-white rounded-2xl border border-amber-100 shadow-card p-5">
                   <div className="flex items-center gap-2 mb-3">
                     <Sparkles className="h-4 w-4 text-amber-500" />
-                    <p className="text-sm font-semibold text-slate-700">Transferable Strengths <span className="text-slate-400 font-normal">({result.transferable_strengths.length})</span></p>
+                    <p className="text-sm font-semibold text-slate-700">Transferable Strengths <span className="text-slate-400 font-normal">({result.analysis.transferable_strengths.length})</span></p>
                   </div>
                   <p className="text-xs text-slate-400 mb-3">Requirements where you have related — but not explicit — experience. Reframe these honestly to strengthen alignment.</p>
                   <div className="space-y-2">
-                    {result.transferable_strengths.map((s, i) => (
+                    {result.analysis.transferable_strengths.map((s, i) => (
                       <div key={i} className="flex items-start gap-2 text-sm">
                         <ArrowRight className="h-3.5 w-3.5 text-amber-500 mt-1 shrink-0" />
                         <span className="text-slate-600 leading-relaxed">{s}</span>
@@ -445,15 +453,15 @@ function ResumeTailorInner() {
               )}
 
               {/* Critical missing — hard gaps the user shouldn't try to fake */}
-              {result.critical_missing && result.critical_missing.length > 0 && (
+              {result.analysis.critical_missing.length > 0 && (
                 <div className="bg-white rounded-2xl border border-red-100 shadow-card p-5">
                   <div className="flex items-center gap-2 mb-3">
                     <AlertTriangle className="h-4 w-4 text-red-500" />
-                    <p className="text-sm font-semibold text-slate-700">Critical Gaps <span className="text-slate-400 font-normal">({result.critical_missing.length})</span></p>
+                    <p className="text-sm font-semibold text-slate-700">Critical Gaps <span className="text-slate-400 font-normal">({result.analysis.critical_missing.length})</span></p>
                   </div>
                   <p className="text-xs text-slate-400 mb-3">Requirements with no matching evidence in your resume. Don&apos;t fabricate experience — instead, address these in your cover letter or accept them as honest gaps.</p>
                   <div className="space-y-2">
-                    {result.critical_missing.map((g, i) => (
+                    {result.analysis.critical_missing.map((g, i) => (
                       <div key={i} className="flex items-start gap-2 text-sm">
                         <XCircle className="h-3.5 w-3.5 text-red-400 mt-1 shrink-0" />
                         <span className="text-slate-600 leading-relaxed">{g}</span>
@@ -467,24 +475,24 @@ function ResumeTailorInner() {
               <div className="bg-white rounded-2xl border border-slate-100 shadow-card p-5">
                 <div className="flex items-center gap-2 mb-3">
                   <CheckCircle className="h-4 w-4 text-emerald-500" />
-                  <p className="text-sm font-semibold text-slate-700">Matched Keywords <span className="text-slate-400 font-normal">({result.matched_keywords.length})</span></p>
+                  <p className="text-sm font-semibold text-slate-700">Matched Keywords <span className="text-slate-400 font-normal">({result.analysis.matched_keywords.length})</span></p>
                 </div>
                 <div className="flex flex-wrap gap-1.5">
-                  {result.matched_keywords.map((k) => (
+                  {result.analysis.matched_keywords.map((k) => (
                     <span key={k} className="inline-flex items-center px-2.5 py-1 rounded-full text-xs font-medium bg-emerald-50 text-emerald-700 border border-emerald-100">{k}</span>
                   ))}
                 </div>
               </div>
 
               {/* Missing */}
-              {result.missing_keywords.length > 0 && (
+              {result.analysis.missing_keywords.length > 0 && (
                 <div className="bg-white rounded-2xl border border-slate-100 shadow-card p-5">
                   <div className="flex items-center gap-2 mb-3">
                     <XCircle className="h-4 w-4 text-red-400" />
-                    <p className="text-sm font-semibold text-slate-700">Missing Keywords <span className="text-slate-400 font-normal">({result.missing_keywords.length})</span></p>
+                    <p className="text-sm font-semibold text-slate-700">Missing Keywords <span className="text-slate-400 font-normal">({result.analysis.missing_keywords.length})</span></p>
                   </div>
                   <div className="space-y-2">
-                    {result.missing_keywords.map(({ keyword, suggested_placement }) => (
+                    {result.analysis.missing_keywords.map(({ keyword, suggested_placement }) => (
                       <div key={keyword} className="flex items-start gap-2 text-sm">
                         <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-red-50 text-red-600 border border-red-100 shrink-0">{keyword}</span>
                         <span className="text-slate-400 text-xs pt-0.5">→ {suggested_placement}</span>
@@ -495,11 +503,11 @@ function ResumeTailorInner() {
               )}
 
               {/* Bullet rewrites */}
-              {result.bullet_rewrites.length > 0 && (
+              {result.tailoring && result.tailoring.bullet_rewrites.length > 0 && (
                 <div className="bg-white rounded-2xl border border-slate-100 shadow-card p-5">
                   <p className="text-sm font-semibold text-slate-700 mb-3">Top Bullet Rewrites</p>
                   <div className="space-y-4">
-                    {result.bullet_rewrites.map((b, i) => (
+                    {result.tailoring.bullet_rewrites.map((b, i) => (
                       <div key={i} className="space-y-1.5 p-3 rounded-xl bg-slate-50">
                         <div className="flex items-start gap-2">
                           <span className="text-xs font-medium text-slate-400 mt-0.5 shrink-0 w-12">Before</span>
@@ -512,14 +520,21 @@ function ResumeTailorInner() {
                       </div>
                     ))}
                   </div>
+                  {result.tailoring.validation_flags.length > 0 && (
+                    <p className="text-[11px] text-amber-600 mt-3">
+                      {result.tailoring.validation_flags.length} suggested rewrite{result.tailoring.validation_flags.length > 1 ? 's were' : ' was'} reverted for accuracy.
+                    </p>
+                  )}
                 </div>
               )}
 
               {/* AI Assessment */}
-              <div className="bg-white rounded-2xl border border-slate-100 shadow-card p-5">
-                <p className="text-sm font-semibold text-slate-700 mb-2">AI Assessment</p>
-                <p className="text-sm text-slate-600 leading-relaxed">{result.summary}</p>
-              </div>
+              {result.tailoring?.summary && (
+                <div className="bg-white rounded-2xl border border-slate-100 shadow-card p-5">
+                  <p className="text-sm font-semibold text-slate-700 mb-2">AI Assessment</p>
+                  <p className="text-sm text-slate-600 leading-relaxed">{result.tailoring.summary}</p>
+                </div>
+              )}
 
               {/* ── Build Resume ── */}
               <div className="bg-white rounded-2xl border border-indigo-100 shadow-card p-5">
@@ -533,14 +548,13 @@ function ResumeTailorInner() {
                 <div className="flex gap-3">
                   <Button
                     onClick={() => {
-                      try {
-                        sessionStorage.setItem('resume_tailor_analysis', JSON.stringify(result))
-                        if (file) {
+                      if (file) {
+                        try {
                           const url = URL.createObjectURL(file)
-                          sessionStorage.setItem('resume_original_pdf_url', url)
-                        }
-                      } catch { /* sessionStorage full — editor will handle gracefully */ }
-                      router.push('/resume-tailor/editor')
+                          sessionStorage.setItem(`resume_original_pdf_url:${result.session_id}`, url)
+                        } catch { /* sessionStorage full — editor will handle gracefully */ }
+                      }
+                      router.push(`/resume-tailor/editor?session_id=${result.session_id}`)
                     }}
                     className="flex-1 h-10 gradient-brand text-white border-0 shadow-brand-sm hover:opacity-90 transition-opacity rounded-xl font-semibold text-sm"
                   >
