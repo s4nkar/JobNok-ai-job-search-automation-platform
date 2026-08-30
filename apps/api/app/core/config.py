@@ -73,6 +73,18 @@ class Settings(BaseSettings):
     # ── Rate Limits (enforced via a Redis fixed window counter, reset at midnight UTC) ──
     # All limits are per-user per-day unless stated otherwise
     rate_limit_linkedin_per_day: int = 10
+    # Resume Tailor is split into two buckets instead of one shared "resume"
+    # bucket: AI-costed operations (analysis + CV structuring) vs. PDF
+    # generation (real WeasyPrint CPU cost, but no LLM call). Template preview
+    # is cheap Jinja-only rendering and uses the shared burst limiter below
+    # instead of a daily quota.
+    rate_limit_resume_ai_per_day: int = 8
+    rate_limit_resume_pdf_per_day: int = 20
+    # DEPRECATED — superseded by the two settings above, unread by any code
+    # now. Kept declared (Settings has extra="forbid") only so existing .env
+    # files with this key don't fail startup; delete this field + the key
+    # from every .env/.env.example once those are updated (see resume-tailor
+    # session redesign rollout notes — this is the deferred cleanup step).
     rate_limit_resume_per_day: int = 5
     rate_limit_cover_letter_per_day: int = 5
     rate_limit_interview_per_day: int = 10

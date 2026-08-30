@@ -1,11 +1,11 @@
 'use client'
 
 import { useState, useEffect, useCallback, useRef, Suspense } from 'react'
-import { useRouter } from 'next/navigation'
+import { useRouter, useSearchParams } from 'next/navigation'
 import { apiFetch } from '@/lib/api'
 import {
-  CvData, CvExperience, CvEducation, CvSkill, CvProject, CvFeaturedProject,
-  TemplateId, TemplateMeta, ResumeTailorResult,
+  CvData, CvExperience, CvEducation, CvSkill, CvProject, CvFeaturedProject, CvOtherSection,
+  TemplateId, TemplateMeta,
 } from '@/lib/types'
 import { Button } from '@jobnok/ui'
 import { Input } from '@jobnok/ui'
@@ -16,7 +16,7 @@ import { cn } from '@jobnok/ui'
 import {
   ArrowLeft, Download, Loader2, Plus, Trash2, ChevronDown, ChevronUp,
   FileText, User, Briefcase, GraduationCap, Wrench, FolderOpen, BookOpen,
-  Languages, AlertTriangle, Star, Lock, Eye, EyeOff,
+  Languages, AlertTriangle, Star, Lock, Eye, EyeOff, Layers,
 } from 'lucide-react'
 
 // ── Template thumbnails ───────────────────────────────────────────
@@ -142,11 +142,14 @@ const EMPTY_EDU: CvEducation = {
 }
 
 const EMPTY_PROJ: CvProject = { name: '', tech: null, bullets: [''] }
+const EMPTY_OTHER_SECTION: CvOtherSection = { heading: '', bullets: [''] }
 
 // ── Editor inner ──────────────────────────────────────────────────
 
 function EditorInner() {
   const router = useRouter()
+  const searchParams = useSearchParams()
+  const sessionId = searchParams.get('session_id')
   const { toast } = useToast()
 
   const [originalPdfUrl, setOriginalPdfUrl] = useState<string | null>(null)
@@ -160,31 +163,33 @@ function EditorInner() {
   const [profileOkForLebenslauf, setProfileOkForLebenslauf] = useState(false)
   const [previewHtml, setPreviewHtml] = useState<string | null>(null)
   const [previewLoading, setPreviewLoading] = useState(false)
+  const [draftSaving, setDraftSaving] = useState(false)
+  const [draftSavedAt, setDraftSavedAt] = useState<number | null>(null)
   const previewDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const draftDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  // Skips the autosave effect's very first fire (the initial load setting
+  // cvData for the first time) — otherwise every editor visit immediately
+  // PATCHes back the exact data it just fetched.
+  const hasLoadedRef = useRef(false)
 
-  // Load session data + template list + structure resume + profile check
+  // Load session's saved draft (if any) or base_cv_data + tailoring overlay,
+  // plus template list + profile check
   useEffect(() => {
-    const raw = sessionStorage.getItem('resume_tailor_analysis')
-    const pdfUrl = sessionStorage.getItem('resume_original_pdf_url')
-    if (!raw) { setSessionError(true); setLoading(false); return }
+    if (!sessionId) { setSessionError(true); setLoading(false); return }
+    hasLoadedRef.current = false
 
-    let parsed: ResumeTailorResult
-    try { parsed = JSON.parse(raw) } catch { setSessionError(true); setLoading(false); return }
-
+    const pdfUrl = sessionStorage.getItem(`resume_original_pdf_url:${sessionId}`)
     if (pdfUrl) setOriginalPdfUrl(pdfUrl)
 
     Promise.all([
-      apiFetch('/api/ai/tailor/templates').then(r => r.json()),
-      apiFetch('/api/ai/tailor/structure-resume', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ analysis: parsed, template_id: 'standard' }),
-      }).then(r => r.json()),
+      apiFetch(`/api/ai/tailor/${sessionId}/editor`).then(r => r.ok ? r.json() : Promise.reject(r)),
       apiFetch('/api/profile').then(r => r.json()).catch(() => ({})),
-    ]).then(([tmplRes, structRes, profile]) => {
-      if (tmplRes.templates) setTemplates(tmplRes.templates)
-      if (structRes.cv_data) {
-        setCvData(structRes.cv_data)
+    ]).then(([editorRes, profile]) => {
+      if (editorRes.templates) setTemplates(editorRes.templates)
+      if (editorRes.template_id) setSelectedTemplate(editorRes.template_id)
+      if (editorRes.cv_data) {
+        setCvData(editorRes.cv_data)
+        if (editorRes.is_draft) toast({ title: 'Resumed your saved draft' })
       } else {
         toast({ title: 'Failed to load resume data', variant: 'destructive' })
         setSessionError(true)
@@ -193,20 +198,46 @@ function EditorInner() {
         (profile?.address_city || profile?.address_country) && profile?.cv_photo_url)
       setProfileOkForLebenslauf(ok)
     }).catch(() => {
-      toast({ title: 'Failed to structure resume', variant: 'destructive' })
+      toast({ title: 'Failed to load resume data', variant: 'destructive' })
       setSessionError(true)
-    }).finally(() => setLoading(false))
-  }, [toast])
+    }).finally(() => {
+      setLoading(false)
+      hasLoadedRef.current = true
+    })
+  }, [sessionId, toast])
+
+  // Debounced autosave of edits — mirrors the live-preview debounce below,
+  // but saves to the session's draft_cv_data instead of rendering HTML.
+  useEffect(() => {
+    if (!cvData || !sessionId || !hasLoadedRef.current) return
+    if (draftDebounceRef.current) clearTimeout(draftDebounceRef.current)
+    draftDebounceRef.current = setTimeout(async () => {
+      setDraftSaving(true)
+      try {
+        const res = await apiFetch(`/api/ai/tailor/${sessionId}/draft`, {
+          method: 'PATCH',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ cv_data: cvData }),
+        })
+        if (res.ok) setDraftSavedAt(Date.now())
+      } catch { /* silent — autosave, user can still download manually */ }
+      finally { setDraftSaving(false) }
+    }, 1500)
+    return () => {
+      if (draftDebounceRef.current) clearTimeout(draftDebounceRef.current)
+    }
+  }, [cvData, sessionId])
 
   // Debounced live preview fetch
   useEffect(() => {
     if (!cvData) return
+    if (!sessionId) return
     if (previewDebounceRef.current) clearTimeout(previewDebounceRef.current)
     const controller = new AbortController()
     previewDebounceRef.current = setTimeout(async () => {
       setPreviewLoading(true)
       try {
-        const res = await apiFetch('/api/ai/tailor/preview-html', {
+        const res = await apiFetch(`/api/ai/tailor/${sessionId}/preview`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ template_id: selectedTemplate, cv_data: cvData }),
@@ -226,7 +257,7 @@ function EditorInner() {
       if (previewDebounceRef.current) clearTimeout(previewDebounceRef.current)
       controller.abort()
     }
-  }, [cvData, selectedTemplate])
+  }, [cvData, selectedTemplate, sessionId])
 
   const set = useCallback(<K extends keyof CvData>(key: K, value: CvData[K]) => {
     setCvData(prev => prev ? { ...prev, [key]: value } : prev)
@@ -337,6 +368,27 @@ function EditorInner() {
     setCvData(prev => prev ? { ...prev, projects: prev.projects.filter((_, idx) => idx !== i) } : prev)
   }
 
+  // ── Other-section helpers ────────────────────────────────────────
+  // Catch-all for resume sections that don't fit any fixed category
+  // (Volunteering, Patents, Awards, ...) — see CvOtherSection.
+
+  function updateOtherSection(i: number, field: keyof CvOtherSection, value: string | string[]) {
+    setCvData(prev => {
+      if (!prev) return prev
+      const sections = [...(prev.other_sections || [])]
+      sections[i] = { ...sections[i], [field]: value }
+      return { ...prev, other_sections: sections }
+    })
+  }
+
+  function addOtherSection() {
+    setCvData(prev => prev ? { ...prev, other_sections: [...(prev.other_sections || []), { ...EMPTY_OTHER_SECTION }] } : prev)
+  }
+
+  function removeOtherSection(i: number) {
+    setCvData(prev => prev ? { ...prev, other_sections: (prev.other_sections || []).filter((_, idx) => idx !== i) } : prev)
+  }
+
   // ── Featured project helpers ────────────────────────────────────
 
   function updateFeatured<K extends keyof CvFeaturedProject>(field: K, value: CvFeaturedProject[K]) {
@@ -394,10 +446,10 @@ function EditorInner() {
   // ── Download ────────────────────────────────────────────────────
 
   async function handleDownload() {
-    if (!cvData) return
+    if (!cvData || !sessionId) return
     setGenerating(true)
     try {
-      const res = await apiFetch('/api/ai/tailor/generate-pdf', {
+      const res = await apiFetch(`/api/ai/tailor/${sessionId}/pdf`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ template_id: selectedTemplate, cv_data: cvData }),
@@ -467,7 +519,11 @@ function EditorInner() {
           </div>
           <div>
             <h1 className="text-xl font-bold text-slate-900 tracking-tight">Resume Editor</h1>
-            <p className="text-slate-500 text-xs mt-0.5">Edit content · pick layout · download PDF</p>
+            <p className="text-slate-500 text-xs mt-0.5 flex items-center gap-1.5">
+              Edit content · pick layout · download PDF
+              {draftSaving && <span className="text-slate-400">· Saving…</span>}
+              {!draftSaving && draftSavedAt && <span className="text-emerald-500">· Saved</span>}
+            </p>
           </div>
         </div>
         <Button
@@ -862,6 +918,56 @@ function EditorInner() {
               rows={3}
               className="text-sm rounded-lg border-slate-200 resize-none"
             />
+          </Section>
+
+          {/* Other Sections — catch-all for anything that doesn't fit a fixed
+              category above (Volunteering, Patents, Awards, ...). Rendered
+              only in the "standard" template today; other layouts pass the
+              data through without displaying it yet. */}
+          <Section
+            title="Other Sections"
+            icon={<Layers className="h-4 w-4" />}
+            badge={(cvData.other_sections || []).length > 0 ? String(cvData.other_sections.length) : undefined}
+            defaultOpen={false}
+          >
+            <div className="space-y-3">
+              {(cvData.other_sections || []).map((section, i) => (
+                <div key={i} className="border border-slate-100 rounded-xl p-3 space-y-2 bg-slate-50">
+                  <div className="flex items-center justify-between mb-1">
+                    <span className="text-xs font-semibold text-slate-500">{section.heading || `Section ${i + 1}`}</span>
+                    <button onClick={() => removeOtherSection(i)} className="text-slate-300 hover:text-red-400 flex items-center gap-0.5 text-[10px]">
+                      <Trash2 className="h-3 w-3" /> Remove
+                    </button>
+                  </div>
+                  <div>
+                    <Label className="text-xs text-slate-500 mb-1 block">Heading</Label>
+                    <Input
+                      value={section.heading}
+                      onChange={e => updateOtherSection(i, 'heading', e.target.value)}
+                      placeholder="e.g. Volunteering, Patents, Awards"
+                      className="h-8 text-sm rounded-lg bg-white"
+                    />
+                  </div>
+                  <div>
+                    <Label className="text-xs text-slate-500 mb-1 block">Bullets (one per line)</Label>
+                    <Textarea
+                      value={section.bullets.join('\n')}
+                      onChange={e => updateOtherSection(i, 'bullets', e.target.value.split('\n'))}
+                      rows={3}
+                      className="text-xs rounded-lg border-slate-200 resize-none bg-white"
+                    />
+                  </div>
+                </div>
+              ))}
+            </div>
+            <Button
+              variant="outline"
+              size="sm"
+              className="w-full rounded-lg border-dashed text-slate-500 text-xs mt-1"
+              onClick={addOtherSection}
+            >
+              <Plus className="h-3.5 w-3.5 mr-1.5" /> Add Section
+            </Button>
           </Section>
 
         </div>
