@@ -16,7 +16,7 @@ import { cn } from '@jobnok/ui'
 import {
   ArrowLeft, Download, Loader2, Plus, Trash2, ChevronDown, ChevronUp,
   FileText, User, Briefcase, GraduationCap, Wrench, FolderOpen, BookOpen,
-  Languages, AlertTriangle, Star, Lock, Eye, EyeOff, Layers,
+  Languages, AlertTriangle, Star, Lock, Eye, EyeOff, Layers, RotateCcw,
 } from 'lucide-react'
 
 // ── Template thumbnails ───────────────────────────────────────────
@@ -160,6 +160,7 @@ function EditorInner() {
   const [loading, setLoading] = useState(true)
   const [generating, setGenerating] = useState(false)
   const [sessionError, setSessionError] = useState(false)
+  const [sessionErrorMessage, setSessionErrorMessage] = useState<string | null>(null)
   const [profileOkForLebenslauf, setProfileOkForLebenslauf] = useState(false)
   const [previewHtml, setPreviewHtml] = useState<string | null>(null)
   const [previewLoading, setPreviewLoading] = useState(false)
@@ -173,16 +174,26 @@ function EditorInner() {
   const hasLoadedRef = useRef(false)
 
   // Load session's saved draft (if any) or base_cv_data + tailoring overlay,
-  // plus template list + profile check
-  useEffect(() => {
-    if (!sessionId) { setSessionError(true); setLoading(false); return }
+  // plus template list + profile check. Pulled into its own callback (not
+  // just inline in the effect) so the "Retry" button on a failed load can
+  // re-run exactly this without a full navigation — most failures here are
+  // a transient upstream AI outage/rate-limit, not a truly missing session,
+  // so retrying in place is the right recovery action.
+  const loadEditor = useCallback(() => {
+    if (!sessionId) { setSessionErrorMessage(null); setSessionError(true); setLoading(false); return }
+    setLoading(true)
+    setSessionError(false)
     hasLoadedRef.current = false
 
     const pdfUrl = sessionStorage.getItem(`resume_original_pdf_url:${sessionId}`)
     if (pdfUrl) setOriginalPdfUrl(pdfUrl)
 
     Promise.all([
-      apiFetch(`/api/ai/tailor/${sessionId}/editor`).then(r => r.ok ? r.json() : Promise.reject(r)),
+      apiFetch(`/api/ai/tailor/${sessionId}/editor`).then(async (r) => {
+        if (r.ok) return r.json()
+        const body = await r.json().catch(() => null)
+        throw new Error(body?.detail || `Couldn't load resume data (HTTP ${r.status}).`)
+      }),
       apiFetch('/api/profile').then(r => r.json()).catch(() => ({})),
     ]).then(([editorRes, profile]) => {
       if (editorRes.templates) setTemplates(editorRes.templates)
@@ -191,20 +202,23 @@ function EditorInner() {
         setCvData(editorRes.cv_data)
         if (editorRes.is_draft) toast({ title: 'Resumed your saved draft' })
       } else {
-        toast({ title: 'Failed to load resume data', variant: 'destructive' })
-        setSessionError(true)
+        throw new Error('Resume data came back empty.')
       }
       const ok = !!(profile?.full_name && profile?.phone &&
         (profile?.address_city || profile?.address_country) && profile?.cv_photo_url)
       setProfileOkForLebenslauf(ok)
-    }).catch(() => {
-      toast({ title: 'Failed to load resume data', variant: 'destructive' })
+    }).catch((err: unknown) => {
+      const message = err instanceof Error ? err.message : 'Failed to load resume data.'
+      setSessionErrorMessage(message)
+      toast({ title: 'Failed to load resume data', description: message, variant: 'destructive' })
       setSessionError(true)
     }).finally(() => {
       setLoading(false)
       hasLoadedRef.current = true
     })
   }, [sessionId, toast])
+
+  useEffect(() => { loadEditor() }, [loadEditor])
 
   // Debounced autosave of edits — mirrors the live-preview debounce below,
   // but saves to the session's draft_cv_data instead of rendering HTML.
@@ -477,14 +491,26 @@ function EditorInner() {
   // ── Empty / loading states ──────────────────────────────────────
 
   if (sessionError) {
+    const noSession = !sessionId
     return (
       <div className="flex flex-col items-center justify-center min-h-[60vh] gap-4">
         <AlertTriangle className="h-10 w-10 text-amber-400" />
-        <p className="font-semibold text-slate-700">Session expired</p>
-        <p className="text-sm text-slate-500">Run a new analysis to open the editor.</p>
-        <Button onClick={() => router.push('/resume-tailor')} variant="outline" className="rounded-xl">
-          <ArrowLeft className="h-4 w-4 mr-2" /> Back to Resume Tailor
-        </Button>
+        <p className="font-semibold text-slate-700">{noSession ? 'Session expired' : 'Could not load your resume'}</p>
+        <p className="text-sm text-slate-500 max-w-sm text-center">
+          {noSession
+            ? 'Run a new analysis to open the editor.'
+            : (sessionErrorMessage || 'Something went wrong loading this session.')}
+        </p>
+        <div className="flex gap-3">
+          {!noSession && (
+            <Button onClick={loadEditor} className="rounded-xl gradient-brand text-white border-0 shadow-brand-sm hover:opacity-90">
+              <RotateCcw className="h-4 w-4 mr-2" /> Retry
+            </Button>
+          )}
+          <Button onClick={() => router.push('/resume-tailor')} variant="outline" className="rounded-xl">
+            <ArrowLeft className="h-4 w-4 mr-2" /> Back to Resume Tailor
+          </Button>
+        </div>
       </div>
     )
   }

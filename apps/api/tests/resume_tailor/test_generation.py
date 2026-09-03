@@ -6,7 +6,7 @@ exercised here — it needs Redis, and is out of scope for Tier 1)."""
 import json
 
 from app.ai.llm.provider import AIGenerationError
-from app.modules.resume_tailor import generation
+from app.modules.resume_tailor import generation, prompts
 from app.modules.resume_tailor.chunker import Chunk
 from app.modules.resume_tailor.matcher import MatchResult, RewriteCandidate
 
@@ -45,7 +45,7 @@ async def test_generate_tailor_prose_returns_bullet_patches_keyed_by_chunk_id(mo
         "summary": "Strong fit.",
     })
 
-    async def fake_generate_text_with_provider(prompt, system, max_tokens=1200):
+    async def fake_generate_text_with_provider(prompt, system, max_tokens=1200, tier="heavy"):
         assert "[b0]" in prompt
         return llm_response, "groq"
 
@@ -68,7 +68,7 @@ async def test_generate_tailor_prose_returns_bullet_patches_keyed_by_chunk_id(mo
 async def test_generate_tailor_prose_degrades_on_ai_generation_error(monkeypatch):
     analysis = _match_result()
 
-    async def fake_generate_text_with_provider(prompt, system, max_tokens=1200):
+    async def fake_generate_text_with_provider(prompt, system, max_tokens=1200, tier="heavy"):
         raise AIGenerationError("all providers exhausted")
 
     monkeypatch.setattr(generation.ai_provider, "generate_text_with_provider", fake_generate_text_with_provider)
@@ -84,7 +84,7 @@ async def test_generate_tailor_prose_degrades_on_ai_generation_error(monkeypatch
 async def test_generate_tailor_prose_handles_malformed_json_gracefully(monkeypatch):
     analysis = _match_result()
 
-    async def fake_generate_text_with_provider(prompt, system, max_tokens=1200):
+    async def fake_generate_text_with_provider(prompt, system, max_tokens=1200, tier="heavy"):
         return "not json at all", "groq"
 
     monkeypatch.setattr(generation.ai_provider, "generate_text_with_provider", fake_generate_text_with_provider)
@@ -101,9 +101,9 @@ def test_generate_base_cv_data_prompt_excludes_tailoring_fields():
     rules (bullet substitution, tailored headline/summary override, missing-
     keyword injection) belong only in the prose prompt, since base_cv_data is
     now dedup'd per resume version independent of any JD."""
-    assert "bullet_rewrites" not in generation._SYSTEM_STRUCT_BASE
-    assert "TAILORED HEADLINE" not in generation._SYSTEM_STRUCT_BASE
-    assert "MISSING KEYWORDS" not in generation._SYSTEM_STRUCT_BASE
+    assert "bullet_rewrites" not in prompts.STRUCT_SYSTEM_PROMPT
+    assert "TAILORED HEADLINE" not in prompts.STRUCT_SYSTEM_PROMPT
+    assert "MISSING KEYWORDS" not in prompts.STRUCT_SYSTEM_PROMPT
 
 
 def test_bullet_ids_for_rewrites_maps_duplicate_text_to_distinct_indices():
