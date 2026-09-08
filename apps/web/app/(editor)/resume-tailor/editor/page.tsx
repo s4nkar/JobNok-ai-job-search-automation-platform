@@ -396,8 +396,17 @@ function EditorInner() {
     setSessionError(false)
     hasLoadedRef.current = false
 
-    const pdfUrl = sessionStorage.getItem(`resume_original_pdf_url:${sessionId}`)
-    if (pdfUrl) setOriginalPdfUrl(pdfUrl)
+    // Fetched fresh from the backend (not a sessionStorage blob: URL carried
+    // over from the upload page) - a blob: URL only lives as long as the tab
+    // that created it, so it always died on refresh. The backend keeps the
+    // original PDF for 48h after upload specifically so this survives
+    // refreshes, works from a different tab, and doesn't depend on how the
+    // user navigated here. Best-effort and non-blocking: a missing/expired
+    // original just means no compare button, never a load failure.
+    apiFetch(`/api/ai/tailor/${sessionId}/original-pdf`)
+      .then(r => r.ok ? r.blob() : null)
+      .then(blob => setOriginalPdfUrl(blob ? URL.createObjectURL(blob) : null))
+      .catch(() => setOriginalPdfUrl(null))
 
     Promise.all([
       apiFetch(`/api/ai/tailor/${sessionId}/editor`).then(async (r) => {
@@ -431,6 +440,14 @@ function EditorInner() {
   }, [sessionId, toast])
 
   useEffect(() => { loadEditor() }, [loadEditor])
+
+  // Revokes the previous blob: URL whenever originalPdfUrl is replaced (a
+  // Retry re-fetch) or the editor unmounts - each successful fetch above
+  // creates a new one via URL.createObjectURL, which otherwise leaks for the
+  // life of the tab.
+  useEffect(() => {
+    return () => { if (originalPdfUrl) URL.revokeObjectURL(originalPdfUrl) }
+  }, [originalPdfUrl])
 
   // Debounced autosave of edits — mirrors the live-preview debounce below,
   // but saves to the session's draft_cv_data instead of rendering HTML.
@@ -1041,6 +1058,7 @@ function EditorInner() {
         {originalPdfUrl && (
           <button
             onClick={() => setCompareOpen(true)}
+            title="Compare with your originally uploaded file (available for 48 hours after upload)"
             className="lg:hidden flex items-center gap-2 h-9 px-3 rounded-lg border border-slate-200 hover:border-slate-300 hover:bg-slate-50 transition-colors shrink-0"
           >
             <FileText className="h-4 w-4 text-slate-400" />
@@ -1086,6 +1104,7 @@ function EditorInner() {
         {originalPdfUrl && (
           <button
             onClick={() => setCompareOpen(true)}
+            title="Compare with your originally uploaded file (available for 48 hours after upload)"
             className="hidden lg:flex items-center gap-1.5 h-9 px-3 rounded-lg border border-slate-200 hover:border-slate-300 hover:bg-slate-50 transition-colors shrink-0 text-xs font-semibold text-slate-600"
           >
             <FileText className="h-3.5 w-3.5 text-slate-400" /> Compare

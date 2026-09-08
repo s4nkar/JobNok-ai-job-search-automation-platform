@@ -7,24 +7,13 @@ core/security.py::get_current_user_id + app/modules/auth/service.py), so no
 upsert-on-read fallback is needed — a missing row here would be a genuine bug.
 """
 
-import asyncio
-
-import cloudinary
-import cloudinary.uploader
 from fastapi import HTTPException
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.config import settings
 from app.modules.profile.models import Profile
+from app.shared import cloudinary_client
 from app.shared.utils import row_to_dict
-
-cloudinary.config(
-    cloud_name=settings.cloudinary_cloud_name,
-    api_key=settings.cloudinary_api_key,
-    api_secret=settings.cloudinary_api_secret,
-    secure=True,
-)
 
 _ALLOWED_FIELDS = {
     "full_name", "job_title", "cv_email", "phone",
@@ -56,20 +45,8 @@ async def update_profile(db: AsyncSession, user_id: str, body: dict) -> dict:
 
 
 async def upload_cv_photo(user_id: str, data: bytes) -> str:
-    """Upload a CV photo to Cloudinary and return its public URL.
-
-    cloudinary's SDK is sync (blocking network I/O) — offload to a thread so
-    it doesn't stall the event loop for other concurrent requests.
-    """
-    try:
-        result = await asyncio.to_thread(
-            cloudinary.uploader.upload,
-            data,
-            public_id=f"users/{user_id}/avatar",
-            overwrite=True,
-        )
-    except Exception as exc:
-        raise HTTPException(status_code=500, detail=f"Storage upload failed: {exc}")
+    """Upload a CV photo to Cloudinary and return its public URL."""
+    result = await cloudinary_client.upload(data, public_id=f"users/{user_id}/avatar", overwrite=True)
     return result["secure_url"]
 
 

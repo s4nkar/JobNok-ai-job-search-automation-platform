@@ -142,6 +142,18 @@ export interface ResumeTailorResult {
   ai: ResumeAiStatus
 }
 
+// No url/public_id field — the backend never exposes either; every read of
+// the actual file goes through an authenticated endpoint (see
+// GET /api/ai/resumes/{slot}/file and GET /api/ai/tailor/{id}/original-pdf).
+export interface SavedResume {
+  id: string
+  slot: 1 | 2 | 3
+  label: string
+  original_filename: string
+  created_at: string
+  updated_at: string
+}
+
 export type TemplateId =
   | 'standard' | 'modern' | 'creative' | 'classic' | 'balanced'
   | 'minimalist' | 'professional' | 'corporate' | 'bold' | 'slate'

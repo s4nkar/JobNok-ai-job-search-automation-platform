@@ -14,7 +14,7 @@ from typing import Any
 from sqlalchemy import select
 
 from app.shared.repository import UserScopedRepository
-from app.modules.resume_tailor.models import ResumeVersion, TailoringSession
+from app.modules.resume_tailor.models import ResumeVersion, SavedResume, TailoringSession
 
 
 class ResumeVersionRepository(UserScopedRepository[ResumeVersion]):
@@ -77,6 +77,7 @@ class TailoringSessionRepository(UserScopedRepository[TailoringSession]):
         ai_error: str | None,
         source_opportunity_id: str | None = None,
         source_application_id: str | None = None,
+        saved_resume_id: str | None = None,
     ) -> TailoringSession:
         return await self.create(
             user_id,
@@ -95,6 +96,7 @@ class TailoringSessionRepository(UserScopedRepository[TailoringSession]):
             ai_error=ai_error,
             source_opportunity_id=source_opportunity_id,
             source_application_id=source_application_id,
+            saved_resume_id=saved_resume_id,
         )
 
     async def get_or_create_session(
@@ -144,3 +146,21 @@ class TailoringSessionRepository(UserScopedRepository[TailoringSession]):
         """Autosaved editor edits. Overwrites any previous draft wholesale —
         the editor always sends its full current cv_data, not a diff."""
         return await self.update(user_id, id_, draft_cv_data=draft_cv_data)
+
+
+class SavedResumeRepository(UserScopedRepository[SavedResume]):
+    model = SavedResume
+
+    async def get_by_slot(self, user_id: str, slot: int) -> SavedResume | None:
+        stmt = self._scoped(select(self.model), user_id).where(self.model.slot == slot)
+        return (await self.session.execute(stmt)).scalar_one_or_none()
+
+    async def list_ordered(self, user_id: str) -> list[SavedResume]:
+        return await self.list(user_id, order_by=self.model.slot)
+
+    async def touch_updated(self, user_id: str, id_: str, **fields: Any) -> SavedResume | None:
+        """Every write to a saved resume (rename, replace) goes through this
+        so updated_at always reflects the actual last change — this table has
+        no DB trigger for it (see models.py's comment), so it's set explicitly
+        here rather than relying on the ORM default, which only fires on INSERT."""
+        return await self.update(user_id, id_, **fields, updated_at=datetime.now(timezone.utc))

@@ -6,6 +6,10 @@
  */
 export const queryKeys = {
   profile: ['profile'] as const,
+  // Shared between the Profile page ("My Resumes") and the Resume Tailor
+  // page's picker — saving/renaming/deleting a slot in one immediately
+  // reflects in the other via the shared cache, no manual refetch needed.
+  savedResumes: ['saved-resumes'] as const,
   tracker: ['tracker'] as const,
   templates: ['templates'] as const,
   campaigns: ['campaigns'] as const,

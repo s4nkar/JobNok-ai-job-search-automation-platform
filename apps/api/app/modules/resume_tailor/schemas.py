@@ -104,6 +104,28 @@ class TitleUpdateRequest(BaseModel):
     title: str = Field(..., max_length=200)
 
 
+# ── Saved resumes ("My Resumes") ─────────────────────────────────
+# No secure_url/cloudinary_public_id anywhere here — the frontend never
+# receives either; every read of the actual file goes through an
+# authenticated backend endpoint (see saved_resumes_routes.py).
+
+class SavedResumeResponse(BaseModel):
+    id: str
+    slot: int
+    label: str
+    original_filename: str
+    created_at: str
+    updated_at: str
+
+
+class SavedResumeListResponse(BaseModel):
+    resumes: list[SavedResumeResponse]
+
+
+class SavedResumeRenameRequest(BaseModel):
+    label: str = Field(..., min_length=1, max_length=100)
+
+
 # ── CvDataSchema — validates generate_base_cv_data's LLM output ──────
 # Mirrors the frontend's CvData TypeScript interface (apps/web/lib/types.ts)
 # field-for-field. response_format=json_object (see provider.py) guarantees

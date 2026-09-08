@@ -1,9 +1,14 @@
 """Postgres persistence for resume-tailor sessions.
 
-Two tables:
+Three tables:
     resume_versions    — one row per (user, uploaded PDF content hash). Dedups
                          parsing/chunking/embedding/structuring cost across
                          every JD the same resume gets tailored against.
+    saved_resumes      — up to 3 permanent, user-managed resume PDFs (profile
+                         "My Resumes"), stored in Cloudinary. Lets tailoring
+                         reuse a resume across many JDs without re-uploading,
+                         and is the source for the editor's "compare with
+                         original" view (see tailoring_sessions.saved_resume_id).
     tailoring_sessions — one row per (resume_version, JD) tailoring run. The
                          durable identity behind a `session_id` the frontend
                          holds in the URL, replacing the old bare
@@ -46,6 +51,41 @@ class ResumeVersion(Base, UUIDPKMixin, CreatedAtMixin):
     # Bumped explicitly by the repository on every reuse — not trigger-managed,
     # every write to this column goes through one narrow, single-purpose call.
     last_used_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True), server_default=func.now(), nullable=False
+    )
+
+
+class SavedResume(Base, UUIDPKMixin, CreatedAtMixin):
+    """A permanent, user-managed resume PDF ("My Resumes" in the profile
+    page) — up to 3 per user, one per fixed slot. Stored in Cloudinary
+    (resource_type="raw", type="authenticated" — see saved_resumes_routes.py
+    for why this is a stricter delivery mode than the CV photo's public
+    delivery: a resume carries far more PII per asset than a profile photo).
+    Only cloudinary_public_id is stored, never a URL — every read re-derives
+    a fresh signed URL server-side (service.py::fetch_saved_resume_bytes) and
+    every consumer (list/preview/download/compare-with-original) goes through
+    an authenticated backend endpoint, never a bare Cloudinary link handed to
+    the frontend.
+    """
+    __tablename__ = "saved_resumes"
+    __table_args__ = (
+        UniqueConstraint("user_id", "slot", name="saved_resumes_user_id_slot_key"),
+        CheckConstraint("slot between 1 and 3", name="saved_resumes_slot_range_check"),
+        CheckConstraint("char_length(label) <= 100", name="saved_resumes_label_length_check"),
+    )
+
+    user_id: Mapped[uuid.UUID] = mapped_column(
+        PG_UUID(as_uuid=True), ForeignKey("profiles.id", ondelete="CASCADE"), nullable=False
+    )
+    slot: Mapped[int] = mapped_column(nullable=False)
+    label: Mapped[str] = mapped_column(nullable=False)
+    cloudinary_public_id: Mapped[str] = mapped_column(nullable=False)
+    original_filename: Mapped[str] = mapped_column(nullable=False)
+    sha256: Mapped[str] = mapped_column(nullable=False)
+    # Bumped explicitly on rename/replace (see repository.py) — this table
+    # isn't in shared/models.py's trigger-managed updated_at list, and adding
+    # it there is unnecessary overhead for one column on one table.
+    updated_at: Mapped[datetime] = mapped_column(
         TIMESTAMP(timezone=True), server_default=func.now(), nullable=False
     )
 
@@ -115,5 +155,16 @@ class TailoringSession(Base, UUIDPKMixin, CreatedAtMixin):
     source_application_id: Mapped[uuid.UUID | None] = mapped_column(
         PG_UUID(as_uuid=True),
         ForeignKey("job_search_applications.id", ondelete="SET NULL"),
+        nullable=True,
+    )
+    # Which saved resume (if any) this session was tailored from — NULL for a
+    # one-off ad-hoc upload. Powers GET /tailor/{id}/original-pdf: only a
+    # session with this set has a permanent original to compare against.
+    # SET NULL (not CASCADE) for the same reason as the two FKs above — the
+    # analysis is still worth keeping if the user later replaces or deletes
+    # that saved-resume slot.
+    saved_resume_id: Mapped[uuid.UUID | None] = mapped_column(
+        PG_UUID(as_uuid=True),
+        ForeignKey("saved_resumes.id", ondelete="SET NULL"),
         nullable=True,
     )

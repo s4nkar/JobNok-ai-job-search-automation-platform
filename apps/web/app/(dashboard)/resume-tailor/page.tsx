@@ -2,6 +2,7 @@
 
 import { useState, useRef, useEffect, Suspense } from 'react'
 import { useSearchParams, useRouter } from 'next/navigation'
+import { useQuery } from '@tanstack/react-query'
 import { config } from '@/lib/config'
 import { Button } from '@jobnok/ui'
 import { Textarea } from '@jobnok/ui'
@@ -10,11 +11,12 @@ import { useToast } from '@jobnok/ui'
 import {
   Upload, FileText, Loader2, CheckCircle, XCircle, ArrowRight,
   Info, FileSearch, X, Compass, Download, LayoutTemplate,
-  Sparkles, AlertTriangle, BarChart3, Pencil,
+  Sparkles, AlertTriangle, BarChart3, Pencil, Check,
 } from 'lucide-react'
-import { apiFetch } from '@/lib/api'
+import { apiFetch, apiGet } from '@/lib/api'
 import { cn } from '@jobnok/ui'
-import { StartupHuntSavedOpportunity, JobSearchApplication, ResumeTailorResult } from '@/lib/types'
+import { queryKeys } from '@/lib/queryKeys'
+import { StartupHuntSavedOpportunity, JobSearchApplication, ResumeTailorResult, SavedResume } from '@/lib/types'
 
 const SCORE_LABELS: Record<string, string> = {
   core_skills: 'Core Skills',
@@ -92,8 +94,30 @@ function ResumeTailorInner() {
 
   const [generating, setGenerating] = useState(false)
 
+  // "Saved" (pick from the profile's My Resumes library) vs "One-off" (the
+  // original upload-a-file-every-time flow, kept as-is for a resume you
+  // don't want saved to your library). Defaults to "saved" once the user
+  // turns out to actually have a saved resume (see the effect below) —
+  // never defaults into an empty tab.
+  const [resumeTab, setResumeTab] = useState<'saved' | 'oneoff'>('oneoff')
+  const [tabTouched, setTabTouched] = useState(false)
+  const [selectedSavedResumeId, setSelectedSavedResumeId] = useState<string | null>(null)
+  const { data: savedResumesData } = useQuery({
+    queryKey: queryKeys.savedResumes,
+    queryFn: () => apiGet<{ resumes: SavedResume[] }>('/api/ai/resumes'),
+  })
+  const savedResumes = savedResumesData?.resumes ?? []
+
   const fileRef = useRef<HTMLInputElement>(null)
   const { toast } = useToast()
+
+  useEffect(() => {
+    if (tabTouched) return
+    if (savedResumesData && savedResumesData.resumes.length > 0) {
+      setResumeTab('saved')
+      setSelectedSavedResumeId(prev => prev ?? savedResumesData.resumes[0].id)
+    }
+  }, [savedResumesData, tabTouched])
 
   useEffect(() => {
     if (!opportunityId) return
@@ -137,13 +161,18 @@ function ResumeTailorInner() {
   }
 
   async function analyzeResume() {
-    if (!file || !jd.trim()) return
+    const usingSaved = resumeTab === 'saved' && !!selectedSavedResumeId
+    if ((!usingSaved && !file) || !jd.trim()) return
     setLoading(true)
     setResult(null)
     setError(null)
 
     const formData = new FormData()
-    formData.append('resume', file)
+    if (usingSaved) {
+      formData.append('saved_resume_id', selectedSavedResumeId!)
+    } else if (file) {
+      formData.append('resume', file)
+    }
     formData.append('job_description', jd)
     if (opportunityId) formData.append('opportunity_id', opportunityId)
     if (jobSearchApplicationId) formData.append('job_search_application_id', jobSearchApplicationId)
@@ -270,29 +299,89 @@ function ResumeTailorInner() {
         <div className="space-y-4 sticky top-6">
           <div className="bg-white rounded-2xl border border-slate-100 shadow-card p-5">
             <Label className="text-sm font-semibold text-slate-700 mb-3 block">Resume (PDF)</Label>
-            <div
-              onClick={() => fileRef.current?.click()}
-              className={cn(
-                'border-2 border-dashed rounded-xl p-8 text-center cursor-pointer transition-all duration-200',
-                file ? 'border-emerald-300 bg-emerald-50/50' : 'border-slate-200 hover:border-indigo-300 hover:bg-indigo-50/30'
-              )}
-            >
-              {file ? (
-                <div className="flex items-center justify-center gap-2.5 text-emerald-600">
-                  <CheckCircle className="h-5 w-5" />
-                  <span className="text-sm font-medium">{file.name}</span>
+
+            <div className="flex items-center gap-1 bg-slate-100/80 rounded-xl p-1 mb-3 w-fit">
+              <button
+                onClick={() => { setResumeTab('saved'); setTabTouched(true) }}
+                className={cn(
+                  'text-xs font-semibold px-3 py-1.5 rounded-lg transition-colors',
+                  resumeTab === 'saved' ? 'bg-white text-slate-900 shadow-sm' : 'text-slate-500 hover:text-slate-700'
+                )}
+              >
+                My Resumes
+              </button>
+              <button
+                onClick={() => { setResumeTab('oneoff'); setTabTouched(true) }}
+                className={cn(
+                  'text-xs font-semibold px-3 py-1.5 rounded-lg transition-colors',
+                  resumeTab === 'oneoff' ? 'bg-white text-slate-900 shadow-sm' : 'text-slate-500 hover:text-slate-700'
+                )}
+              >
+                One-off upload
+              </button>
+            </div>
+
+            {resumeTab === 'saved' ? (
+              savedResumes.length > 0 ? (
+                <div className="space-y-2">
+                  {savedResumes.map(r => (
+                    <button
+                      key={r.id}
+                      onClick={() => setSelectedSavedResumeId(r.id)}
+                      className={cn(
+                        'w-full flex items-center gap-2.5 rounded-xl border-2 p-3 text-left transition-all',
+                        selectedSavedResumeId === r.id ? 'border-indigo-500 bg-indigo-50/50' : 'border-slate-200 hover:border-slate-300'
+                      )}
+                    >
+                      <span className={cn(
+                        'h-5 w-5 rounded-full border-2 flex items-center justify-center shrink-0',
+                        selectedSavedResumeId === r.id ? 'border-indigo-500 bg-indigo-500' : 'border-slate-300'
+                      )}>
+                        {selectedSavedResumeId === r.id && <Check className="h-3 w-3 text-white" />}
+                      </span>
+                      <FileText className="h-4 w-4 text-slate-400 shrink-0" />
+                      <div className="min-w-0">
+                        <p className="text-sm font-medium text-slate-700 truncate">{r.label}</p>
+                        <p className="text-xs text-slate-400 truncate">{r.original_filename}</p>
+                      </div>
+                    </button>
+                  ))}
                 </div>
               ) : (
-                <div className="space-y-2">
-                  <div className="w-10 h-10 rounded-xl bg-slate-100 flex items-center justify-center mx-auto">
-                    <Upload className="h-5 w-5 text-slate-400" />
-                  </div>
-                  <p className="text-sm font-medium text-slate-600">Click to upload your resume</p>
-                  <p className="text-xs text-slate-400">PDF files only</p>
+                <div className="border-2 border-dashed border-slate-200 rounded-xl p-6 text-center">
+                  <p className="text-sm text-slate-500">No saved resumes yet.</p>
+                  <a href="/profile" className="text-xs font-semibold text-indigo-600 hover:text-indigo-700 mt-1 inline-block">
+                    Save one in your profile →
+                  </a>
                 </div>
-              )}
-            </div>
-            <input ref={fileRef} type="file" accept=".pdf" className="hidden" onChange={handleFileChange} />
+              )
+            ) : (
+              <>
+                <div
+                  onClick={() => fileRef.current?.click()}
+                  className={cn(
+                    'border-2 border-dashed rounded-xl p-8 text-center cursor-pointer transition-all duration-200',
+                    file ? 'border-emerald-300 bg-emerald-50/50' : 'border-slate-200 hover:border-indigo-300 hover:bg-indigo-50/30'
+                  )}
+                >
+                  {file ? (
+                    <div className="flex items-center justify-center gap-2.5 text-emerald-600">
+                      <CheckCircle className="h-5 w-5" />
+                      <span className="text-sm font-medium">{file.name}</span>
+                    </div>
+                  ) : (
+                    <div className="space-y-2">
+                      <div className="w-10 h-10 rounded-xl bg-slate-100 flex items-center justify-center mx-auto">
+                        <Upload className="h-5 w-5 text-slate-400" />
+                      </div>
+                      <p className="text-sm font-medium text-slate-600">Click to upload your resume</p>
+                      <p className="text-xs text-slate-400">PDF files only</p>
+                    </div>
+                  )}
+                </div>
+                <input ref={fileRef} type="file" accept=".pdf" className="hidden" onChange={handleFileChange} />
+              </>
+            )}
           </div>
 
           <div className="bg-white rounded-2xl border border-slate-100 shadow-card p-5">
@@ -309,7 +398,7 @@ function ResumeTailorInner() {
           <Button
             className="w-full h-11 gradient-brand text-white border-0 shadow-brand-sm hover:opacity-90 transition-opacity rounded-xl font-semibold"
             onClick={analyzeResume}
-            disabled={!file || !jd.trim() || loading}
+            disabled={(resumeTab === 'saved' ? !selectedSavedResumeId : !file) || !jd.trim() || loading}
           >
             {loading
               ? <><Loader2 className="h-4 w-4 mr-2 animate-spin" /> Analysing…</>
@@ -547,15 +636,7 @@ function ResumeTailorInner() {
                 </p>
                 <div className="flex gap-3">
                   <Button
-                    onClick={() => {
-                      if (file) {
-                        try {
-                          const url = URL.createObjectURL(file)
-                          sessionStorage.setItem(`resume_original_pdf_url:${result.session_id}`, url)
-                        } catch { /* sessionStorage full — editor will handle gracefully */ }
-                      }
-                      router.push(`/resume-tailor/editor?session_id=${result.session_id}`)
-                    }}
+                    onClick={() => router.push(`/resume-tailor/editor?session_id=${result.session_id}`)}
                     className="flex-1 h-10 gradient-brand text-white border-0 shadow-brand-sm hover:opacity-90 transition-opacity rounded-xl font-semibold text-sm"
                   >
                     <Pencil className="h-4 w-4 mr-2" /> Edit &amp; Build Resume

@@ -11,6 +11,7 @@ import { useToast } from '@jobnok/ui'
 import { apiFetch, apiGet } from '@/lib/api'
 import { queryKeys } from '@/lib/queryKeys'
 import { UserProfile } from '@/lib/types'
+import { MyResumes } from './my-resumes'
 
 export default function ProfilePage() {
   const queryClient = useQueryClient()
@@ -230,6 +231,8 @@ export default function ProfilePage() {
               <Field label="Work Authorization" value={profile?.work_authorization || ''} onChange={v => handleField('work_authorization', v)} placeholder="Eligible to work in Germany" className="col-span-2" />
             </div>
           </div>
+
+          <MyResumes />
 
           {/* Address */}
           <div className="bg-white rounded-2xl border border-slate-100 shadow-card p-5">
