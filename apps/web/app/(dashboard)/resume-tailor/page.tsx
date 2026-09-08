@@ -10,8 +10,9 @@ import { Label } from '@jobnok/ui'
 import { useToast } from '@jobnok/ui'
 import {
   Upload, FileText, Loader2, CheckCircle, XCircle, ArrowRight,
-  Info, FileSearch, X, Compass, Download, LayoutTemplate,
+  FileSearch, X, Compass, Download, LayoutTemplate,
   Sparkles, AlertTriangle, BarChart3, Pencil, Check,
+  ChevronDown, ChevronUp, SlidersHorizontal,
 } from 'lucide-react'
 import { apiFetch, apiGet } from '@/lib/api'
 import { cn } from '@jobnok/ui'
@@ -107,6 +108,11 @@ function ResumeTailorInner() {
     queryFn: () => apiGet<{ resumes: SavedResume[] }>('/api/ai/resumes'),
   })
   const savedResumes = savedResumesData?.resumes ?? []
+  // Mobile-only: the input card starts collapsed so results are reachable
+  // without scrolling past the resume picker + JD textarea first — same
+  // pattern as recent-job-search's filters panel. Ignored at lg+ (always
+  // expanded there).
+  const [inputsOpen, setInputsOpen] = useState(false)
 
   const fileRef = useRef<HTMLInputElement>(null)
   const { toast } = useToast()
@@ -261,10 +267,16 @@ function ResumeTailorInner() {
     ? matchScore >= 70 ? 'bg-emerald-500' : matchScore >= 40 ? 'bg-amber-500' : 'bg-red-500'
     : ''
 
+  const selectedSavedResume = savedResumes.find(r => r.id === selectedSavedResumeId)
+  const resumeSummary = resumeTab === 'saved'
+    ? (selectedSavedResume?.label || 'No resume selected')
+    : (file?.name || 'No file uploaded')
+  const inputsSummary = [resumeSummary, jd.trim() ? 'JD added' : 'No JD yet'].join(' · ')
+
   return (
     <div className="animate-fade-in">
       <div className="flex items-center gap-4 mb-6">
-        <div className="page-header-icon bg-indigo-100">
+        <div className="hidden sm:flex page-header-icon bg-indigo-100">
           <FileSearch className="h-5 w-5 text-indigo-600" />
         </div>
         <div>
@@ -289,16 +301,37 @@ function ResumeTailorInner() {
         </div>
       )}
 
-      <div className="flex items-center gap-2.5 bg-indigo-50 border border-indigo-100 text-indigo-700 rounded-xl px-4 py-3 mb-6 text-sm">
-        <Info className="h-4 w-4 flex-shrink-0 text-indigo-500" />
-        <span><strong>{config.rateLimits.resumeTailorAiPerDay} analyses/day</strong> on the free tier.</span>
-      </div>
+      {/* lg:, not md: - see recent-job-search/page.tsx's identical sidebar
+          comment for why: at md a fixed sidebar leaves the results column too
+          narrow for its own sm: breakpoints, which key off full viewport
+          width, not the column's actual space. */}
+      <div className="grid grid-cols-1 lg:grid-cols-[380px_1fr] gap-5 items-start">
+        {/* Left — inputs, one unified sticky card instead of several stacked
+            ones + a floating button, matching recent-job-search's sidebar. */}
+        <div className="bg-white rounded-2xl border border-slate-100 shadow-sm lg:sticky lg:top-6 lg:max-h-[calc(100vh-8.5rem)] lg:flex lg:flex-col overflow-hidden">
+          {/* Mobile/tablet-only collapsible header */}
+          <button
+            type="button"
+            onClick={() => setInputsOpen(v => !v)}
+            className="w-full lg:hidden flex items-center justify-between gap-3 px-5 py-3.5"
+          >
+            <span className="flex items-center gap-2 text-xs font-semibold text-slate-500 uppercase tracking-wider flex-shrink-0">
+              <SlidersHorizontal className="h-3.5 w-3.5 text-slate-400" />
+              Resume &amp; JD
+            </span>
+            <span className="flex items-center gap-1.5 text-xs text-slate-500 font-normal normal-case min-w-0">
+              <span className="truncate">{inputsSummary}</span>
+              {inputsOpen ? <ChevronUp className="h-3.5 w-3.5 flex-shrink-0" /> : <ChevronDown className="h-3.5 w-3.5 flex-shrink-0" />}
+            </span>
+          </button>
 
-      <div className="grid grid-cols-2 gap-6 items-start">
-        {/* Left — inputs */}
-        <div className="space-y-4 sticky top-6">
-          <div className="bg-white rounded-2xl border border-slate-100 shadow-card p-5">
-            <Label className="text-sm font-semibold text-slate-700 mb-3 block">Resume (PDF)</Label>
+          <div className={cn(
+            inputsOpen ? 'block' : 'hidden',
+            'lg:block lg:flex-1 lg:min-h-0 lg:overflow-y-auto scrollbar-thin p-5 lg:pt-5 space-y-5',
+            inputsOpen && 'border-t border-slate-100 lg:border-t-0'
+          )}>
+          <div>
+            <Label className="text-sm font-semibold text-slate-700 mb-2 block">Resume (PDF)</Label>
 
             <div className="flex items-center gap-1 bg-slate-100/80 rounded-xl p-1 mb-3 w-fit">
               <button
@@ -323,35 +356,35 @@ function ResumeTailorInner() {
 
             {resumeTab === 'saved' ? (
               savedResumes.length > 0 ? (
-                <div className="space-y-2">
+                <div className="space-y-1.5">
                   {savedResumes.map(r => (
                     <button
                       key={r.id}
                       onClick={() => setSelectedSavedResumeId(r.id)}
                       className={cn(
-                        'w-full flex items-center gap-2.5 rounded-xl border-2 p-3 text-left transition-all',
+                        'w-full flex items-center gap-2 rounded-lg border p-2.5 text-left transition-all',
                         selectedSavedResumeId === r.id ? 'border-indigo-500 bg-indigo-50/50' : 'border-slate-200 hover:border-slate-300'
                       )}
                     >
                       <span className={cn(
-                        'h-5 w-5 rounded-full border-2 flex items-center justify-center shrink-0',
+                        'h-4 w-4 rounded-full border-2 flex items-center justify-center shrink-0',
                         selectedSavedResumeId === r.id ? 'border-indigo-500 bg-indigo-500' : 'border-slate-300'
                       )}>
-                        {selectedSavedResumeId === r.id && <Check className="h-3 w-3 text-white" />}
+                        {selectedSavedResumeId === r.id && <Check className="h-2.5 w-2.5 text-white" />}
                       </span>
-                      <FileText className="h-4 w-4 text-slate-400 shrink-0" />
+                      <FileText className="h-3.5 w-3.5 text-slate-400 shrink-0" />
                       <div className="min-w-0">
-                        <p className="text-sm font-medium text-slate-700 truncate">{r.label}</p>
-                        <p className="text-xs text-slate-400 truncate">{r.original_filename}</p>
+                        <p className="text-xs font-semibold text-slate-700 truncate">{r.label}</p>
+                        <p className="text-[11px] text-slate-400 truncate">{r.original_filename}</p>
                       </div>
                     </button>
                   ))}
                 </div>
               ) : (
-                <div className="border-2 border-dashed border-slate-200 rounded-xl p-6 text-center">
-                  <p className="text-sm text-slate-500">No saved resumes yet.</p>
-                  <a href="/profile" className="text-xs font-semibold text-indigo-600 hover:text-indigo-700 mt-1 inline-block">
-                    Save one in your profile →
+                <div className="border border-dashed border-slate-200 rounded-lg px-3 py-2.5 flex items-center justify-between gap-2">
+                  <p className="text-xs text-slate-500">No saved resumes yet.</p>
+                  <a href="/profile" className="text-xs font-semibold text-indigo-600 hover:text-indigo-700 shrink-0">
+                    Save one →
                   </a>
                 </div>
               )
@@ -360,23 +393,21 @@ function ResumeTailorInner() {
                 <div
                   onClick={() => fileRef.current?.click()}
                   className={cn(
-                    'border-2 border-dashed rounded-xl p-8 text-center cursor-pointer transition-all duration-200',
-                    file ? 'border-emerald-300 bg-emerald-50/50' : 'border-slate-200 hover:border-indigo-300 hover:bg-indigo-50/30'
+                    'flex items-center gap-3 border rounded-lg px-3 py-2.5 cursor-pointer transition-all duration-150',
+                    file ? 'border-emerald-300 bg-emerald-50/50' : 'border-dashed border-slate-200 hover:border-indigo-300 hover:bg-indigo-50/30'
                   )}
                 >
                   {file ? (
-                    <div className="flex items-center justify-center gap-2.5 text-emerald-600">
-                      <CheckCircle className="h-5 w-5" />
-                      <span className="text-sm font-medium">{file.name}</span>
-                    </div>
+                    <>
+                      <CheckCircle className="h-4 w-4 text-emerald-500 shrink-0" />
+                      <span className="text-xs font-medium text-emerald-700 truncate">{file.name}</span>
+                      <span className="text-[11px] text-slate-400 ml-auto shrink-0">Change</span>
+                    </>
                   ) : (
-                    <div className="space-y-2">
-                      <div className="w-10 h-10 rounded-xl bg-slate-100 flex items-center justify-center mx-auto">
-                        <Upload className="h-5 w-5 text-slate-400" />
-                      </div>
-                      <p className="text-sm font-medium text-slate-600">Click to upload your resume</p>
-                      <p className="text-xs text-slate-400">PDF files only</p>
-                    </div>
+                    <>
+                      <Upload className="h-4 w-4 text-slate-400 shrink-0" />
+                      <span className="text-xs font-medium text-slate-600">Click to upload a PDF</span>
+                    </>
                   )}
                 </div>
                 <input ref={fileRef} type="file" accept=".pdf" className="hidden" onChange={handleFileChange} />
@@ -384,19 +415,19 @@ function ResumeTailorInner() {
             )}
           </div>
 
-          <div className="bg-white rounded-2xl border border-slate-100 shadow-card p-5">
-            <Label className="text-sm font-semibold text-slate-700 mb-3 block">Job Description</Label>
+          <div>
+            <Label className="text-sm font-semibold text-slate-700 mb-2 block">Job Description</Label>
             <Textarea
               value={jd}
               onChange={(e) => setJd(e.target.value)}
               placeholder="Paste the full job description here…"
-              rows={12}
+              rows={9}
               className="text-sm rounded-xl border-slate-200 resize-none"
             />
           </div>
 
           <Button
-            className="w-full h-11 gradient-brand text-white border-0 shadow-brand-sm hover:opacity-90 transition-opacity rounded-xl font-semibold"
+            className="w-full h-10 gradient-brand text-white border-0 shadow-brand-sm hover:opacity-90 transition-opacity rounded-xl font-semibold text-sm"
             onClick={analyzeResume}
             disabled={(resumeTab === 'saved' ? !selectedSavedResumeId : !file) || !jd.trim() || loading}
           >
@@ -405,10 +436,14 @@ function ResumeTailorInner() {
               : <><FileText className="h-4 w-4 mr-2" /> Analyse Resume</>
             }
           </Button>
+          <p className="text-center text-[11px] text-slate-400">
+            Up to {config.rateLimits.resumeTailorAiPerDay} analyses/day on the free tier
+          </p>
+          </div>
         </div>
 
         {/* Right — results */}
-        <div className="space-y-4">
+        <div className="min-w-0 space-y-4">
           {error && (
             <div className="bg-red-50 border border-red-100 text-red-700 rounded-xl px-4 py-3 text-sm">{error}</div>
           )}
