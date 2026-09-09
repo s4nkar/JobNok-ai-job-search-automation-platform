@@ -3,12 +3,16 @@ logging. Everything else in this feature (PDF/HTML rendering, LLM prose,
 deterministic matching) is DB-free — see routes.py.
 """
 
+import cloudinary.utils
+import httpx
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.shared.utils import row_to_dict
+from app.shared import cloudinary_client  # noqa: F401 — import triggers cloudinary.config() setup
 from app.modules.profile.models import Profile
 from app.modules.job_search.models import JobSearchApplication
+from app.modules.resume_tailor.models import SavedResume
 from app.modules.startup_hunt.models import OpportunityArtifact, StartupHuntOpportunity
 
 
@@ -67,6 +71,23 @@ async def verify_application_ownership(db: AsyncSession, user_id: str, applicati
         )
     ).scalar_one_or_none()
     return row is not None
+
+
+async def fetch_saved_resume_bytes(saved_resume: SavedResume) -> bytes:
+    """Fetches a saved resume's PDF bytes from Cloudinary. Derives a fresh
+    signed URL from the stored public_id on every call rather than persisting
+    one — signed URLs expire, and re-deriving one is a local, no-network-call
+    computation (uses the already-configured API secret), so there's nothing
+    to cache. No SSRF guard needed here (unlike rendering.py::safe_photo_url)
+    — the URL is always built server-side from our own trusted
+    cloudinary_public_id, never a client-supplied string."""
+    url, _ = cloudinary.utils.cloudinary_url(
+        saved_resume.cloudinary_public_id, resource_type="raw", type="authenticated", sign_url=True,
+    )
+    async with httpx.AsyncClient(timeout=15) as client:
+        r = await client.get(url)
+        r.raise_for_status()
+        return r.content
 
 
 async def save_resume_artifact(

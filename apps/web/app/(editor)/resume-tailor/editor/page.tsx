@@ -11,7 +11,7 @@ import { Button, Input, Textarea, Label, useToast, cn } from '@jobnok/ui'
 import {
   ArrowLeft, Download, Loader2, Plus, Minus, Trash2, ChevronDown,
   FileText, Briefcase, GraduationCap, Wrench, FolderOpen, BookOpen,
-  Languages, AlertTriangle, Star, Eye, EyeOff, Layers, RotateCcw,
+  Languages, AlertTriangle, Star, Eye, Layers, RotateCcw,
   LayoutTemplate, User, GripVertical, Pencil,
 } from 'lucide-react'
 import {
@@ -20,6 +20,7 @@ import {
 import { SortableContext, verticalListSortingStrategy, useSortable, arrayMove } from '@dnd-kit/sortable'
 import { CSS } from '@dnd-kit/utilities'
 import { TemplatePickerDialog } from './template-picker'
+import { CompareDialog } from './compare-dialog'
 import { TemplateRail } from './template-rail'
 import { PREVIEW_BASE_HEIGHT, PREVIEW_BASE_WIDTH, ZOOM_LEVELS } from './constants'
 
@@ -44,6 +45,140 @@ const DEFAULT_SESSION_TITLE = 'Primary Resume'
 // truncate or fail the download on some platforms.
 function sanitizeFilename(name: string): string {
   return name.trim().replace(/[\\/:*?"<>|]+/g, '').replace(/\s+/g, ' ').slice(0, 100) || 'Resume'
+}
+
+// Splices a Paged.js bootstrap into the raw template HTML from /preview so
+// the preview shows real, correctly-broken A4 pages (matching what WeasyPrint
+// will actually produce) instead of one continuous scroll. Runs INSIDE the
+// preview iframe's own document — not in the main app bundle, and not
+// against a plain <div> in the app's own DOM — specifically so the
+// templates' bare, high-collision-risk selectors (body, p, h1, ul, li) stay
+// isolated from the rest of the app exactly like they already are today.
+// Requires sandbox="allow-same-origin allow-scripts" on the iframe: scripts
+// to run Paged.js at all, same-origin so the ES module import resolves as a
+// normal same-origin fetch (a sandboxed srcDoc iframe without
+// allow-same-origin gets a unique opaque origin, which CORS-blocks module
+// script fetches — classic <script> tags don't have this restriction, but
+// Paged.js's browser build is only shipped as an ES module here).
+//
+// Injected into <head>, NOT <body> — the bootstrap script itself reads
+// `document.body.innerHTML` to get the "source content" to hand to Paged.js.
+// If the bootstrap's own <style>/<script> tags lived in <body> (as they
+// originally did), that read would capture them too, and Paged.js's
+// Previewer scans whatever source content it's given for embedded <style>
+// tags and applies them while it constructs its OWN .pagedjs_page elements.
+// Since our override style also targets the exact class name `.pagedjs_page`
+// (for the page-gap/shadow/caption look), that created a feedback loop:
+// margins and spacing intended as a one-time cosmetic wrapper got reapplied
+// during Paged.js's internal layout pass, inflating each page's effective
+// height and pushing content onto extra pages. Module scripts execute after
+// the document finishes parsing regardless of where they sit in the document
+// (deferred by default, same as a classic script with the `defer`
+// attribute), so moving both tags into <head> doesn't change when this runs —
+// it only keeps them out of the content Paged.js actually measures. Global
+// CSS in <head> still applies normally to whatever Paged.js generates later,
+// so the gap/shadow/caption styling is unaffected.
+function buildPaginatedHtml(rawHtml: string, requestId: number): string {
+  const bootstrap = `
+<style>
+  /* Overrides each template's own "@media screen { body { padding: 16mm 20mm } }"
+     rule - a leftover workaround from before real pagination existed, meant
+     to fake page margins on screen since @page margins normally only apply
+     to print. Paged.js now applies the real per-page margins itself from
+     the template's own @page rule, so that old body padding is redundant -
+     left in place it stacks an extra margin around the whole page stack on
+     top of the correct one Paged.js already renders per page. Comes later in
+     the document than the template's own <style>, so it wins on equal
+     specificity without needing !important. */
+  /* Gap background matches the editor page's own background
+     (bg-[#F8F8FC] in app/(editor)/layout.tsx) exactly, not white like the
+     page card itself and not an arbitrary gray - a white gap next to a white
+     page (both under the same soft shadow) reads as one blurry surface, and
+     a mismatched gray would look like a stray color patch instead of "the
+     page card ending and the real app background showing through." */
+  html, body { overflow: hidden !important; margin: 0; padding: 0; background: #f8f8fc; }
+  .pagedjs_pages { display: block; }
+  .pagedjs_page {
+    margin: 0 auto 28px; background: #fff;
+    /* box-shadow blurs outward in every direction, not just where the
+       y-offset points - every page has this shadow, so a strong one bleeds
+       into the gap from BOTH sides (the page above bleeding down, the page
+       below bleeding up) as well as sideways, visually "framing" the gap
+       like it's its own bordered box instead of plain open background.
+       Kept deliberately small (3px blur, no spread) so what's left is a
+       barely-there paper edge, not a frame around the separator. */
+    box-shadow: 0 1px 3px rgba(15,23,42,0.08);
+    position: relative;
+  }
+  .pagedjs_page:last-child { margin-bottom: 0; }
+  .pagedjs_page:not(:last-child)::after {
+    content: attr(data-page-caption);
+    position: absolute; left: 0; right: 0; bottom: -22px; text-align: center;
+    font-family: Arial, Helvetica, sans-serif; font-size: 11px; color: #64748b;
+  }
+</style>
+<script type="module">
+  const requestId = ${requestId}
+  const fallbackHeight = ${PREVIEW_BASE_HEIGHT}
+  const measure = () => Math.max(document.documentElement.scrollHeight, document.body.scrollHeight, fallbackHeight)
+
+  // A sandboxed srcDoc document has an opaque origin - window.location.origin
+  // here is literally the string "null", which postMessage explicitly rejects
+  // as an invalid targetOrigin (throws a SyntaxError). We can't know or fake a
+  // real origin from inside this document, so we broadcast with '*' and let
+  // the parent verify the sender via e.source identity instead of origin
+  // string matching. The payload itself (requestId + a pixel height) carries
+  // no sensitive data, so a wildcard target is an acceptable trade-off.
+  function report(height) {
+    parent.postMessage({ type: 'paged-ready', requestId, height }, '*')
+  }
+
+  // A dynamic import wrapped in try/catch, not a static "import { Previewer }
+  // from ..." at the top of the module — a static import that fails (wrong
+  // path, blocked request, anything) fails the WHOLE module silently with no
+  // catchable error, meaning report() would never be called at all: the
+  // parent's "Updating…" spinner would spin forever with zero signal, and
+  // the iframe's height would never advance past its stale default, clipping
+  // any page beyond the first. Also: body.innerHTML is only cleared AFTER
+  // the import succeeds, so a failed import still leaves the original
+  // (unpaginated, but complete and visible) content in place as a fallback
+  // instead of an empty page.
+  ;(async () => {
+    try {
+      const { Previewer } = await import('/vendor/pagedjs/paged.esm.js')
+      const content = document.body.innerHTML
+      document.body.innerHTML = ''
+      // The 2nd arg MUST be left undefined, not []. Paged.js's Previewer only
+      // auto-discovers the document's own <style>/<link> tags (via its
+      // internal removeStyles()) when this argument is falsy - an empty
+      // array is truthy, so passing [] silently skips auto-discovery AND
+      // supplies zero rules of its own. That starves Paged.js of the
+      // template's actual "@page { margin: 16mm 20mm; size: A4 }" rule (and
+      // our own .pagedjs_page cosmetic <style> above), so it was falling
+      // back to its own built-in default page size/margins instead of the
+      // real ones - the actual cause of the mismatched spacing and wrong
+      // page count, not the earlier <body>-vs-<head> placement bug.
+      const flow = await new Previewer().preview(content, undefined, document.body)
+      document.querySelectorAll('.pagedjs_page').forEach((page, i) => {
+        page.setAttribute('data-page-caption', 'Page ' + (i + 1) + ' of ' + flow.total + ' \\u00b7 A4')
+      })
+      if (document.fonts && document.fonts.ready) {
+        try { await document.fonts.ready } catch (e) { /* ignore */ }
+      }
+      report(measure())
+      // Fonts/images can still shift layout slightly after the first
+      // measurement settles — one late re-measure catches that without
+      // needing an open-ended observer for a document that never changes
+      // again once Paged.js has finished.
+      setTimeout(() => report(measure()), 200)
+    } catch (err) {
+      report(measure())
+    }
+  })()
+</script>
+`
+  const idx = rawHtml.lastIndexOf('</head>')
+  return idx === -1 ? rawHtml + bootstrap : rawHtml.slice(0, idx) + bootstrap + rawHtml.slice(idx)
 }
 
 const DEFAULT_SECTION_ORDER: SectionKey[] = [
@@ -176,7 +311,7 @@ function EditorInner() {
   const { toast } = useToast()
 
   const [originalPdfUrl, setOriginalPdfUrl] = useState<string | null>(null)
-  const [showOriginalPdf, setShowOriginalPdf] = useState(false)
+  const [compareOpen, setCompareOpen] = useState(false)
   const [cvData, setCvData] = useState<CvData | null>(null)
   const [sessionTitle, setSessionTitle] = useState<string | null>(null)
   const [titleEditing, setTitleEditing] = useState(false)
@@ -188,13 +323,24 @@ function EditorInner() {
   const [sessionError, setSessionError] = useState(false)
   const [sessionErrorMessage, setSessionErrorMessage] = useState<string | null>(null)
   const [profileOkForLebenslauf, setProfileOkForLebenslauf] = useState(false)
-  const [previewHtml, setPreviewHtml] = useState<string | null>(null)
   const [previewLoading, setPreviewLoading] = useState(false)
-  // The rendered template paginates itself into discrete A4 "page" blocks
-  // (with a "Page X of Y" separator) once content overflows one page — the
-  // iframe must be sized to that FULL natural height, not a fixed one-page
-  // height, or its content gets clipped and the iframe grows its own nested
-  // scrollbar instead of the outer canvas scrolling the whole document.
+  // Real pagination (Paged.js, injected into the fetched HTML — see
+  // buildPaginatedHtml) breaks the resume into actual A4 "page" boxes with a
+  // gap + "Page X of Y" caption between them, matching what WeasyPrint will
+  // actually produce. Two iframe "slots" double-buffer this: writing new
+  // content into the currently-INACTIVE slot and only flipping `activeSlot`
+  // once that slot's pagination finishes (paged-ready message) means the
+  // visible preview keeps showing the last-good paginated result while a new
+  // one is computed in the background, instead of flashing blank/unpaginated
+  // content on every edit — pagination isn't free, so re-running it after
+  // every debounced keystroke would otherwise be visibly janky.
+  const [slotAHtml, setSlotAHtml] = useState<string | null>(null)
+  const [slotBHtml, setSlotBHtml] = useState<string | null>(null)
+  const [activeSlot, setActiveSlot] = useState<'a' | 'b'>('a')
+  // The iframe must be sized to the FULL natural height of the paginated
+  // result (all pages + gaps), not a fixed one-page height, or content gets
+  // clipped and the iframe grows its own nested scrollbar instead of the
+  // outer canvas scrolling the whole document.
   const [previewNaturalHeight, setPreviewNaturalHeight] = useState(PREVIEW_BASE_HEIGHT)
   const [draftSaving, setDraftSaving] = useState(false)
   const [draftSavedAt, setDraftSavedAt] = useState<number | null>(null)
@@ -215,11 +361,36 @@ function EditorInner() {
   const draftDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const thumbnailsDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const previewCanvasRef = useRef<HTMLDivElement>(null)
-  const previewIframeRef = useRef<HTMLIFrameElement>(null)
+  const previewIframeRefA = useRef<HTMLIFrameElement>(null)
+  const previewIframeRefB = useRef<HTMLIFrameElement>(null)
+  // Monotonically increasing per fetched preview — lets the message listener
+  // discard a stale slot's paged-ready event if the user kept editing before
+  // that slot's pagination finished (its content has already been
+  // superseded, so promoting it to active would show outdated content).
+  const pendingPreviewRequestIdRef = useRef(0)
+  // Source of truth for "which slot is visible" for code that needs the
+  // CURRENT value synchronously (the debounced fetch callback, the message
+  // listener) — activeSlot state exists only to drive the visibility styles
+  // in JSX, and reading it from a closure in an async callback risks staleness.
+  const activeSlotRef = useRef<'a' | 'b'>('a')
+  // True once either slot has ever been given content — read via ref rather
+  // than checking slotAHtml/slotBHtml directly so the debounced-fetch effect
+  // doesn't need those in its dependency array (which would otherwise tear
+  // down and rebuild the in-flight debounce/AbortController on every
+  // pagination update, not just on actual content edits).
+  const anySlotEverSetRef = useRef(false)
   // Skips the autosave effect's very first fire (the initial load setting
   // cvData for the first time) — otherwise every editor visit immediately
   // PATCHes back the exact data it just fetched.
   const hasLoadedRef = useRef(false)
+  // The draft_version this tab last loaded or successfully saved against —
+  // sent back on every autosave so the backend can detect a stale write from
+  // another tab (optimistic concurrency) instead of silently overwriting
+  // newer content it never saw. A ref, not state: it drives what the NEXT
+  // save sends, not anything rendered, and putting it in the autosave
+  // effect's dependency array would refire that effect (scheduling a
+  // needless extra save) every time a save's own success handler advances it.
+  const draftVersionRef = useRef(0)
 
   // Load session's saved draft (if any) or base_cv_data + tailoring overlay,
   // plus template list + profile check. Pulled into its own callback (not
@@ -233,8 +404,18 @@ function EditorInner() {
     setSessionError(false)
     hasLoadedRef.current = false
 
-    const pdfUrl = sessionStorage.getItem(`resume_original_pdf_url:${sessionId}`)
-    if (pdfUrl) setOriginalPdfUrl(pdfUrl)
+    // Fetched fresh from the backend (not a sessionStorage blob: URL carried
+    // over from the upload page) - a blob: URL only lives as long as the tab
+    // that created it, so it always died on refresh. The backend serves this
+    // from the session's saved resume (profile "My Resumes"), a permanent
+    // record, so it survives refreshes, works from a different tab, and
+    // doesn't depend on how the user navigated here. Best-effort and
+    // non-blocking: a session tailored from a one-off upload (no saved
+    // resume behind it) just means no compare button, never a load failure.
+    apiFetch(`/api/ai/tailor/${sessionId}/original-pdf`)
+      .then(r => r.ok ? r.blob() : null)
+      .then(blob => setOriginalPdfUrl(blob ? URL.createObjectURL(blob) : null))
+      .catch(() => setOriginalPdfUrl(null))
 
     Promise.all([
       apiFetch(`/api/ai/tailor/${sessionId}/editor`).then(async (r) => {
@@ -249,6 +430,7 @@ function EditorInner() {
       setSessionTitle(editorRes.title ?? null)
       if (editorRes.cv_data) {
         setCvData(editorRes.cv_data)
+        draftVersionRef.current = editorRes.draft_version ?? 0
         if (editorRes.is_draft) toast({ title: 'Resumed your saved draft' })
       } else {
         throw new Error('Resume data came back empty.')
@@ -269,6 +451,14 @@ function EditorInner() {
 
   useEffect(() => { loadEditor() }, [loadEditor])
 
+  // Revokes the previous blob: URL whenever originalPdfUrl is replaced (a
+  // Retry re-fetch) or the editor unmounts - each successful fetch above
+  // creates a new one via URL.createObjectURL, which otherwise leaks for the
+  // life of the tab.
+  useEffect(() => {
+    return () => { if (originalPdfUrl) URL.revokeObjectURL(originalPdfUrl) }
+  }, [originalPdfUrl])
+
   // Debounced autosave of edits — mirrors the live-preview debounce below,
   // but saves to the session's draft_cv_data instead of rendering HTML.
   useEffect(() => {
@@ -280,16 +470,34 @@ function EditorInner() {
         const res = await apiFetch(`/api/ai/tailor/${sessionId}/draft`, {
           method: 'PATCH',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ cv_data: cvData }),
+          body: JSON.stringify({ cv_data: cvData, base_version: draftVersionRef.current }),
         })
-        if (res.ok) setDraftSavedAt(Date.now())
+        if (res.ok) {
+          const data = await res.json()
+          draftVersionRef.current = data.draft_version
+          setDraftSavedAt(Date.now())
+        } else if (res.status === 409) {
+          // Another tab/window saved first - converge to its winning state
+          // rather than silently overwriting it (or getting rejected forever
+          // on every retry, since our base_version would stay stale).
+          const body = await res.json().catch(() => null)
+          const conflict = body?.detail
+          if (conflict?.cv_data) {
+            draftVersionRef.current = conflict.draft_version
+            setCvData(conflict.cv_data)
+            toast({
+              title: 'Edited in another tab',
+              description: 'This resume changed elsewhere — showing the latest version.',
+            })
+          }
+        }
       } catch { /* silent — autosave, user can still download manually */ }
       finally { setDraftSaving(false) }
     }, 1500)
     return () => {
       if (draftDebounceRef.current) clearTimeout(draftDebounceRef.current)
     }
-  }, [cvData, sessionId])
+  }, [cvData, sessionId, toast])
 
   // Debounced live preview fetch — 450ms, not 1500ms: this fires once per
   // typing PAUSE (not per keystroke), and /preview is a cheap Jinja-only
@@ -301,6 +509,15 @@ function EditorInner() {
     if (previewDebounceRef.current) clearTimeout(previewDebounceRef.current)
     const controller = new AbortController()
     previewDebounceRef.current = setTimeout(async () => {
+      // Tagged at DISPATCH time, not once the response comes back — fetches
+      // can resolve out of order (a bigger multi-line edit renders slower
+      // server-side than a smaller edit fired right after it), so ordering
+      // by "which response arrived first" let an older edit's slow response
+      // land after a newer one's and silently overwrite it with stale
+      // content. Tagging by dispatch order and checking staleness the moment
+      // each response arrives means whichever edit was made LAST always
+      // wins, regardless of which network response happens to land first.
+      const requestId = ++pendingPreviewRequestIdRef.current
       setPreviewLoading(true)
       try {
         const res = await apiFetch(`/api/ai/tailor/${sessionId}/preview`, {
@@ -309,14 +526,53 @@ function EditorInner() {
           body: JSON.stringify({ template_id: selectedTemplate, cv_data: cvData }),
           signal: controller.signal,
         })
+        if (pendingPreviewRequestIdRef.current !== requestId) return // a newer edit already superseded this one
         if (res.ok) {
           const html = await res.text()
-          setPreviewHtml(html)
+          if (pendingPreviewRequestIdRef.current !== requestId) return // superseded while reading the body
+          const paginated = buildPaginatedHtml(html, requestId)
+          // First-ever load: nothing to hold onto yet, so write straight into
+          // the (visible) active slot and accept the brief pre-pagination
+          // flash. Every later update writes into the INACTIVE slot instead —
+          // the visible slot keeps showing the last-good paginated result
+          // until this one finishes (see the message-listener effect) and
+          // gets promoted, so re-editing never flashes blank/unpaginated
+          // content. previewLoading deliberately stays true here — it's
+          // cleared once pagination actually finishes, not once the HTTP
+          // fetch resolves, since the fetch is only half the work now.
+          const isFirstLoad = !anySlotEverSetRef.current
+          anySlotEverSetRef.current = true
+          const targetSlot: 'a' | 'b' = isFirstLoad || activeSlotRef.current === 'b' ? 'a' : 'b'
+          if (targetSlot === 'a') setSlotAHtml(paginated); else setSlotBHtml(paginated)
+
+          // Defense in depth: the injected script (buildPaginatedHtml) should
+          // always eventually call report() even on its own internal
+          // failures, but if something outside its control goes wrong (the
+          // iframe never loads, the message gets dropped, a browser quirk)
+          // there'd be nothing to stop the "Updating…" spinner from spinning
+          // forever with the second page permanently clipped. If this exact
+          // request is still unacknowledged after 6s, fall back to reading
+          // the iframe's height directly (allow-same-origin permits this)
+          // and force it active — degraded (unpaginated) but visible and
+          // correctly sized, never stuck.
+          setTimeout(() => {
+            if (pendingPreviewRequestIdRef.current !== requestId) return // superseded by a newer edit
+            if (activeSlotRef.current === targetSlot) return // already promoted — the message arrived in time
+            const targetRef = targetSlot === 'a' ? previewIframeRefA : previewIframeRefB
+            const doc = targetRef.current?.contentDocument
+            const height = doc
+              ? Math.max(doc.documentElement.scrollHeight, doc.body?.scrollHeight ?? 0, PREVIEW_BASE_HEIGHT)
+              : PREVIEW_BASE_HEIGHT
+            activeSlotRef.current = targetSlot
+            setActiveSlot(targetSlot)
+            setPreviewNaturalHeight(height)
+            setPreviewLoading(false)
+          }, 6000)
+        } else {
+          setPreviewLoading(false)
         }
       } catch (e) {
-        if ((e as Error).name !== 'AbortError') { /* silent — user can still download */ }
-      } finally {
-        if (!controller.signal.aborted) setPreviewLoading(false)
+        if ((e as Error).name !== 'AbortError' && pendingPreviewRequestIdRef.current === requestId) setPreviewLoading(false)
       }
     }, 450)
     return () => {
@@ -325,14 +581,48 @@ function EditorInner() {
     }
   }, [cvData, selectedTemplate, sessionId])
 
+  // Receives "pagination finished" from whichever preview iframe slot just
+  // ran Paged.js (see buildPaginatedHtml) — onLoad fires far too early for
+  // this (before Paged.js has restructured the document), so completion has
+  // to come from the iframe's own script instead. No dependency array reads
+  // matter here since every value needed is read through a ref, not a
+  // closure, so this listener never goes stale across re-renders.
+  useEffect(() => {
+    function onMessage(e: MessageEvent) {
+      // The preview iframe is a sandboxed srcDoc document, so it has an
+      // opaque origin and broadcasts with postMessage(..., '*') - e.origin
+      // is always the string "null" here, never window.location.origin.
+      // e.source identity is the real check: it can only match a window we
+      // ourselves created and are actively tracking as a preview slot.
+      if (!e.data || e.data.type !== 'paged-ready') return
+      if (e.data.requestId !== pendingPreviewRequestIdRef.current) return // superseded by a newer edit
+      const fromA = e.source === previewIframeRefA.current?.contentWindow
+      const fromB = e.source === previewIframeRefB.current?.contentWindow
+      if (!fromA && !fromB) return
+      const slot: 'a' | 'b' = fromA ? 'a' : 'b'
+      activeSlotRef.current = slot
+      setActiveSlot(slot)
+      const height = e.data.height
+      setPreviewNaturalHeight(typeof height === 'number' && height > 0 ? height : PREVIEW_BASE_HEIGHT)
+      setPreviewLoading(false)
+    }
+    window.addEventListener('message', onMessage)
+    return () => window.removeEventListener('message', onMessage)
+  }, [])
+
   // Debounced live thumbnails fetch — powers the template rail/dialog's
   // real-content swatches. Renders EVERY template in one backend call rather
   // than one /preview call per template (see routes.py's comment: firing 17
   // individual calls would blow through the per-user burst limit almost
   // immediately). Skipped while the rail is collapsed since nothing is
-  // showing the thumbnails anyway; a longer debounce than the main preview
-  // (2.5s vs 1.5s) since these are secondary, cosmetic, and refresh 17
-  // iframes at once.
+  // showing the thumbnails anyway. Every one of the 17 templates' rendered
+  // HTML genuinely changes whenever any field does (the edited text shows up
+  // in all of them), so each fetch that lands forces all 17 thumbnail
+  // iframes to reload — a real, unavoidable cost of "live" thumbnails, not a
+  // bug. What IS tunable is how often that lands: 6s (not the main preview's
+  // 450ms, and longer than an earlier 2.5s) so an ordinary pause mid-typing
+  // doesn't repeatedly retrigger a visible reload flash across the whole
+  // rail — it only fires once actual editing has settled.
   useEffect(() => {
     if (!cvData || !sessionId || railCollapsed) return
     if (thumbnailsDebounceRef.current) clearTimeout(thumbnailsDebounceRef.current)
@@ -352,7 +642,7 @@ function EditorInner() {
       } catch (e) {
         if ((e as Error).name !== 'AbortError') { /* silent — thumbnails are cosmetic */ }
       }
-    }, 2500)
+    }, 6000)
     return () => {
       if (thumbnailsDebounceRef.current) clearTimeout(thumbnailsDebounceRef.current)
       controller.abort()
@@ -791,67 +1081,63 @@ function EditorInner() {
           <ChevronDown className="h-3.5 w-3.5 text-slate-400" />
         </button>
 
-        {/* Compare to original — mobile/tablet only; folded into the control cluster on desktop */}
+        {/* Compare to original — mobile/tablet only; a standalone labeled
+            button on desktop (below) replaces this at lg: */}
         {originalPdfUrl && (
           <button
-            onClick={() => setShowOriginalPdf(v => !v)}
-            title={showOriginalPdf ? 'Hide original PDF' : 'Compare to original PDF'}
-            className={cn(
-              'lg:hidden h-9 w-9 flex items-center justify-center rounded-lg border transition-colors shrink-0',
-              showOriginalPdf ? 'border-indigo-200 bg-indigo-50 text-indigo-600' : 'border-slate-200 text-slate-500 hover:bg-slate-50'
-            )}
+            onClick={() => setCompareOpen(true)}
+            title="Compare with your originally uploaded file (available for 48 hours after upload)"
+            className="lg:hidden flex items-center gap-2 h-9 px-3 rounded-lg border border-slate-200 hover:border-slate-300 hover:bg-slate-50 transition-colors shrink-0"
           >
-            {showOriginalPdf ? <EyeOff className="h-4 w-4" /> : <FileText className="h-4 w-4" />}
+            <FileText className="h-4 w-4 text-slate-400" />
+            <span className="text-xs font-semibold text-slate-700 hidden sm:inline">Compare</span>
           </button>
         )}
 
-        {/* Control cluster: zoom + compare-original, grouped (desktop only) */}
-        <div className="hidden lg:flex items-center gap-0.5 bg-slate-100/80 rounded-xl p-1 shrink-0">
-          <div className="flex items-center gap-1 px-0.5">
-            <button
-              onClick={zoomOut}
-              disabled={zoom <= ZOOM_LEVELS[0]}
-              className="h-7 w-7 flex items-center justify-center rounded-lg text-slate-500 hover:bg-white hover:shadow-sm disabled:opacity-30 transition-all"
-              aria-label="Zoom out"
-            >
-              <Minus className="h-3.5 w-3.5" />
-            </button>
-            <button
-              onClick={resetZoomToFit}
-              title={autoZoom ? 'Fitted to width' : 'Reset to fit width'}
-              className={cn(
-                'text-xs font-semibold w-10 text-center tabular-nums rounded-md py-0.5 transition-colors',
-                autoZoom ? 'text-indigo-600' : 'text-slate-600 hover:bg-white'
-              )}
-            >
-              {Math.round(zoom)}%
-            </button>
-            <button
-              onClick={zoomIn}
-              disabled={zoom >= ZOOM_LEVELS[ZOOM_LEVELS.length - 1]}
-              className="h-7 w-7 flex items-center justify-center rounded-lg text-slate-500 hover:bg-white hover:shadow-sm disabled:opacity-30 transition-all"
-              aria-label="Zoom in"
-            >
-              <Plus className="h-3.5 w-3.5" />
-            </button>
-          </div>
-
-          {originalPdfUrl && (
-            <>
-              <div className="h-5 w-px bg-slate-200 mx-0.5" />
-              <button
-                onClick={() => setShowOriginalPdf(v => !v)}
-                title={showOriginalPdf ? 'Hide original PDF' : 'Compare to original PDF'}
-                className={cn(
-                  'h-7 w-7 flex items-center justify-center rounded-lg transition-all',
-                  showOriginalPdf ? 'bg-indigo-500 text-white shadow-sm' : 'text-slate-500 hover:bg-white hover:shadow-sm'
-                )}
-              >
-                {showOriginalPdf ? <EyeOff className="h-3.5 w-3.5" /> : <FileText className="h-3.5 w-3.5" />}
-              </button>
-            </>
-          )}
+        {/* Zoom cluster (desktop only) */}
+        <div className="hidden lg:flex items-center gap-1 bg-slate-100/80 rounded-xl p-1 shrink-0">
+          <button
+            onClick={zoomOut}
+            disabled={zoom <= ZOOM_LEVELS[0]}
+            className="h-7 w-7 flex items-center justify-center rounded-lg text-slate-500 hover:bg-white hover:shadow-sm disabled:opacity-30 transition-all"
+            aria-label="Zoom out"
+          >
+            <Minus className="h-3.5 w-3.5" />
+          </button>
+          <button
+            onClick={resetZoomToFit}
+            title={autoZoom ? 'Fitted to width' : 'Reset to fit width'}
+            className={cn(
+              'text-xs font-semibold w-10 text-center tabular-nums rounded-md py-0.5 transition-colors',
+              autoZoom ? 'text-indigo-600' : 'text-slate-600 hover:bg-white'
+            )}
+          >
+            {Math.round(zoom)}%
+          </button>
+          <button
+            onClick={zoomIn}
+            disabled={zoom >= ZOOM_LEVELS[ZOOM_LEVELS.length - 1]}
+            className="h-7 w-7 flex items-center justify-center rounded-lg text-slate-500 hover:bg-white hover:shadow-sm disabled:opacity-30 transition-all"
+            aria-label="Zoom in"
+          >
+            <Plus className="h-3.5 w-3.5" />
+          </button>
         </div>
+
+        {/* Compare to original — standalone, labeled (desktop only). Was
+            previously an icon-only button squeezed into the zoom cluster,
+            which nobody could tell did anything without hovering for the
+            title tooltip; a visible label needed its own room to breathe
+            rather than being crammed next to the zoom buttons. */}
+        {originalPdfUrl && (
+          <button
+            onClick={() => setCompareOpen(true)}
+            title="Compare with your originally uploaded file (available for 48 hours after upload)"
+            className="hidden lg:flex items-center gap-1.5 h-9 px-3 rounded-lg border border-slate-200 hover:border-slate-300 hover:bg-slate-50 transition-colors shrink-0 text-xs font-semibold text-slate-600"
+          >
+            <FileText className="h-3.5 w-3.5 text-slate-400" /> Compare
+          </button>
+        )}
 
         <Button
           onClick={handleDownload}
@@ -1335,9 +1621,7 @@ function EditorInner() {
         <div className="flex-1 min-w-0 flex flex-col gap-3 lg:sticky lg:top-[88px] lg:h-[calc(100vh-104px)]">
           <div className="w-full flex items-center justify-between shrink-0 px-0.5">
             <span className="inline-flex items-center gap-1.5 text-[11px] font-medium text-slate-400">
-              <span className="flex items-center gap-1 bg-emarald-400 px-2 py-1 rounded-full">
-                <span className="h-1.5 w-1.5 rounded-full bg-emerald-500" /> Live preview_TODO
-              </span>
+              <span className="h-1.5 w-1.5 rounded-full bg-emerald-500" /> Live preview
               {previewLoading && (
                 <span className="flex items-center gap-1 text-slate-400">
                   <Loader2 className="h-3 w-3 animate-spin" /> Updating…
@@ -1394,56 +1678,48 @@ function EditorInner() {
                 instead of clipping the far side. */}
             <div style={{ width: PREVIEW_BASE_WIDTH * zoom / 100, height: previewNaturalHeight * zoom / 100 }} className="shrink-0 mx-auto transition-all duration-150 ease-out">
               <div
-                className="bg-white overflow-hidden rounded-sm"
+                className="relative bg-white overflow-hidden rounded-sm"
                 style={{
                   width: PREVIEW_BASE_WIDTH,
                   height: previewNaturalHeight,
                   transform: `scale(${zoom / 100})`,
                   transformOrigin: 'top left',
-                  boxShadow: '0 4px 6px -1px rgba(0, 0, 0, 0.05), 0 20px 40px -15px rgba(0, 0, 0, 0.12), 0 0 0 1px rgba(0, 0, 0, 0.04)',
                 }}
               >
-                {previewHtml ? (
+                {/* Two iframe "slots" instead of one — see the slotAHtml/
+                    slotBHtml state comment. Both stay mounted once they've
+                    ever had content (so a hidden slot keeps quietly
+                    re-paginating in the background); only the active one is
+                    visible. allow-scripts is required for Paged.js to run at
+                    all; allow-same-origin is required alongside it so the
+                    bootstrap's ES module import resolves as an ordinary
+                    same-origin fetch instead of being CORS-blocked (a
+                    sandboxed srcDoc iframe without allow-same-origin gets a
+                    unique opaque origin). The resume HTML itself is
+                    Jinja-autoescaped server-side, so this doesn't hand
+                    user-supplied resume content any new way to execute
+                    script — only our own injected bootstrap runs. */}
+                {slotAHtml && (
                   <iframe
-                    ref={previewIframeRef}
-                    srcDoc={previewHtml}
-                    className="w-full h-full border-0"
+                    ref={previewIframeRefA}
+                    srcDoc={slotAHtml}
+                    className="absolute inset-0 w-full h-full border-0"
+                    style={{ visibility: activeSlot === 'a' ? 'visible' : 'hidden', zIndex: activeSlot === 'a' ? 1 : 0 }}
                     title="Resume live preview"
-                    sandbox="allow-same-origin"
-                    onLoad={() => {
-                      const iframe = previewIframeRef.current
-                      const doc = iframe?.contentDocument
-                      if (!doc) return
-
-                      try {
-                        const style = doc.createElement('style')
-                        style.textContent = 'html, body { overflow: hidden !important; margin: 0; }'
-                        doc.head.appendChild(style)
-                      } catch { /* silent */ }
-
-                      const calculateHeight = () => {
-                        const docEl = doc.documentElement
-                        const bodyEl = doc.body
-                        if (!docEl || !bodyEl) return
-                        const natural = Math.max(
-                          docEl.scrollHeight,
-                          docEl.offsetHeight,
-                          bodyEl.scrollHeight,
-                          bodyEl.offsetHeight,
-                          PREVIEW_BASE_HEIGHT
-                        )
-                        setPreviewNaturalHeight(natural + 6)
-                      }
-
-                      calculateHeight()
-                      if (doc.fonts) {
-                        doc.fonts.ready.then(calculateHeight).catch(() => { })
-                      }
-                      setTimeout(calculateHeight, 150)
-                      setTimeout(calculateHeight, 400)
-                    }}
+                    sandbox="allow-same-origin allow-scripts"
                   />
-                ) : (
+                )}
+                {slotBHtml && (
+                  <iframe
+                    ref={previewIframeRefB}
+                    srcDoc={slotBHtml}
+                    className="absolute inset-0 w-full h-full border-0"
+                    style={{ visibility: activeSlot === 'b' ? 'visible' : 'hidden', zIndex: activeSlot === 'b' ? 1 : 0 }}
+                    title="Resume live preview"
+                    sandbox="allow-same-origin allow-scripts"
+                  />
+                )}
+                {!slotAHtml && !slotBHtml && (
                   <div className="flex flex-col items-center justify-center gap-2 text-slate-400 h-full">
                     {previewLoading
                       ? <><Loader2 className="h-6 w-6 animate-spin text-indigo-400" /><span className="text-xs">Rendering preview…</span></>
@@ -1455,21 +1731,6 @@ function EditorInner() {
             </div>
           </div>
 
-          {/* Original PDF (collapsible reference) */}
-          {originalPdfUrl && showOriginalPdf && (
-            <div className="w-full bg-white rounded-2xl border border-slate-100 shadow-card overflow-hidden">
-              <div className="px-4 py-2.5 border-b border-slate-100 flex items-center gap-2">
-                <FileText className="h-4 w-4 text-slate-400" />
-                <span className="text-xs font-semibold text-slate-600">Original Resume (reference)</span>
-              </div>
-              <iframe
-                src={originalPdfUrl}
-                className="w-full"
-                style={{ height: '360px' }}
-                title="Original resume PDF"
-              />
-            </div>
-          )}
         </div>
 
         {/* RIGHT: layouts rail (desktop only — mobile uses the toolbar's dialog) */}
@@ -1493,6 +1754,14 @@ function EditorInner() {
         onSelect={selectTemplate}
         profileOkForLebenslauf={profileOkForLebenslauf}
         thumbnails={thumbnails}
+      />
+
+      <CompareDialog
+        open={compareOpen}
+        onOpenChange={setCompareOpen}
+        originalPdfUrl={originalPdfUrl}
+        newHtml={activeSlot === 'a' ? slotAHtml : slotBHtml}
+        newHeight={previewNaturalHeight}
       />
     </div>
   )

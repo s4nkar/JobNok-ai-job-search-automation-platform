@@ -13,10 +13,15 @@ Endpoints:
     GET   /tailor/{id}/editor            — base_cv_data + tailoring overlay + templates
     PATCH /tailor/{id}/draft             — debounced autosave of in-progress editor edits
     PATCH /tailor/{id}/title             — rename the session (e.g. "Primary Resume")
+    GET   /tailor/{id}/original-pdf      — original resume for "compare with original" (only for saved-resume-based sessions)
     POST  /tailor/{id}/preview           — render HTML for live preview (one template)
     POST  /tailor/{id}/preview/thumbnails — render HTML for every template at once (template-switcher rail)
     POST  /tailor/{id}/pdf               — render + return the final PDF
     GET   /tailor/templates              — template registry metadata
+
+Saved-resumes CRUD ("My Resumes", up to 3 per user) lives in
+saved_resumes_routes.py, included into this module's router at the bottom of
+this file.
 """
 
 from __future__ import annotations
@@ -46,7 +51,8 @@ from app.modules.resume_tailor import service as resume_tailor_service
 from app.modules.resume_tailor.chunker import chunk_jd, chunk_resume, chunks_from_dicts, chunks_to_dicts, clean_jd_text, Chunk
 from app.modules.resume_tailor.matcher import match_resume_to_jd
 from app.modules.resume_tailor.models import ResumeVersion, TailoringSession
-from app.modules.resume_tailor.repository import ResumeVersionRepository, TailoringSessionRepository
+from app.modules.resume_tailor.repository import ResumeVersionRepository, SavedResumeRepository, TailoringSessionRepository
+from app.modules.resume_tailor.saved_resumes_routes import router as saved_resumes_router
 from app.modules.resume_tailor.schemas import (
     DraftSaveRequest,
     EditorResponse,
@@ -236,7 +242,8 @@ async def _create_resume_version(
 @router.post("/tailor", response_model=TailorResponse)
 async def tailor_resume(
     request: Request,
-    resume: UploadFile = File(...),
+    resume: UploadFile | None = File(None),
+    saved_resume_id: str | None = Form(None),
     job_description: str = Form(..., min_length=1, max_length=_MAX_JD_LENGTH),
     force_refresh: bool = Form(False),
     opportunity_id: str | None = Form(None),
@@ -244,28 +251,32 @@ async def tailor_resume(
     db: AsyncSession = Depends(get_db),
 ):
     user_id = await get_current_user_id(request, db)
+    if bool(resume) == bool(saved_resume_id):
+        raise HTTPException(status_code=422, detail="Provide exactly one of: a resume file upload, or saved_resume_id.")
     allowed, _ = await check_rate_limit(user_id, "resume_tailor_ai", settings.rate_limit_resume_ai_per_day)
     if not allowed:
         raise _rl_error("Resume Tailor", settings.rate_limit_resume_ai_per_day)
     await record_tool_usage(db, user_id, "resume-tailor")
 
-    pdf_bytes = await resume.read(_MAX_PDF_BYTES + 1)
-    if len(pdf_bytes) > _MAX_PDF_BYTES:
-        raise HTTPException(status_code=413, detail="PDF must be ≤ 5 MB")
+    # Two ways in: an ad-hoc one-off upload (resume), or a permanent saved
+    # resume from the profile's "My Resumes" (saved_resume_id) — from here on
+    # both just become pdf_bytes and flow through the identical pipeline.
+    # Only the saved-resume path leaves a saved_resume_id on the session,
+    # which is what later makes "compare with original" available for it.
+    saved_resume_row = None
+    if saved_resume_id:
+        saved_resume_row = await SavedResumeRepository(db).get(user_id, saved_resume_id)
+        if saved_resume_row is None:
+            raise HTTPException(status_code=404, detail="Saved resume not found.")
+        pdf_bytes = await resume_tailor_service.fetch_saved_resume_bytes(saved_resume_row)
+    else:
+        pdf_bytes = await resume.read(_MAX_PDF_BYTES + 1)
+        if len(pdf_bytes) > _MAX_PDF_BYTES:
+            raise HTTPException(status_code=413, detail="PDF must be ≤ 5 MB")
     resume_hash = resume_cache.compute_resume_hash(pdf_bytes)
+    job_hash = hashlib.sha256(job_description.strip().encode("utf-8")).hexdigest()
 
     resume_version, resume_chunks, resume_embeddings = await _resolve_resume_version(db, user_id, pdf_bytes, resume_hash)
-
-    jd_for_processing = await generation.translate_jd_if_needed(job_description)
-    jd_text_clean = clean_jd_text(jd_for_processing)
-    jd_chunks = chunk_jd(jd_text_clean)
-    try:
-        jd_embeddings = await embed([c.text for c in jd_chunks], purpose="matching") if jd_chunks else _empty_array()
-    except EmbeddingError as exc:
-        logger.warning("JD embeddings unavailable: %r — falling back to keyword-only matching", exc)
-        jd_embeddings = _empty_array()
-
-    job_hash = hashlib.sha256(job_description.strip().encode("utf-8")).hexdigest()
 
     session_repo = TailoringSessionRepository(db)
     session = None
@@ -276,6 +287,45 @@ async def tailor_resume(
         )
 
     if session is None:
+        # Single-flight around the JD-onward work only - resolving
+        # resume_version above already self-dedupes via resume_versions'
+        # UniqueConstraint + the SAVEPOINT/IntegrityError retry in
+        # _create_resume_version, so it doesn't need this lock too. Without
+        # this, two concurrent identical submissions (double-click, two
+        # tabs, a frontend retry) for a (resume, JD) pair not yet tailored
+        # would each independently pay for a real JD embeddings API call
+        # before either one reached generate_tailor_prose's own inner lock.
+        try:
+            is_leader = await resume_cache.acquire_tailor_lock(user_id, resume_hash, job_hash, force_refresh)
+        except Exception:
+            is_leader = True  # fail open, same philosophy as every other lock/limiter here
+
+        if not is_leader:
+            waited = 0.0
+            while waited < resume_cache.TAILOR_SINGLE_FLIGHT_MAX_WAIT_SECONDS:
+                await asyncio.sleep(resume_cache.TAILOR_SINGLE_FLIGHT_POLL_INTERVAL_SECONDS)
+                waited += resume_cache.TAILOR_SINGLE_FLIGHT_POLL_INTERVAL_SECONDS
+                session = await session_repo.get_or_create_session(
+                    user_id, str(resume_version.id), job_hash,
+                    matcher_version=generation.MATCHER_VERSION, prompt_version=generation.PROSE_PROMPT_VERSION,
+                )
+                if session is not None:
+                    break
+            # Timed out (or the leader crashed) - fall through and do the
+            # work ourselves rather than hang forever. Valid in force_refresh
+            # mode too: this lookup doesn't care whether the row it finds was
+            # created by a forced or normal run, just that one now exists.
+
+    if session is None:
+        jd_for_processing = await generation.translate_jd_if_needed(job_description)
+        jd_text_clean = clean_jd_text(jd_for_processing)
+        jd_chunks = chunk_jd(jd_text_clean)
+        try:
+            jd_embeddings = await embed([c.text for c in jd_chunks], purpose="matching") if jd_chunks else _empty_array()
+        except EmbeddingError as exc:
+            logger.warning("JD embeddings unavailable: %r — falling back to keyword-only matching", exc)
+            jd_embeddings = _empty_array()
+
         analysis = match_resume_to_jd(
             resume_chunks=resume_chunks, resume_embeddings=resume_embeddings,
             jd_chunks=jd_chunks, jd_embeddings=jd_embeddings,
@@ -308,6 +358,7 @@ async def tailor_resume(
             ai_error=prose.ai_error,
             source_opportunity_id=source_opportunity_id,
             source_application_id=source_application_id,
+            saved_resume_id=str(saved_resume_row.id) if saved_resume_row else None,
         )
 
     return _session_response(session)
@@ -345,6 +396,7 @@ async def get_tailor_editor(session_id: str, request: Request, db: AsyncSession 
             "templates": rendering.list_templates(),
             "is_draft": True,
             "title": session.title,
+            "draft_version": session.draft_version,
         }
 
     resume_repo = ResumeVersionRepository(db)
@@ -386,6 +438,7 @@ async def get_tailor_editor(session_id: str, request: Request, db: AsyncSession 
         "templates": rendering.list_templates(),
         "is_draft": False,
         "title": session.title,
+        "draft_version": session.draft_version,
     }
 
 
@@ -413,8 +466,20 @@ async def save_tailor_draft(session_id: str, request: Request, body: DraftSaveRe
     if not burst_ok:
         raise HTTPException(status_code=429, detail="Too many save requests — please wait a few seconds and try again.")
 
-    await session_repo.save_draft(user_id, session_id, body.cv_data)
-    return {"saved": True}
+    updated, conflict = await session_repo.save_draft(user_id, session_id, body.cv_data, body.base_version)
+    if conflict:
+        # Someone else's save (another tab, another window) landed since
+        # this client last synced - hand back the CURRENT winning state so
+        # the loser can converge to it instead of silently overwriting it.
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "message": "This resume was edited in another tab. Showing the latest version.",
+                "cv_data": updated.draft_cv_data,
+                "draft_version": updated.draft_version,
+            },
+        )
+    return {"saved": True, "draft_version": updated.draft_version}
 
 
 # ── PATCH /tailor/{session_id}/title ──────────────────────────────
@@ -447,6 +512,41 @@ async def rename_tailor_session(session_id: str, request: Request, body: TitleUp
 
     await session_repo.set_title(user_id, session_id, title)
     return {"title": title}
+
+
+@router.get("/tailor/{session_id}/original-pdf")
+async def get_original_pdf(session_id: str, request: Request, db: AsyncSession = Depends(get_db)):
+    """Serves the resume this session was tailored from, for the editor's
+    "compare with original" view. Only available for sessions tailored from a
+    saved resume (saved_resume_id set) — an ad-hoc one-off upload has no
+    permanent copy on file, so this 404s for those. Looked up via the session
+    (not a bare saved_resume id param) so ownership is always checked against
+    the session the caller actually has a link to, the same pattern as every
+    other {session_id}-scoped endpoint here."""
+    user_id = await get_current_user_id(request, db)
+    try:
+        burst_ok = await check_burst_limit(
+            user_id, "resume_tailor_original_pdf", settings.rate_limit_burst_limit, settings.rate_limit_burst_window_seconds,
+        )
+    except Exception:
+        burst_ok = True
+    if not burst_ok:
+        raise HTTPException(status_code=429, detail="Too many requests — please wait a few seconds and try again.")
+
+    session_repo = TailoringSessionRepository(db)
+    session = await session_repo.get(user_id, session_id)
+    if session is None:
+        raise HTTPException(status_code=404, detail="Session not found.")
+
+    if session.saved_resume_id is None:
+        raise HTTPException(status_code=404, detail="The original file is no longer available.")
+
+    saved_resume = await SavedResumeRepository(db).get(user_id, str(session.saved_resume_id))
+    if saved_resume is None:
+        raise HTTPException(status_code=404, detail="The original file is no longer available.")
+
+    pdf_bytes = await resume_tailor_service.fetch_saved_resume_bytes(saved_resume)
+    return Response(content=pdf_bytes, media_type="application/pdf")
 
 
 # ── POST /tailor/{session_id}/preview ─────────────────────────────
@@ -549,6 +649,14 @@ async def generate_tailor_pdf(session_id: str, request: Request, body: PdfReques
     allowed, _ = await check_rate_limit(user_id, "resume_tailor_pdf", settings.rate_limit_resume_pdf_per_day)
     if not allowed:
         raise _rl_error("Resume Tailor PDF", settings.rate_limit_resume_pdf_per_day)
+    try:
+        burst_ok = await check_burst_limit(
+            user_id, "resume_tailor_pdf", settings.rate_limit_burst_limit, settings.rate_limit_burst_window_seconds,
+        )
+    except Exception:
+        burst_ok = True
+    if not burst_ok:
+        raise HTTPException(status_code=429, detail="Too many requests — please wait a few seconds and try again.")
 
     session_repo = TailoringSessionRepository(db)
     session = await session_repo.get(user_id, session_id)
@@ -594,3 +702,7 @@ async def generate_tailor_pdf(session_id: str, request: Request, body: PdfReques
 @router.get("/tailor/templates", response_model=TemplateListResponse)
 async def list_tailor_templates():
     return {"templates": rendering.list_templates()}
+
+
+# Saved-resumes CRUD ("My Resumes") — see saved_resumes_routes.py's own docstring.
+router.include_router(saved_resumes_router)

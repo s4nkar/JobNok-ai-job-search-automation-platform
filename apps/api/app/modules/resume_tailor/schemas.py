@@ -71,6 +71,9 @@ class EditorResponse(BaseModel):
     templates: list[dict[str, Any]]
     is_draft: bool = False
     title: str | None = None
+    # The client's starting point for optimistic-concurrency checks on its
+    # first PATCH /draft — see TailoringSession.draft_version.
+    draft_version: int = 0
 
 
 class TemplateListResponse(BaseModel):
@@ -98,10 +101,36 @@ class PdfRequest(BaseModel):
 
 class DraftSaveRequest(BaseModel):
     cv_data: dict[str, Any]
+    # The draft_version this edit was made against (from the editor's last
+    # load or last successful save) - lets the backend detect a stale write
+    # from another tab instead of silently overwriting newer content.
+    base_version: int
 
 
 class TitleUpdateRequest(BaseModel):
     title: str = Field(..., max_length=200)
+
+
+# ── Saved resumes ("My Resumes") ─────────────────────────────────
+# No secure_url/cloudinary_public_id anywhere here — the frontend never
+# receives either; every read of the actual file goes through an
+# authenticated backend endpoint (see saved_resumes_routes.py).
+
+class SavedResumeResponse(BaseModel):
+    id: str
+    slot: int
+    label: str
+    original_filename: str
+    created_at: str
+    updated_at: str
+
+
+class SavedResumeListResponse(BaseModel):
+    resumes: list[SavedResumeResponse]
+
+
+class SavedResumeRenameRequest(BaseModel):
+    label: str = Field(..., min_length=1, max_length=100)
 
 
 # ── CvDataSchema — validates generate_base_cv_data's LLM output ──────

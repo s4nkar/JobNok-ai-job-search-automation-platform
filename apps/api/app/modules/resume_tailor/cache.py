@@ -144,3 +144,30 @@ async def acquire_prose_lock(user_id: str, resume_hash: str, job_hash: str, prom
     leader) is the caller's responsibility on a Redis error, same as those."""
     key = f"prose:{user_id}:{resume_hash}:{job_hash}:{prompt_version}:lock"
     return await acquire_lock(key, _PROSE_LOCK_TTL_SECONDS)
+
+
+# ── Whole-request single-flight lock (JD translate/embed/match/prose) ────
+# Distinct from acquire_prose_lock above, which only guards the LLM prose
+# call. Two concurrent identical /tailor submissions (double-click, two tabs,
+# a frontend retry) for a (resume, JD) pair that hasn't been tailored before
+# would otherwise both pay for a real JD embeddings API call (Jina/Cohere)
+# before either one ever reaches that inner lock. This one wraps everything
+# from JD translation through session creation instead.
+
+TAILOR_SINGLE_FLIGHT_POLL_INTERVAL_SECONDS = 0.5
+TAILOR_SINGLE_FLIGHT_MAX_WAIT_SECONDS = 10
+# Covers translate_jd_if_needed (one LLM call) + JD embedding + prose
+# generation's own LLM call (which has its own inner lock/poll cycle) +
+# overhead, generously - a lock that expires mid-leader-work would let a
+# second request become leader concurrently, defeating the whole point.
+_TAILOR_LOCK_TTL_SECONDS = 2 * settings.ai_request_timeout_seconds + settings.embedding_request_timeout_seconds + 15
+
+
+async def acquire_tailor_lock(user_id: str, resume_hash: str, job_hash: str, force_refresh: bool) -> bool:
+    """force_refresh gets its own key namespace so a forced re-tailor never
+    queues behind an unrelated normal leader for the same pair (which would
+    silently hand back a non-forced result) - two concurrent force_refresh
+    calls on the identical pair still dedupe against each other."""
+    suffix = "force" if force_refresh else "normal"
+    key = f"tailor:{user_id}:{resume_hash}:{job_hash}:{suffix}:lock"
+    return await acquire_lock(key, _TAILOR_LOCK_TTL_SECONDS)

@@ -748,20 +748,14 @@ export default function StartupHuntPage() {
           )}
 
           {!loading && !error && results.length === 0 && overflowResults.length === 0 && filteredOut.length === 0 && (
-            <div className="bg-white rounded-2xl border border-slate-100 shadow-sm min-h-[480px] flex items-center justify-center p-8">
+            <div className="bg-white rounded-2xl border border-slate-100 shadow-sm min-h-[18rem] flex items-center justify-center p-6">
               {hasSearched ? (
-                <div className="text-center space-y-2">
-                  <div className="w-14 h-14 rounded-2xl bg-slate-50 flex items-center justify-center mx-auto">
-                    <Search className="h-7 w-7 text-slate-300" />
-                  </div>
+                <div className="text-center space-y-1">
                   <p className="font-semibold text-slate-500">No results found for this search</p>
                   <p className="text-sm text-slate-400">Try a broader role title, a longer freshness window, or turn on your curated watchlist</p>
                 </div>
               ) : (
-                <div className="text-center space-y-2">
-                  <div className="w-14 h-14 rounded-2xl bg-slate-50 flex items-center justify-center mx-auto">
-                    <Compass className="h-7 w-7 text-slate-300" />
-                  </div>
+                <div className="text-center space-y-1">
                   <p className="font-semibold text-slate-500">Ranked startup opportunities will appear here</p>
                   <p className="text-sm text-slate-400">Use Startup Hunt when you want deeper discovery than the standard recent jobs tool</p>
                 </div>
