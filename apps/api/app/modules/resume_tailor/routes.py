@@ -274,19 +274,9 @@ async def tailor_resume(
         if len(pdf_bytes) > _MAX_PDF_BYTES:
             raise HTTPException(status_code=413, detail="PDF must be ≤ 5 MB")
     resume_hash = resume_cache.compute_resume_hash(pdf_bytes)
+    job_hash = hashlib.sha256(job_description.strip().encode("utf-8")).hexdigest()
 
     resume_version, resume_chunks, resume_embeddings = await _resolve_resume_version(db, user_id, pdf_bytes, resume_hash)
-
-    jd_for_processing = await generation.translate_jd_if_needed(job_description)
-    jd_text_clean = clean_jd_text(jd_for_processing)
-    jd_chunks = chunk_jd(jd_text_clean)
-    try:
-        jd_embeddings = await embed([c.text for c in jd_chunks], purpose="matching") if jd_chunks else _empty_array()
-    except EmbeddingError as exc:
-        logger.warning("JD embeddings unavailable: %r — falling back to keyword-only matching", exc)
-        jd_embeddings = _empty_array()
-
-    job_hash = hashlib.sha256(job_description.strip().encode("utf-8")).hexdigest()
 
     session_repo = TailoringSessionRepository(db)
     session = None
@@ -297,6 +287,45 @@ async def tailor_resume(
         )
 
     if session is None:
+        # Single-flight around the JD-onward work only - resolving
+        # resume_version above already self-dedupes via resume_versions'
+        # UniqueConstraint + the SAVEPOINT/IntegrityError retry in
+        # _create_resume_version, so it doesn't need this lock too. Without
+        # this, two concurrent identical submissions (double-click, two
+        # tabs, a frontend retry) for a (resume, JD) pair not yet tailored
+        # would each independently pay for a real JD embeddings API call
+        # before either one reached generate_tailor_prose's own inner lock.
+        try:
+            is_leader = await resume_cache.acquire_tailor_lock(user_id, resume_hash, job_hash, force_refresh)
+        except Exception:
+            is_leader = True  # fail open, same philosophy as every other lock/limiter here
+
+        if not is_leader:
+            waited = 0.0
+            while waited < resume_cache.TAILOR_SINGLE_FLIGHT_MAX_WAIT_SECONDS:
+                await asyncio.sleep(resume_cache.TAILOR_SINGLE_FLIGHT_POLL_INTERVAL_SECONDS)
+                waited += resume_cache.TAILOR_SINGLE_FLIGHT_POLL_INTERVAL_SECONDS
+                session = await session_repo.get_or_create_session(
+                    user_id, str(resume_version.id), job_hash,
+                    matcher_version=generation.MATCHER_VERSION, prompt_version=generation.PROSE_PROMPT_VERSION,
+                )
+                if session is not None:
+                    break
+            # Timed out (or the leader crashed) - fall through and do the
+            # work ourselves rather than hang forever. Valid in force_refresh
+            # mode too: this lookup doesn't care whether the row it finds was
+            # created by a forced or normal run, just that one now exists.
+
+    if session is None:
+        jd_for_processing = await generation.translate_jd_if_needed(job_description)
+        jd_text_clean = clean_jd_text(jd_for_processing)
+        jd_chunks = chunk_jd(jd_text_clean)
+        try:
+            jd_embeddings = await embed([c.text for c in jd_chunks], purpose="matching") if jd_chunks else _empty_array()
+        except EmbeddingError as exc:
+            logger.warning("JD embeddings unavailable: %r — falling back to keyword-only matching", exc)
+            jd_embeddings = _empty_array()
+
         analysis = match_resume_to_jd(
             resume_chunks=resume_chunks, resume_embeddings=resume_embeddings,
             jd_chunks=jd_chunks, jd_embeddings=jd_embeddings,
@@ -367,6 +396,7 @@ async def get_tailor_editor(session_id: str, request: Request, db: AsyncSession 
             "templates": rendering.list_templates(),
             "is_draft": True,
             "title": session.title,
+            "draft_version": session.draft_version,
         }
 
     resume_repo = ResumeVersionRepository(db)
@@ -408,6 +438,7 @@ async def get_tailor_editor(session_id: str, request: Request, db: AsyncSession 
         "templates": rendering.list_templates(),
         "is_draft": False,
         "title": session.title,
+        "draft_version": session.draft_version,
     }
 
 
@@ -435,8 +466,20 @@ async def save_tailor_draft(session_id: str, request: Request, body: DraftSaveRe
     if not burst_ok:
         raise HTTPException(status_code=429, detail="Too many save requests — please wait a few seconds and try again.")
 
-    await session_repo.save_draft(user_id, session_id, body.cv_data)
-    return {"saved": True}
+    updated, conflict = await session_repo.save_draft(user_id, session_id, body.cv_data, body.base_version)
+    if conflict:
+        # Someone else's save (another tab, another window) landed since
+        # this client last synced - hand back the CURRENT winning state so
+        # the loser can converge to it instead of silently overwriting it.
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "message": "This resume was edited in another tab. Showing the latest version.",
+                "cv_data": updated.draft_cv_data,
+                "draft_version": updated.draft_version,
+            },
+        )
+    return {"saved": True, "draft_version": updated.draft_version}
 
 
 # ── PATCH /tailor/{session_id}/title ──────────────────────────────
@@ -481,6 +524,14 @@ async def get_original_pdf(session_id: str, request: Request, db: AsyncSession =
     the session the caller actually has a link to, the same pattern as every
     other {session_id}-scoped endpoint here."""
     user_id = await get_current_user_id(request, db)
+    try:
+        burst_ok = await check_burst_limit(
+            user_id, "resume_tailor_original_pdf", settings.rate_limit_burst_limit, settings.rate_limit_burst_window_seconds,
+        )
+    except Exception:
+        burst_ok = True
+    if not burst_ok:
+        raise HTTPException(status_code=429, detail="Too many requests — please wait a few seconds and try again.")
 
     session_repo = TailoringSessionRepository(db)
     session = await session_repo.get(user_id, session_id)
@@ -598,6 +649,14 @@ async def generate_tailor_pdf(session_id: str, request: Request, body: PdfReques
     allowed, _ = await check_rate_limit(user_id, "resume_tailor_pdf", settings.rate_limit_resume_pdf_per_day)
     if not allowed:
         raise _rl_error("Resume Tailor PDF", settings.rate_limit_resume_pdf_per_day)
+    try:
+        burst_ok = await check_burst_limit(
+            user_id, "resume_tailor_pdf", settings.rate_limit_burst_limit, settings.rate_limit_burst_window_seconds,
+        )
+    except Exception:
+        burst_ok = True
+    if not burst_ok:
+        raise HTTPException(status_code=429, detail="Too many requests — please wait a few seconds and try again.")
 
     session_repo = TailoringSessionRepository(db)
     session = await session_repo.get(user_id, session_id)

@@ -383,6 +383,14 @@ function EditorInner() {
   // cvData for the first time) — otherwise every editor visit immediately
   // PATCHes back the exact data it just fetched.
   const hasLoadedRef = useRef(false)
+  // The draft_version this tab last loaded or successfully saved against —
+  // sent back on every autosave so the backend can detect a stale write from
+  // another tab (optimistic concurrency) instead of silently overwriting
+  // newer content it never saw. A ref, not state: it drives what the NEXT
+  // save sends, not anything rendered, and putting it in the autosave
+  // effect's dependency array would refire that effect (scheduling a
+  // needless extra save) every time a save's own success handler advances it.
+  const draftVersionRef = useRef(0)
 
   // Load session's saved draft (if any) or base_cv_data + tailoring overlay,
   // plus template list + profile check. Pulled into its own callback (not
@@ -398,11 +406,12 @@ function EditorInner() {
 
     // Fetched fresh from the backend (not a sessionStorage blob: URL carried
     // over from the upload page) - a blob: URL only lives as long as the tab
-    // that created it, so it always died on refresh. The backend keeps the
-    // original PDF for 48h after upload specifically so this survives
-    // refreshes, works from a different tab, and doesn't depend on how the
-    // user navigated here. Best-effort and non-blocking: a missing/expired
-    // original just means no compare button, never a load failure.
+    // that created it, so it always died on refresh. The backend serves this
+    // from the session's saved resume (profile "My Resumes"), a permanent
+    // record, so it survives refreshes, works from a different tab, and
+    // doesn't depend on how the user navigated here. Best-effort and
+    // non-blocking: a session tailored from a one-off upload (no saved
+    // resume behind it) just means no compare button, never a load failure.
     apiFetch(`/api/ai/tailor/${sessionId}/original-pdf`)
       .then(r => r.ok ? r.blob() : null)
       .then(blob => setOriginalPdfUrl(blob ? URL.createObjectURL(blob) : null))
@@ -421,6 +430,7 @@ function EditorInner() {
       setSessionTitle(editorRes.title ?? null)
       if (editorRes.cv_data) {
         setCvData(editorRes.cv_data)
+        draftVersionRef.current = editorRes.draft_version ?? 0
         if (editorRes.is_draft) toast({ title: 'Resumed your saved draft' })
       } else {
         throw new Error('Resume data came back empty.')
@@ -460,16 +470,34 @@ function EditorInner() {
         const res = await apiFetch(`/api/ai/tailor/${sessionId}/draft`, {
           method: 'PATCH',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ cv_data: cvData }),
+          body: JSON.stringify({ cv_data: cvData, base_version: draftVersionRef.current }),
         })
-        if (res.ok) setDraftSavedAt(Date.now())
+        if (res.ok) {
+          const data = await res.json()
+          draftVersionRef.current = data.draft_version
+          setDraftSavedAt(Date.now())
+        } else if (res.status === 409) {
+          // Another tab/window saved first - converge to its winning state
+          // rather than silently overwriting it (or getting rejected forever
+          // on every retry, since our base_version would stay stale).
+          const body = await res.json().catch(() => null)
+          const conflict = body?.detail
+          if (conflict?.cv_data) {
+            draftVersionRef.current = conflict.draft_version
+            setCvData(conflict.cv_data)
+            toast({
+              title: 'Edited in another tab',
+              description: 'This resume changed elsewhere — showing the latest version.',
+            })
+          }
+        }
       } catch { /* silent — autosave, user can still download manually */ }
       finally { setDraftSaving(false) }
     }, 1500)
     return () => {
       if (draftDebounceRef.current) clearTimeout(draftDebounceRef.current)
     }
-  }, [cvData, sessionId])
+  }, [cvData, sessionId, toast])
 
   // Debounced live preview fetch — 450ms, not 1500ms: this fires once per
   // typing PAUSE (not per keystroke), and /preview is a cheap Jinja-only

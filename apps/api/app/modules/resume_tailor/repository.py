@@ -142,10 +142,34 @@ class TailoringSessionRepository(UserScopedRepository[TailoringSession]):
     async def set_title(self, user_id: str, id_: str, title: str) -> TailoringSession | None:
         return await self.update(user_id, id_, title=title)
 
-    async def save_draft(self, user_id: str, id_: str, draft_cv_data: dict[str, Any]) -> TailoringSession | None:
-        """Autosaved editor edits. Overwrites any previous draft wholesale —
-        the editor always sends its full current cv_data, not a diff."""
-        return await self.update(user_id, id_, draft_cv_data=draft_cv_data)
+    async def save_draft(
+        self, user_id: str, id_: str, draft_cv_data: dict[str, Any], base_version: int,
+    ) -> tuple[TailoringSession | None, bool]:
+        """Autosaved editor edits. Overwrites the previous draft wholesale —
+        the editor always sends its full current cv_data, not a diff.
+
+        Optimistic concurrency: only writes if base_version matches the row's
+        CURRENT draft_version (whatever the client last loaded or successfully
+        saved against), then bumps it. Two tabs open on the same session would
+        otherwise silently clobber each other's edits with no detection at
+        all - plain last-write-wins.
+
+        Returns (row, conflict). conflict=True means someone else's save
+        landed first since this client last synced; row is the CURRENT,
+        UNMODIFIED state (so the caller can hand the winning content back to
+        the loser) - not the one about to be applied. row is None only if
+        the session itself doesn't exist/isn't owned by this user.
+        """
+        obj = await self.get(user_id, id_)
+        if obj is None:
+            return None, False
+        if obj.draft_version != base_version:
+            return obj, True
+        obj.draft_cv_data = draft_cv_data
+        obj.draft_version = base_version + 1
+        await self.session.flush()
+        await self.session.refresh(obj)
+        return obj, False
 
 
 class SavedResumeRepository(UserScopedRepository[SavedResume]):

@@ -142,6 +142,13 @@ class TailoringSession(Base, UUIDPKMixin, CreatedAtMixin):
     # re-opening the editor resumes from where the user left off rather than
     # the original AI-generated starting point.
     draft_cv_data: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
+    # Optimistic-concurrency counter for draft_cv_data - incremented on every
+    # successful autosave. Two browser tabs on the same session would
+    # otherwise silently clobber each other's edits (last write wins, no
+    # detection at all); the client sends back the version it last saved
+    # against, and PATCH /draft rejects a write whose version is stale
+    # (409) instead of overwriting newer content it never saw.
+    draft_version: Mapped[int] = mapped_column(server_default="0", nullable=False)
     # Linkage, not ownership — records where a session came from so a future
     # tracker feature can find past sessions for a job without a retrofit
     # migration. ON DELETE SET NULL (not CASCADE): a resume analysis is still

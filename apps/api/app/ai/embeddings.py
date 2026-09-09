@@ -26,11 +26,17 @@ from typing import TYPE_CHECKING
 import httpx
 
 from app.core.config import settings
+from app.services.cache import circuit_is_open, record_provider_result
 
 if TYPE_CHECKING:
     import numpy as np
 
 logger = logging.getLogger(__name__)
+
+# Shared scope across every caller - a provider outage is a fact about the
+# provider, not about which tool triggered the call. Same reasoning as
+# app/ai/llm/provider.py's _CIRCUIT_SCOPE.
+_CIRCUIT_SCOPE = "embeddings"
 
 
 class EmbeddingError(RuntimeError):
@@ -180,16 +186,24 @@ async def embed(texts: list[str], purpose: str = "matching") -> "np.ndarray":
     chain = _provider_chain()
     last_error: Exception | None = None
     for provider in chain:
+        if await circuit_is_open(_CIRCUIT_SCOPE, provider):
+            logger.info("embeddings circuit open, skipping %s", provider)
+            continue
         try:
-            return await _dispatch(provider, texts, purpose)
+            result = await _dispatch(provider, texts, purpose)
         except _ProviderUnavailable as exc:
+            # Not configured, not a live failure - don't record it.
             logger.info("embeddings skip %s: %s", provider, exc)
             last_error = exc
             continue
         except _ProviderError as exc:
             logger.warning("embeddings transient failure on %s: %s", provider, exc)
             last_error = exc
+            await record_provider_result(_CIRCUIT_SCOPE, provider, ok=False)
             continue
+        else:
+            await record_provider_result(_CIRCUIT_SCOPE, provider, ok=True)
+            return result
     raise EmbeddingError(f"All embedding providers exhausted ({chain}). Last error: {last_error!r}")
 
 

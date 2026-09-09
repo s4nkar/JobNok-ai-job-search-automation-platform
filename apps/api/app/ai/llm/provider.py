@@ -58,8 +58,16 @@ from typing import AsyncGenerator
 import httpx
 
 from app.core.config import settings
+from app.services.cache import circuit_is_open, record_provider_result
 
 logger = logging.getLogger(__name__)
+
+# Shared scope across every caller (resume_tailor, cover_letter,
+# interview_prep, salary) - a provider outage is a fact about the provider,
+# not about which tool triggered the call, so one shared breaker state lets
+# every tool skip a known-bad provider immediately instead of each
+# rediscovering the same outage (and paying its full timeout) independently.
+_CIRCUIT_SCOPE = "ai_llm"
 
 # One short backoff-and-retry on the SAME provider before downgrading to the
 # next one in the chain — a 429 is often a brief per-minute-token-budget blip,
@@ -259,10 +267,15 @@ async def _run_chain(
     chain = _provider_chain()
     last_error: Exception | None = None
     for provider in chain:
+        if await circuit_is_open(_CIRCUIT_SCOPE, provider):
+            logger.info("ai_provider circuit open, skipping %s", provider)
+            continue
         try:
             content = await _dispatch_generate(provider, prompt, system, max_tokens, tier, response_format)
-            return content, provider
         except _ProviderUnavailable as exc:
+            # Not configured, not a live failure - don't record it, or a
+            # provider with no API key would look like a repeatedly-failing
+            # one and trip its own breaker for no reason.
             logger.info("ai_provider skip %s: %s", provider, exc)
             last_error = exc
             continue
@@ -275,15 +288,24 @@ async def _run_chain(
             await asyncio.sleep(_RATE_LIMIT_BACKOFF_SECONDS)
             try:
                 content = await _dispatch_generate(provider, prompt, system, max_tokens, tier, response_format)
-                return content, provider
             except _ProviderError as retry_exc:
                 logger.warning("ai_provider retry after rate limit also failed on %s: %s", provider, retry_exc)
                 last_error = retry_exc
+                await record_provider_result(_CIRCUIT_SCOPE, provider, ok=False)
                 continue
+            # Recorded once here for the whole 429-then-retry sequence, not
+            # once per attempt - a single rate-limit blip that a retry
+            # recovers from isn't a real outage and must not trip the breaker.
+            await record_provider_result(_CIRCUIT_SCOPE, provider, ok=True)
+            return content, provider
         except _ProviderError as exc:
             logger.warning("ai_provider transient failure on %s: %s", provider, exc)
             last_error = exc
+            await record_provider_result(_CIRCUIT_SCOPE, provider, ok=False)
             continue
+        else:
+            await record_provider_result(_CIRCUIT_SCOPE, provider, ok=True)
+            return content, provider
     raise AIGenerationError(f"All AI providers exhausted ({chain}). Last error: {last_error!r}")
 
 
@@ -308,6 +330,9 @@ async def stream_text(prompt: str, system: str = "", max_tokens: int = 2048, tie
     last_error: Exception | None = None
 
     for provider in chain:
+        if await circuit_is_open(_CIRCUIT_SCOPE, provider):
+            logger.info("ai_provider circuit open, skipping %s", provider)
+            continue
         try:
             gen = _dispatch_stream(provider, prompt, system, max_tokens, tier)
             # Pull the first chunk eagerly so we can fall back on a clean failure
@@ -319,7 +344,9 @@ async def stream_text(prompt: str, system: str = "", max_tokens: int = 2048, tie
                 # Provider returned an empty stream — treat as a transient failure.
                 last_error = _ProviderError(f"{provider} returned empty stream")
                 logger.warning("ai_provider empty stream on %s", provider)
+                await record_provider_result(_CIRCUIT_SCOPE, provider, ok=False)
                 continue
+            await record_provider_result(_CIRCUIT_SCOPE, provider, ok=True)
             yield first_chunk
             async for chunk in first_iter:
                 yield chunk
@@ -331,6 +358,7 @@ async def stream_text(prompt: str, system: str = "", max_tokens: int = 2048, tie
         except _ProviderError as exc:
             logger.warning("ai_provider transient failure on %s: %s", provider, exc)
             last_error = exc
+            await record_provider_result(_CIRCUIT_SCOPE, provider, ok=False)
             continue
 
     raise AIGenerationError(f"All AI providers exhausted ({chain}). Last error: {last_error!r}")

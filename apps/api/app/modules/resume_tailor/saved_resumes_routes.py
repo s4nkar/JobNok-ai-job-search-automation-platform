@@ -17,8 +17,10 @@ from fastapi import APIRouter, Depends, File, Form, HTTPException, Request, Uplo
 from fastapi.responses import Response
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.config import settings
 from app.core.database import get_db
 from app.core.security import get_current_user_id
+from app.services.cache import check_burst_limit
 from app.modules.resume_tailor import cache as resume_cache
 from app.modules.resume_tailor import service as resume_tailor_service
 from app.modules.resume_tailor.models import SavedResume
@@ -50,9 +52,24 @@ def _check_slot(slot: int) -> None:
         raise HTTPException(status_code=422, detail="slot must be 1, 2, or 3")
 
 
+async def _check_burst(user_id: str, bucket: str) -> None:
+    """Same fail-open-on-Redis-error burst guard used throughout routes.py
+    (e.g. resume_tailor_draft/title/preview) — none of these endpoints had
+    any rate limiting at all before this."""
+    try:
+        burst_ok = await check_burst_limit(
+            user_id, bucket, settings.rate_limit_burst_limit, settings.rate_limit_burst_window_seconds,
+        )
+    except Exception:
+        burst_ok = True
+    if not burst_ok:
+        raise HTTPException(status_code=429, detail="Too many requests — please wait a few seconds and try again.")
+
+
 @router.get("/resumes", response_model=SavedResumeListResponse)
 async def list_saved_resumes(request: Request, db: AsyncSession = Depends(get_db)):
     user_id = await get_current_user_id(request, db)
+    await _check_burst(user_id, "resume_tailor_saved_list")
     rows = await SavedResumeRepository(db).list_ordered(user_id)
     return SavedResumeListResponse(resumes=[_saved_resume_response(r) for r in rows])
 
@@ -65,6 +82,7 @@ async def upload_saved_resume(
 ):
     _check_slot(slot)
     user_id = await get_current_user_id(request, db)
+    await _check_burst(user_id, "resume_tailor_saved_upload")
 
     if file.content_type != "application/pdf":
         raise HTTPException(status_code=422, detail="Only PDF files accepted")
@@ -103,6 +121,7 @@ async def upload_saved_resume(
 async def rename_saved_resume(slot: int, request: Request, body: SavedResumeRenameRequest, db: AsyncSession = Depends(get_db)):
     _check_slot(slot)
     user_id = await get_current_user_id(request, db)
+    await _check_burst(user_id, "resume_tailor_saved_rename")
 
     repo = SavedResumeRepository(db)
     existing = await repo.get_by_slot(user_id, slot)
@@ -117,6 +136,7 @@ async def rename_saved_resume(slot: int, request: Request, body: SavedResumeRena
 async def delete_saved_resume(slot: int, request: Request, db: AsyncSession = Depends(get_db)):
     _check_slot(slot)
     user_id = await get_current_user_id(request, db)
+    await _check_burst(user_id, "resume_tailor_saved_delete")
 
     repo = SavedResumeRepository(db)
     existing = await repo.get_by_slot(user_id, slot)
@@ -135,6 +155,7 @@ async def get_saved_resume_file(slot: int, request: Request, db: AsyncSession = 
     GET /tailor/{id}/original-pdf, just addressed by slot instead of session."""
     _check_slot(slot)
     user_id = await get_current_user_id(request, db)
+    await _check_burst(user_id, "resume_tailor_saved_file")
 
     saved_resume = await SavedResumeRepository(db).get_by_slot(user_id, slot)
     if saved_resume is None:

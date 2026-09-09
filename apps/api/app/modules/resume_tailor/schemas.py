@@ -71,6 +71,9 @@ class EditorResponse(BaseModel):
     templates: list[dict[str, Any]]
     is_draft: bool = False
     title: str | None = None
+    # The client's starting point for optimistic-concurrency checks on its
+    # first PATCH /draft — see TailoringSession.draft_version.
+    draft_version: int = 0
 
 
 class TemplateListResponse(BaseModel):
@@ -98,6 +101,10 @@ class PdfRequest(BaseModel):
 
 class DraftSaveRequest(BaseModel):
     cv_data: dict[str, Any]
+    # The draft_version this edit was made against (from the editor's last
+    # load or last successful save) - lets the backend detect a stale write
+    # from another tab instead of silently overwriting newer content.
+    base_version: int
 
 
 class TitleUpdateRequest(BaseModel):
