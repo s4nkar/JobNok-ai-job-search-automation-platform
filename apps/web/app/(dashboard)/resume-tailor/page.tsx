@@ -462,12 +462,9 @@ function ResumeTailorInner() {
           )}
 
           {!result && !loading && (
-            <div className="bg-white rounded-2xl border border-slate-100 shadow-card min-h-[300px] flex items-center justify-center p-8">
-              <div className="text-center space-y-2">
-                <div className="w-14 h-14 rounded-2xl bg-indigo-50 flex items-center justify-center mx-auto">
-                  <FileSearch className="h-7 w-7 text-indigo-300" />
-                </div>
-                <p className="font-medium text-slate-500">Results will appear here</p>
+            <div className="bg-white rounded-2xl border border-slate-100 shadow-sm min-h-[18rem] flex items-center justify-center p-6">
+              <div className="text-center space-y-1">
+                <p className="font-semibold text-slate-500">Results will appear here</p>
                 <p className="text-sm text-slate-400">Upload your resume and paste a job description to start</p>
               </div>
             </div>

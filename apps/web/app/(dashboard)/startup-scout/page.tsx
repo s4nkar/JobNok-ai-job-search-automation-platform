@@ -450,14 +450,13 @@ export default function StartupScoutPage() {
 
           {/* Empty / initial state */}
           {!hasSearched && (
-            <div className="bg-white rounded-2xl border border-slate-100 shadow-sm flex flex-col items-center justify-center py-20 px-6 text-center">
-              <div className="w-14 h-14 rounded-2xl bg-indigo-50 flex items-center justify-center mb-4">
-                <Radar className="h-7 w-7 text-indigo-300" />
+            <div className="bg-white rounded-2xl border border-slate-100 shadow-sm min-h-[18rem] flex items-center justify-center p-6">
+              <div className="text-center space-y-1">
+                <p className="font-semibold text-slate-500">Find your next startup</p>
+                <p className="text-sm text-slate-400 max-w-xs mx-auto leading-relaxed">
+                  Set a location and funding stage, then hit Discover. <span className="text-indigo-600">Save interesting startups to tracker to find founders to network with.</span>
+                </p>
               </div>
-              <p className="font-semibold text-slate-700 text-base">Find your next startup</p>
-              <p className="text-sm text-slate-400 mt-1 max-w-xs leading-relaxed">
-                Set a location and funding stage, then hit Discover. <span className="text-indigo-600">Save interesting startups to tracker to find founders to network with.</span>
-              </p>
             </div>
           )}
 
@@ -479,14 +478,11 @@ export default function StartupScoutPage() {
 
           {/* No results */}
           {!searching && hasSearched && results.length === 0 && (
-            <div className="bg-white rounded-2xl border border-slate-100 shadow-sm flex flex-col items-center justify-center py-20 text-center">
-              <div className="w-12 h-12 rounded-xl bg-slate-100 flex items-center justify-center mb-4">
-                <Search className="h-5 w-5 text-slate-300" />
+            <div className="bg-white rounded-2xl border border-slate-100 shadow-sm min-h-[18rem] flex items-center justify-center p-6">
+              <div className="text-center space-y-1">
+                <p className="font-semibold text-slate-500">No startups found</p>
+                <p className="text-sm text-slate-400">Try a broader location, different stage, or remove the industry filter.</p>
               </div>
-              <p className="font-semibold text-slate-600">No startups found</p>
-              <p className="text-sm text-slate-400 mt-1">
-                Try a broader location, different stage, or remove the industry filter.
-              </p>
             </div>
           )}
 
