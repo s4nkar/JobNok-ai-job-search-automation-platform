@@ -23,6 +23,7 @@ import { TemplatePickerDialog } from './template-picker'
 import { CompareDialog } from './compare-dialog'
 import { TemplateRail } from './template-rail'
 import { PREVIEW_BASE_HEIGHT, PREVIEW_BASE_WIDTH, ZOOM_LEVELS } from './constants'
+import { ResumeSkeleton } from '@/components/shared/ResumeSkeleton'
 
 // ── Step-tab form ─────────────────────────────────────────────────
 // One section's fields fill the form pane at a time (switched via the
@@ -391,6 +392,14 @@ function EditorInner() {
   // effect's dependency array would refire that effect (scheduling a
   // needless extra save) every time a save's own success handler advances it.
   const draftVersionRef = useRef(0)
+  // Guards the "Resumed your saved draft" toast against firing twice for the
+  // same session - loadEditor's own effect can run twice back-to-back for
+  // one real page visit (React 18 double-invokes effects once on mount in
+  // development), and without this both runs' "is_draft" branch shows the
+  // toast, since nothing else about the fetch is different between them.
+  // Keyed by session_id rather than a plain boolean so navigating between
+  // different draft sessions in the same tab still shows it for each one.
+  const resumedDraftToastShownForRef = useRef<string | null>(null)
 
   // Load session's saved draft (if any) or base_cv_data + tailoring overlay,
   // plus template list + profile check. Pulled into its own callback (not
@@ -431,7 +440,10 @@ function EditorInner() {
       if (editorRes.cv_data) {
         setCvData(editorRes.cv_data)
         draftVersionRef.current = editorRes.draft_version ?? 0
-        if (editorRes.is_draft) toast({ title: 'Resumed your saved draft' })
+        if (editorRes.is_draft && resumedDraftToastShownForRef.current !== sessionId) {
+          resumedDraftToastShownForRef.current = sessionId
+          toast({ title: 'Resumed your saved draft' })
+        }
       } else {
         throw new Error('Resume data came back empty.')
       }
@@ -1720,12 +1732,13 @@ function EditorInner() {
                   />
                 )}
                 {!slotAHtml && !slotBHtml && (
-                  <div className="flex flex-col items-center justify-center gap-2 text-slate-400 h-full">
-                    {previewLoading
-                      ? <><Loader2 className="h-6 w-6 animate-spin text-indigo-400" /><span className="text-xs">Rendering preview…</span></>
-                      : <><Eye className="h-6 w-6" /><span className="text-xs">Preview will appear here</span></>
-                    }
-                  </div>
+                  previewLoading ? (
+                    <ResumeSkeleton />
+                  ) : (
+                    <div className="flex flex-col items-center justify-center gap-2 text-slate-400 h-full">
+                      <Eye className="h-6 w-6" /><span className="text-xs">Preview will appear here</span>
+                    </div>
+                  )
                 )}
               </div>
             </div>

@@ -3,7 +3,7 @@
 import { TemplateId, TemplateMeta } from '@/lib/types'
 import { Dialog, DialogContent, DialogHeader, DialogTitle, cn } from '@jobnok/ui'
 import { Lock } from 'lucide-react'
-import { ScaledResumeThumb } from './scaled-thumb'
+import { ScaledResumeThumb } from '@/components/shared/ScaledResumeThumb'
 
 // ── Template thumbnails ───────────────────────────────────────────
 // Small hand-drawn previews (no real render cost) standing in for each

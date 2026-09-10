@@ -23,4 +23,6 @@ export const queryKeys = {
   startupScoutCompany: (companyId: string) => ['startup-scout', 'companies', companyId] as const,
   scoutContacts: (companyId: string) => ['startup-scout', 'companies', companyId, 'contacts'] as const,
   jobSearchApplications: ['job-search', 'applications'] as const,
+  // "My Docs" — every resume the user has generated (resume_tailor sessions).
+  tailoringSessions: ['tailoring-sessions'] as const,
 }

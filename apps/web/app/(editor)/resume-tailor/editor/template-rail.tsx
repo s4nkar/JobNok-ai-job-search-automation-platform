@@ -3,7 +3,7 @@
 import { TemplateId, TemplateMeta } from '@/lib/types'
 import { cn } from '@jobnok/ui'
 import { Check, ChevronLeft, ChevronRight, Lock } from 'lucide-react'
-import { ScaledResumeThumb } from './scaled-thumb'
+import { ScaledResumeThumb } from '@/components/shared/ScaledResumeThumb'
 
 const RAIL_WIDTH = 192
 
