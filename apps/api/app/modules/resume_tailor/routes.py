@@ -345,6 +345,13 @@ async def tailor_resume(
         jd_for_processing = await generation.translate_jd_if_needed(job_description)
         jd_text_clean = clean_jd_text(jd_for_processing)
         jd_chunks = chunk_jd(jd_text_clean)
+        if not jd_chunks:
+            # Cleaning heuristics produced nothing usable — never let a
+            # perfectly good posting fall through to keyword-only matching
+            # (and a 0 ATS score) because of an over-eager trim.
+            logger.warning("chunk_jd produced 0 chunks after cleaning — retrying on raw JD text")
+            jd_text_clean = jd_for_processing.strip()
+            jd_chunks = chunk_jd(jd_for_processing)
         try:
             jd_embeddings = await embed([c.text for c in jd_chunks], purpose="matching") if jd_chunks else _empty_array()
         except EmbeddingError as exc:

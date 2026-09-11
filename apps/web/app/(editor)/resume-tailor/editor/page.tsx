@@ -361,6 +361,11 @@ function EditorInner() {
   const previewDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const draftDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const thumbnailsDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  // Latest cvData without making it a thumbnail-effect dependency — the rail
+  // thumbnails are a layout reference, not a live edit surface, so they
+  // refresh on rail-open, not on every keystroke.
+  const cvDataRef = useRef<CvData | null>(null)
+  const railPrevCollapsedRef = useRef(true)
   const previewCanvasRef = useRef<HTMLDivElement>(null)
   const previewIframeRefA = useRef<HTMLIFrameElement>(null)
   const previewIframeRefB = useRef<HTMLIFrameElement>(null)
@@ -622,29 +627,34 @@ function EditorInner() {
     return () => window.removeEventListener('message', onMessage)
   }, [])
 
-  // Debounced live thumbnails fetch — powers the template rail/dialog's
-  // real-content swatches. Renders EVERY template in one backend call rather
-  // than one /preview call per template (see routes.py's comment: firing 17
-  // individual calls would blow through the per-user burst limit almost
-  // immediately). Skipped while the rail is collapsed since nothing is
-  // showing the thumbnails anyway. Every one of the 17 templates' rendered
-  // HTML genuinely changes whenever any field does (the edited text shows up
-  // in all of them), so each fetch that lands forces all 17 thumbnail
-  // iframes to reload — a real, unavoidable cost of "live" thumbnails, not a
-  // bug. What IS tunable is how often that lands: 6s (not the main preview's
-  // 450ms, and longer than an earlier 2.5s) so an ordinary pause mid-typing
-  // doesn't repeatedly retrigger a visible reload flash across the whole
-  // rail — it only fires once actual editing has settled.
+  useEffect(() => { cvDataRef.current = cvData }, [cvData])
+
+  // Thumbnails fetch — renders EVERY template in one backend call (firing 17
+  // individual /preview calls would blow the per-user burst limit; see
+  // routes.py). The rail is a layout REFERENCE you click to switch, not an
+  // edit surface, so this deliberately does NOT re-fetch on every keystroke:
+  // it fetches once (first time the rail is open) and again each time the rail
+  // is re-opened after being collapsed — an explicit "let me compare layouts"
+  // action. Combined with lazy-mounted iframes in the rail, editor load spins
+  // up ~4-5 template previews instead of 17-on-every-pause.
   useEffect(() => {
-    if (!cvData || !sessionId || railCollapsed) return
+    const wasCollapsed = railPrevCollapsedRef.current
+    railPrevCollapsedRef.current = railCollapsed
+    if (!sessionId || (railCollapsed && !templatePickerOpen)) return
+    // First load, or the rail was just re-opened to compare layouts.
+    const needsFetch = thumbnails === null || (wasCollapsed && !railCollapsed)
+    if (!needsFetch) return
+
     if (thumbnailsDebounceRef.current) clearTimeout(thumbnailsDebounceRef.current)
     const controller = new AbortController()
     thumbnailsDebounceRef.current = setTimeout(async () => {
+      const cv = cvDataRef.current
+      if (!cv) return
       try {
         const res = await apiFetch(`/api/ai/tailor/${sessionId}/preview/thumbnails`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ cv_data: cvData }),
+          body: JSON.stringify({ cv_data: cv }),
           signal: controller.signal,
         })
         if (res.ok) {
@@ -654,12 +664,12 @@ function EditorInner() {
       } catch (e) {
         if ((e as Error).name !== 'AbortError') { /* silent — thumbnails are cosmetic */ }
       }
-    }, 6000)
+    }, 300)
     return () => {
       if (thumbnailsDebounceRef.current) clearTimeout(thumbnailsDebounceRef.current)
       controller.abort()
     }
-  }, [cvData, sessionId, railCollapsed])
+  }, [sessionId, railCollapsed, templatePickerOpen, thumbnails])
 
   const set = useCallback(<K extends keyof CvData>(key: K, value: CvData[K]) => {
     setCvData(prev => prev ? { ...prev, [key]: value } : prev)

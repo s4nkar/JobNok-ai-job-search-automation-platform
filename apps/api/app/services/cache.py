@@ -46,6 +46,27 @@ class UpstashRedis:
                 raise UpstashRedisError(body["error"])
             return body
 
+    async def pipeline(self, commands: list[list]) -> list:
+        """Run several commands in ONE HTTP round-trip via Upstash's /pipeline
+        endpoint. Returns the per-command results in order. Commands are NOT
+        transactional (no MULTI/EXEC) — this is purely a latency optimization
+        for independent commands (e.g. INCR + EXPIRE on the same key), not an
+        atomicity guarantee. Raises UpstashRedisError if any command in the
+        batch reports an error, matching _cmd's fail-loud behavior so callers'
+        existing fail-open try/except still applies."""
+        async with httpx.AsyncClient() as client:
+            res = await client.post(
+                f"{self.url}/pipeline",
+                headers=self.headers,
+                json=[[str(a) for a in cmd] for cmd in commands],
+            )
+            res.raise_for_status()
+            body = res.json()
+        for item in body:
+            if isinstance(item, dict) and "error" in item:
+                raise UpstashRedisError(item["error"])
+        return [item.get("result") if isinstance(item, dict) else item for item in body]
+
     async def get(self, key: str) -> str | None:
         result = await self._cmd("GET", key)
         return result.get("result")
@@ -119,9 +140,10 @@ async def check_rate_limit(user_id: str, tool: str, limit: int) -> tuple[bool, i
     redis = _get_redis()
     key = f"rl:{user_id}:{tool}"
 
-    new_count = await redis.incr(key)
-    ttl_seconds = _midnight_utc_seconds()
-    await redis.expire(key, ttl_seconds)
+    # INCR + EXPIRE in one round-trip. TTL is still set unconditionally after
+    # every increment so an EXPIRE failure never leaves the key without one.
+    results = await redis.pipeline([["INCR", key], ["EXPIRE", key, _midnight_utc_seconds()]])
+    new_count = int(results[0])
 
     if new_count > limit:
         return False, 0
@@ -156,11 +178,16 @@ async def check_burst_limit(user_id: str, tool: str, limit: int, window_seconds:
     key = f"rl_burst:{user_id}:{tool}"
     now_ms = time.time() * 1000
     cutoff_ms = now_ms - (window_seconds * 1000)
-    await redis.zremrangebyscore(key, "-inf", f"{cutoff_ms:.3f}")
-    await redis.zadd(key, now_ms, f"{now_ms:.3f}:{uuid.uuid4().hex}")
-    await redis.expire(key, window_seconds)
-    count = await redis.zcard(key)
-    return count <= limit
+    # prune old + add current + refresh TTL + count, in ONE round-trip
+    # (was 4 sequential HTTP calls to Upstash). Still not atomic — same small
+    # race under true concurrency the docstring already accepts.
+    results = await redis.pipeline([
+        ["ZREMRANGEBYSCORE", key, "-inf", f"{cutoff_ms:.3f}"],
+        ["ZADD", key, now_ms, f"{now_ms:.3f}:{uuid.uuid4().hex}"],
+        ["EXPIRE", key, window_seconds],
+        ["ZCARD", key],
+    ])
+    return int(results[3]) <= limit
 
 
 # ── Per-provider circuit breaker ────────────────────────────────────────

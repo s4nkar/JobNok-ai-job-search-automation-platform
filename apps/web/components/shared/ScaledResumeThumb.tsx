@@ -19,18 +19,23 @@ import { ResumeSkeleton } from './ResumeSkeleton'
 // cropHeight: when set, shows a short "peek" at a fixed pixel height instead
 // of the full page (Layouts rail/template picker need the whole page shape
 // to compare layouts; My Docs just wants a glance, not a full A4-tall card).
-// The iframe still scales off the container's actual width exactly as
-// before — a fixed height container with overflow-hidden just clips
-// whatever of the scaled page falls past it, so text isn't shrunk any
-// further, only the visible portion is shorter.
-export function ScaledResumeThumb({ html, label, className, cropHeight }: {
+//
+// lazy: when set, the <iframe> is only mounted once the thumbnail scrolls
+// into view (IntersectionObserver) and stays mounted after. The Layouts rail
+// renders ~17 of these; without this every one spins up a full document
+// context on editor load (fans-at-full-power territory). With it, only the
+// 4-5 actually visible render. Once mounted it is NOT torn down on scroll-out
+// — re-rendering on every scroll would be its own jank.
+export function ScaledResumeThumb({ html, label, className, cropHeight, lazy = false }: {
   html: string | null | undefined
   label: string
   className?: string
   cropHeight?: number
+  lazy?: boolean
 }) {
   const containerRef = useRef<HTMLDivElement>(null)
   const [scale, setScale] = useState(0)
+  const [inView, setInView] = useState(!lazy)
 
   useEffect(() => {
     const el = containerRef.current
@@ -45,13 +50,30 @@ export function ScaledResumeThumb({ html, label, className, cropHeight }: {
     return () => ro.disconnect()
   }, [])
 
+  useEffect(() => {
+    if (!lazy || inView) return
+    const el = containerRef.current
+    if (!el) return
+    if (typeof IntersectionObserver === 'undefined') { setInView(true); return }
+    const io = new IntersectionObserver(
+      entries => {
+        if (entries.some(e => e.isIntersecting)) setInView(true)
+      },
+      { rootMargin: '200px' },
+    )
+    io.observe(el)
+    return () => io.disconnect()
+  }, [lazy, inView])
+
+  const showIframe = html && scale > 0 && inView
+
   return (
     <div
       ref={containerRef}
       className={cn('w-full overflow-hidden relative', className)}
       style={cropHeight ? { height: cropHeight } : { aspectRatio: `${PREVIEW_BASE_WIDTH} / ${PREVIEW_BASE_HEIGHT}` }}
     >
-      {html && scale > 0 ? (
+      {showIframe ? (
         <>
           <iframe
             srcDoc={html}
@@ -62,6 +84,7 @@ export function ScaledResumeThumb({ html, label, className, cropHeight }: {
             }}
             sandbox=""
             scrolling="no"
+            loading="lazy"
             title={label}
             tabIndex={-1}
           />

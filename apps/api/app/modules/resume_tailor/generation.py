@@ -28,6 +28,7 @@ from typing import TYPE_CHECKING, Any
 from app.core.config import settings
 from app.ai.llm import provider as ai_provider
 from app.modules.resume_tailor import cache as resume_cache
+from app.modules.resume_tailor.extraction import build_base_cv_data_deterministic
 from app.modules.resume_tailor.prompts import (
     JD_TRANSLATE_SYSTEM_PROMPT,
     MATCHER_VERSION,
@@ -93,7 +94,10 @@ async def _translate_jd(text: str) -> str:
     # "Let me translate this..." would silently become part of the "clean"
     # JD text fed into chunking/matching, with no error or degraded flag —
     # not a loud failure, a silently worse match score.
-    return await ai_provider.generate_text(text[:4000], JD_TRANSLATE_SYSTEM_PROMPT, max_tokens=4000, tier="light")
+    return await ai_provider.generate_text(
+        text[:4000], JD_TRANSLATE_SYSTEM_PROMPT, max_tokens=4000, tier="light",
+        reasoning_effort=settings.groq_reasoning_effort,
+    )
 
 
 async def translate_jd_if_needed(job_description: str) -> str:
@@ -121,23 +125,31 @@ RESUME TEXT:
 
     # response_format=json_object structurally constrains the output to valid
     # JSON — a "return ONLY JSON" prompt instruction alone was observed NOT
-    # being reliably honored: switching this call to tier="light" to dodge a
-    # reasoning model's chain-of-thought leak didn't fix it either, since the
-    # OpenRouter fallback model (and, on retest, the light model's own
-    # provider) exhibited the same leak. JSON mode fixes it at the API level
-    # regardless of which model serves the request, so tier="heavy" is back —
-    # better quality and a materially higher per-minute token ceiling on Groq
-    # than the light model had.
-    raw = await ai_provider.generate_text(
-        prompt, STRUCT_SYSTEM_PROMPT, max_tokens=4000, tier="heavy",
-        response_format={"type": "json_object"},
-    )
+    # being reliably honored. reasoning_effort=low (config) stops a gpt-oss
+    # model burning this max_tokens budget on hidden chain-of-thought before
+    # the JSON. max_tokens=2000 is ample for a structured CV (~800-1500 tok)
+    # and keeps this call + the separate prose call from colliding in Groq's
+    # per-minute token window.
+    try:
+        raw = await ai_provider.generate_text(
+            prompt, STRUCT_SYSTEM_PROMPT, max_tokens=2000, tier="heavy",
+            response_format={"type": "json_object"},
+            reasoning_effort=settings.groq_reasoning_effort,
+        )
+    except ai_provider.AIGenerationError as exc:
+        # Every AI provider exhausted — fall back to deterministic regex/chunker
+        # extraction instead of a 500. Lower quality, but the editor opens and
+        # the user can hand-fix fields (CLAUDE.md "Phase 2" fallback).
+        logger.warning("Base CV structuring: all AI providers exhausted (%r) — deterministic extraction", exc)
+        return build_base_cv_data_deterministic(resume_text)
+
     try:
         start = raw.find("{")
         end = raw.rfind("}") + 1
         parsed = json.loads(raw[start:end])
     except Exception as exc:
-        raise ValueError(f"Failed to structure resume: malformed LLM JSON response: {exc!r}") from exc
+        logger.warning("Base CV structuring: malformed LLM JSON (%r) — deterministic extraction", exc)
+        return build_base_cv_data_deterministic(resume_text)
 
     # response_format=json_object only guarantees valid JSON syntax, not the
     # right shape — validate_cv_data checks it field-by-field against
@@ -230,6 +242,23 @@ def _bullet_ids_for_rewrites(
     return ids
 
 
+def _deterministic_fit_summary(analysis: "MatchResult") -> str:
+    """A plain-language fit assessment built only from the deterministic
+    matcher output — used to fill TailorProseResult.summary when the AI prose
+    call degrades, so the analysis panel still shows something concrete
+    instead of an empty box. Purely descriptive: it never touches
+    profile_headline/tailored_summary/bullet_rewrites (those modify the CV and
+    must stay empty on degrade so the overlay keeps the resume's real values)."""
+    parts: list[str] = []
+    if analysis.matched_keywords:
+        parts.append(f"Direct overlap on {', '.join(analysis.matched_keywords[:6])}.")
+    if analysis.transferable_strengths:
+        parts.append("Related experience: " + "; ".join(analysis.transferable_strengths[:3]) + ".")
+    if analysis.critical_missing:
+        parts.append("Gaps to address: " + "; ".join(analysis.critical_missing[:3]) + ".")
+    return " ".join(parts)
+
+
 async def _generate_tailor_prose_uncached(
     resume_text: str,
     resume_chunks: list["Chunk"],
@@ -268,17 +297,22 @@ RESUME (for extracting target_role/target_company and grounding prose only):
 {resume_text[:3500]}"""
 
     try:
-        # response_format=json_object — see generate_base_cv_data's comment.
-        # tier="heavy" for the same reason: JSON compliance is now enforced
-        # structurally, so there's no need to trade down to the light
-        # model's lower quality and lower per-minute token ceiling.
+        # response_format=json_object + reasoning_effort=low — see
+        # generate_base_cv_data's comment. max_tokens=1800: the full JSON
+        # (headline + summary + up to 5 bullet patches + skills + fit summary)
+        # can run 700-900 tokens, and 1200 left too thin a margin, especially
+        # when a reasoning model also wants a few hundred tokens.
         raw, provider = await ai_provider.generate_text_with_provider(
-            prompt, TAILOR_PROSE_SYSTEM_PROMPT, max_tokens=1200, tier="heavy",
+            prompt, TAILOR_PROSE_SYSTEM_PROMPT, max_tokens=1800, tier="heavy",
             response_format={"type": "json_object"},
+            reasoning_effort=settings.groq_reasoning_effort,
         )
     except ai_provider.AIGenerationError as exc:
         logger.warning("Tailor prose generation failed: %r — returning deterministic analysis only", exc)
-        return TailorProseResult(ai_status="degraded", ai_error=str(exc))
+        return TailorProseResult(
+            ai_status="degraded", ai_error=str(exc),
+            summary=_deterministic_fit_summary(analysis),
+        )
 
     try:
         start = raw.find("{")
@@ -286,7 +320,10 @@ RESUME (for extracting target_role/target_company and grounding prose only):
         parsed = json.loads(raw[start:end])
     except Exception:
         logger.warning("LLM tailor prose returned malformed JSON: %r", raw[:300])
-        return TailorProseResult(ai_status="degraded", ai_provider=provider, ai_error="malformed JSON response")
+        return TailorProseResult(
+            ai_status="degraded", ai_provider=provider, ai_error="malformed JSON response",
+            summary=_deterministic_fit_summary(analysis),
+        )
 
     validation_flags: list[str] = []
 
@@ -374,10 +411,22 @@ async def generate_tailor_prose(
 
     result = await _generate_tailor_prose_uncached(resume_text, resume_chunks, job_description, analysis)
 
-    if result.ai_status == "ok":
-        try:
-            await resume_cache.set_prose_cache(user_id, resume_hash, job_hash, PROSE_PROMPT_VERSION, model_label, result.as_dict())
-        except Exception:
-            pass
+    try:
+        if result.ai_status == "ok":
+            await resume_cache.set_prose_cache(
+                user_id, resume_hash, job_hash, PROSE_PROMPT_VERSION, model_label, result.as_dict(),
+            )
+        else:
+            # Fail static: cache the degraded result for a short window so the
+            # burst of retries the UI banner invites ("try again shortly")
+            # doesn't re-run the whole exhausted provider chain each time (which
+            # also kept re-arming the LLM circuit breaker). A genuine recovery
+            # is picked up once this short TTL lapses — no force_refresh needed.
+            await resume_cache.set_prose_cache(
+                user_id, resume_hash, job_hash, PROSE_PROMPT_VERSION, model_label, result.as_dict(),
+                ttl_seconds=resume_cache.PROSE_DEGRADED_CACHE_TTL_SECONDS,
+            )
+    except Exception:
+        pass
 
     return result

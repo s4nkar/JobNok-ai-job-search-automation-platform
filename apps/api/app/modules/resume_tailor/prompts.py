@@ -17,7 +17,11 @@ from __future__ import annotations
 
 # Bumping any of these forces a fresh cache key / fresh get_or_create_session
 # lookup — see cache.py and repository.py.
-MATCHER_VERSION = "matcher-v1"
+# v2: extract_keywords rewritten from an open "any capitalised word" regex +
+# blocklist to a structural-shape + bounded tech allowlist, plus a wider
+# REWRITE_BAND. Changes matched/missing keywords and rewrite candidates, so
+# existing sessions must re-analyse.
+MATCHER_VERSION = "matcher-v2"
 # v3 switched these to tier="light" to dodge a reasoning model leaking
 # chain-of-thought instead of JSON — didn't fully fix it (the OpenRouter
 # fallback model leaked too, and the light model's own lower per-minute
@@ -25,7 +29,10 @@ MATCHER_VERSION = "matcher-v1"
 # to tier="heavy" and adds response_format={"type": "json_object"} instead —
 # a structural JSON constraint at the API level, not a model choice bet.
 STRUCT_PROMPT_VERSION = "struct-v4"
-PROSE_PROMPT_VERSION = "prose-v4"
+# v5: prose is generated from the deterministic analysis (rewrite candidates,
+# keyword lists) — the matcher-v2 changes alter that input, so cached prose
+# from a matcher-v1 analysis must not be reused.
+PROSE_PROMPT_VERSION = "prose-v5"
 
 
 JD_TRANSLATE_SYSTEM_PROMPT = (

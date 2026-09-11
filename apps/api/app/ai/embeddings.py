@@ -26,7 +26,7 @@ from typing import TYPE_CHECKING
 import httpx
 
 from app.core.config import settings
-from app.services.cache import circuit_is_open, record_provider_result
+from app.services.cache import check_tool_budget, circuit_is_open, record_provider_result
 
 if TYPE_CHECKING:
     import numpy as np
@@ -182,6 +182,16 @@ async def embed(texts: list[str], purpose: str = "matching") -> "np.ndarray":
     import numpy as np
     if not texts:
         return np.zeros((0, 0), dtype="float32")
+
+    if settings.embeddings_daily_call_budget and not await check_tool_budget(
+        _CIRCUIT_SCOPE, settings.embeddings_daily_call_budget,
+    ):
+        # Global cost ceiling hit — raise like a full provider outage so the
+        # caller degrades to keyword-only matching rather than 500. Resets
+        # midnight UTC.
+        raise EmbeddingError(
+            f"Embedding daily call budget ({settings.embeddings_daily_call_budget}) exhausted"
+        )
 
     chain = _provider_chain()
     last_error: Exception | None = None

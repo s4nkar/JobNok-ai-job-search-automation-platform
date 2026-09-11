@@ -237,9 +237,15 @@ _JD_BODY_START = re.compile(
     re.I | re.MULTILINE,
 )
 
+# A cleaned JD shorter than this almost certainly means a heuristic below
+# mis-fired and gutted the text — fall back to the uncleaned original.
+_JD_MIN_USEFUL_LEN = 120
+
 # Where useful JD content ends — contact info, apply instructions, legal text,
-# and company "About us" boilerplate. These ALWAYS come last and are safe to
-# truncate because no candidate requirements ever follow them.
+# and company "About us" boilerplate. Trusted ONLY when the match sits in the
+# back portion of the text: "About us" / "we are committed to..." just as
+# often OPEN a posting as a company blurb, and cutting there deletes the whole
+# JD (hit live: a JD starting with "About Us" cleaned down to "").
 # NOTE: Benefits sections are NOT truncated here — some JDs place requirements
 # after benefits. Benefits are handled by _JD_HEADER_PATTERNS (domain kind).
 _JD_END_SENTINEL = re.compile(
@@ -259,20 +265,39 @@ def clean_jd_text(text: str) -> str:
 
     Call this before keyword extraction as well as before chunking so both
     paths operate on the same cleaned text.
+
+    Every cut is guarded: an end sentinel is honoured only in the back half of
+    the text, a body-start marker only in the front two-thirds, and if the
+    result still comes out implausibly short the original text is returned
+    untouched. A mis-fire that deletes the whole JD (→ 0 chunks → silent
+    keyword-only degrade) is far worse than leaving a little boilerplate in.
     """
+    original = text.strip()
+
     # Strip tracker metadata appended by the job tracker UI
     m = _JD_METADATA_SENTINEL.search(text)
     if m:
         text = text[: m.start()].strip()
-    # Strip contact info / legal / apply boilerplate at the end
-    m = _JD_END_SENTINEL.search(text)
-    if m:
-        text = text[: m.start()].strip()
-    # Strip leading title/location lines before the JD body
+
+    # Strip contact info / legal / apply / "about the company" boilerplate at
+    # the FIRST such marker past the midpoint — an earlier match (common with
+    # "About Us" / "we are committed to...") is an opening blurb, not the end.
+    cut_at = next(
+        (m.start() for m in _JD_END_SENTINEL.finditer(text) if m.start() >= len(text) * 0.5),
+        None,
+    )
+    if cut_at is not None:
+        text = text[:cut_at].strip()
+
+    # Strip leading title/location lines before the JD body — only when the
+    # marker is in the front two-thirds (otherwise it matched prose deep in
+    # the posting and jumping there would drop most of the requirements).
     m = _JD_BODY_START.search(text)
-    if m:
+    if m and m.start() <= len(text) * 0.66:
         text = text[m.start():]
-    return text
+
+    text = text.strip()
+    return text if len(text) >= _JD_MIN_USEFUL_LEN else original
 
 
 def chunk_jd(text: str) -> list[Chunk]:

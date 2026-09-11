@@ -31,7 +31,7 @@ function RailCard({
         locked && 'opacity-60'
       )}
     >
-      <ScaledResumeThumb html={html} label={template.label} className="rounded-md border border-slate-200 bg-white" />
+      <ScaledResumeThumb html={html} label={template.label} lazy className="rounded-md border border-slate-200 bg-white" />
       <p className="text-[11px] font-semibold text-slate-700 mt-1.5 leading-tight truncate">{template.label}</p>
 
       {selected && (
