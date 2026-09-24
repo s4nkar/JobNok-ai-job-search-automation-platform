@@ -352,6 +352,14 @@ async def tailor_resume(
             logger.warning("chunk_jd produced 0 chunks after cleaning — retrying on raw JD text")
             jd_text_clean = jd_for_processing.strip()
             jd_chunks = chunk_jd(jd_for_processing)
+
+        # LLM-primary JD chunking — every JD goes through the LLM first (cheap:
+        # a Flash/Flash-Lite-class model call), with this regex pass kept only
+        # as the fallback for a provider outage or a validation failure. See
+        # generation.py::chunk_jd_with_llm_repair's docstring for why this is
+        # no longer gated on the regex output looking obviously broken.
+        jd_chunks, jd_chunking_degraded = await generation.chunk_jd_with_llm_repair(jd_text_clean, jd_chunks)
+
         try:
             jd_embeddings = await embed([c.text for c in jd_chunks], purpose="matching") if jd_chunks else _empty_array()
         except EmbeddingError as exc:
@@ -363,6 +371,14 @@ async def tailor_resume(
             jd_chunks=jd_chunks, jd_embeddings=jd_embeddings,
             resume_text=resume_version.raw_text, jd_text=jd_text_clean,
         )
+        if jd_chunking_degraded:
+            # The LLM chunking pass wasn't available or didn't validate, AND
+            # the regex fallback it fell back to still looks pathological on
+            # its own — both the primary and the safety net came up short.
+            # Flag it the same way an embedding outage does, so the UI can
+            # warn the user the score may be unreliable rather than
+            # presenting it at face value.
+            analysis.degraded = True
         prose = await generation.generate_tailor_prose(
             user_id, resume_hash, job_hash, resume_version.raw_text, resume_chunks, jd_for_processing, analysis,
         )
@@ -429,6 +445,7 @@ async def get_tailor_editor(session_id: str, request: Request, db: AsyncSession 
             "is_draft": True,
             "title": session.title,
             "draft_version": session.draft_version,
+            "missing_keywords": session.analysis.get("missing_keywords", []),
         }
 
     resume_repo = ResumeVersionRepository(db)
@@ -470,6 +487,7 @@ async def get_tailor_editor(session_id: str, request: Request, db: AsyncSession 
         "templates": rendering.list_templates(),
         "is_draft": False,
         "title": session.title,
+        "missing_keywords": session.analysis.get("missing_keywords", []),
         "draft_version": session.draft_version,
     }
 

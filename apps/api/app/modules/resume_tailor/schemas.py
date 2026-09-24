@@ -74,6 +74,11 @@ class EditorResponse(BaseModel):
     # The client's starting point for optimistic-concurrency checks on its
     # first PATCH /draft — see TailoringSession.draft_version.
     draft_version: int = 0
+    # JD keywords absent from the resume (from the deterministic analysis) —
+    # lets the editor offer them as one-click optional additions in the
+    # Skills step instead of leaving them as an un-actionable gap list on the
+    # separate analysis page. Never auto-inserted; the user decides.
+    missing_keywords: list[str] = Field(default_factory=list)
 
 
 class TemplateListResponse(BaseModel):

@@ -357,6 +357,9 @@ function EditorInner() {
   const sectionDragSensors = useSensors(useSensor(PointerSensor, { activationConstraint: { distance: 4 } }))
   const [templatePickerOpen, setTemplatePickerOpen] = useState(false)
   const [thumbnails, setThumbnails] = useState<Record<string, string> | null>(null)
+  // JD keywords the resume doesn't have — offered as one-click optional
+  // additions in the Skills step (see addSuggestedSkill), never auto-inserted.
+  const [missingKeywords, setMissingKeywords] = useState<string[]>([])
   const [railCollapsed, setRailCollapsed] = useState(false)
   const previewDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const draftDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null)
@@ -444,6 +447,7 @@ function EditorInner() {
       setSessionTitle(editorRes.title ?? null)
       if (editorRes.cv_data) {
         setCvData(editorRes.cv_data)
+        setMissingKeywords(editorRes.missing_keywords ?? [])
         draftVersionRef.current = editorRes.draft_version ?? 0
         if (editorRes.is_draft && resumedDraftToastShownForRef.current !== sessionId) {
           resumedDraftToastShownForRef.current = sessionId
@@ -821,6 +825,33 @@ function EditorInner() {
   function removeSkill(i: number) {
     setCvData(prev => prev ? { ...prev, skills: prev.skills.filter((_, idx) => idx !== i) } : prev)
   }
+
+  // One-click add for a suggested (missing-keyword) skill — appends to an
+  // "Additional Skills" category (reusing it if already added once) rather
+  // than guessing which existing category it belongs in. Never touches
+  // prose/summary: the user is asserting they have this skill, so it's a
+  // plain data edit, not something that needs anti-hallucination validation.
+  const SUGGESTED_SKILLS_CATEGORY = 'Additional Skills'
+  function addSuggestedSkill(keyword: string) {
+    setCvData(prev => {
+      if (!prev) return prev
+      const idx = prev.skills.findIndex(s => s.category.trim().toLowerCase() === SUGGESTED_SKILLS_CATEGORY.toLowerCase())
+      if (idx === -1) {
+        return { ...prev, skills: [...prev.skills, { category: SUGGESTED_SKILLS_CATEGORY, items: keyword }] }
+      }
+      const skills = [...prev.skills]
+      const existingItems = skills[idx].items.split(',').map(s => s.trim()).filter(Boolean)
+      if (existingItems.some(i => i.toLowerCase() === keyword.toLowerCase())) return prev
+      skills[idx] = { ...skills[idx], items: [...existingItems, keyword].join(', ') }
+      return { ...prev, skills }
+    })
+  }
+
+  // Keywords not already covered by any skills category (case-insensitive
+  // substring check — "React" already in "React, Redux" shouldn't re-offer).
+  const suggestableKeywords = cvData
+    ? missingKeywords.filter(kw => !cvData.skills.some(s => s.items.toLowerCase().includes(kw.toLowerCase())))
+    : []
 
   // ── Project helpers ─────────────────────────────────────────────
 
@@ -1298,6 +1329,27 @@ function EditorInner() {
             {activeStep === 'skills' && (
               <>
                 <SubHeading icon={<Wrench className="h-4 w-4" />} title="Skills" badge={`${cvData.skills.length} categories`} />
+                {suggestableKeywords.length > 0 && (
+                  <div className="rounded-xl border border-indigo-100 bg-indigo-50/50 p-3 space-y-2">
+                    <p className="text-xs font-semibold text-indigo-700">
+                      From the job description ({suggestableKeywords.length})
+                    </p>
+                    <p className="text-[11px] text-indigo-400 -mt-1">
+                      Only add ones you actually have — click to insert into Skills.
+                    </p>
+                    <div className="flex flex-wrap gap-1.5">
+                      {suggestableKeywords.map(kw => (
+                        <button
+                          key={kw}
+                          onClick={() => addSuggestedSkill(kw)}
+                          className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-xs font-medium bg-white text-indigo-600 border border-indigo-200 hover:bg-indigo-100 hover:border-indigo-300 transition-colors"
+                        >
+                          <Plus className="h-3 w-3" /> {kw}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                )}
                 <div className="space-y-2">
                   {cvData.skills.map((skill, i) => (
                     <div key={i} className="border border-slate-200/70 rounded-xl p-4 space-y-2 bg-slate-50/60">

@@ -28,8 +28,11 @@ from typing import TYPE_CHECKING, Any
 from app.core.config import settings
 from app.ai.llm import provider as ai_provider
 from app.modules.resume_tailor import cache as resume_cache
+from app.modules.resume_tailor.chunker import jd_chunking_is_pathological
 from app.modules.resume_tailor.extraction import build_base_cv_data_deterministic
 from app.modules.resume_tailor.prompts import (
+    JD_CHUNK_PROMPT_VERSION,
+    JD_CHUNK_SYSTEM_PROMPT,
     JD_TRANSLATE_SYSTEM_PROMPT,
     MATCHER_VERSION,
     PROSE_PROMPT_VERSION,
@@ -38,7 +41,10 @@ from app.modules.resume_tailor.prompts import (
     TAILOR_PROSE_SYSTEM_PROMPT,
 )
 from app.modules.resume_tailor.schemas import validate_cv_data
-from app.modules.resume_tailor.validation import validate_bullet_patch, validate_headline_skills, validate_summary
+from app.modules.resume_tailor.validation import (
+    repair_summary, validate_bullet_patch, validate_headline_skills, validate_implied_skills,
+    validate_llm_jd_chunks, validate_summary,
+)
 
 if TYPE_CHECKING:
     from app.modules.resume_tailor.chunker import Chunk
@@ -51,8 +57,8 @@ logger = logging.getLogger(__name__)
 # `generation.STRUCT_PROMPT_VERSION` etc.; kept accessible here so callers
 # don't need to know the constants physically live in a sibling file.
 __all__ = [
-    "MATCHER_VERSION", "STRUCT_PROMPT_VERSION", "PROSE_PROMPT_VERSION",
-    "generate_base_cv_data", "generate_tailor_prose", "translate_jd_if_needed",
+    "MATCHER_VERSION", "STRUCT_PROMPT_VERSION", "PROSE_PROMPT_VERSION", "JD_CHUNK_PROMPT_VERSION",
+    "generate_base_cv_data", "generate_tailor_prose", "translate_jd_if_needed", "chunk_jd_with_llm_repair",
     "TailorProseResult",
 ]
 
@@ -113,6 +119,67 @@ async def translate_jd_if_needed(job_description: str) -> str:
         return job_description
 
 
+# ── JD chunking (LLM-primary, regex as the fallback) ──────────────────
+
+async def chunk_jd_with_llm_repair(
+    jd_text_clean: str, regex_chunks: list["Chunk"],
+) -> tuple[list["Chunk"], bool]:
+    """Returns (chunks, degraded).
+
+    LLM-PRIMARY: every JD is chunked by the LLM (JD_CHUNK_SYSTEM_PROMPT,
+    strictly validated by validate_llm_jd_chunks) — not just as a repair path
+    for a regex result that already looks broken. Previously this only fired
+    when chunker.py::jd_chunking_is_pathological flagged a near-total
+    collapse. That caught the big failures (an entire JD misclassified) but
+    structurally CANNOT catch a minor, isolated one — one bullet silently
+    dropped, one stray sentence misclassified as a requirement — because a
+    single line out of twenty-plus doesn't move an AGGREGATE statistic enough
+    to trip any threshold, however sensitive. Both of those hit live on real
+    JDs in the same session (see MATCHER_VERSION v13's note) and shipped
+    unnoticed under the old gate. Reading each line for what it actually
+    means is exactly what an LLM call does by default; no statistical gate
+    can substitute for that.
+
+    regex_chunks is now purely the FALLBACK — used only when the AI provider
+    chain is exhausted, returns malformed JSON, or the output fails
+    validate_llm_jd_chunks's verbatim/coverage check. Never raises.
+
+    degraded=True only when that fallback had to be used AND jd_chunking_
+    is_pathological still flags the fallback's own output as a likely
+    collapse — i.e. both the primary (LLM) and the safety net (regex) came up
+    short. A regex fallback that's merely imperfect (the class of bug this
+    change targets) is NOT flagged degraded — there's no reliable statistical
+    way to detect that case, which is the whole reason this is no longer
+    gated on it. degraded=False whenever the LLM path succeeds.
+    """
+    try:
+        raw = await ai_provider.generate_text(
+            f"JOB DESCRIPTION TEXT:\n{jd_text_clean[:6000]}",
+            JD_CHUNK_SYSTEM_PROMPT, max_tokens=3000, tier="heavy",
+            response_format={"type": "json_object"},
+            reasoning_effort=settings.groq_reasoning_effort,
+        )
+    except ai_provider.AIGenerationError as exc:
+        logger.warning("JD LLM chunking: all AI providers exhausted (%r) — using regex fallback", exc)
+        return regex_chunks, jd_chunking_is_pathological(regex_chunks, jd_text_clean)
+
+    try:
+        start = raw.find("{")
+        end = raw.rfind("}") + 1
+        parsed = json.loads(raw[start:end])
+    except Exception as exc:
+        logger.warning("JD LLM chunking: malformed JSON (%r) — using regex fallback", exc)
+        return regex_chunks, jd_chunking_is_pathological(regex_chunks, jd_text_clean)
+
+    chunked = validate_llm_jd_chunks(parsed.get("chunks") or [], jd_text_clean)
+    if chunked is None:
+        logger.warning("JD LLM chunking: output failed verbatim/coverage validation — using regex fallback")
+        return regex_chunks, jd_chunking_is_pathological(regex_chunks, jd_text_clean)
+
+    logger.info("JD LLM chunking succeeded: %d chunks (regex fallback would have been %d)", len(chunked), len(regex_chunks))
+    return chunked, False
+
+
 # ── Base CV structuring (JD-agnostic, cached per resume version) ───
 
 async def generate_base_cv_data(resume_text: str) -> dict[str, Any]:
@@ -155,7 +222,29 @@ RESUME TEXT:
     # right shape — validate_cv_data checks it field-by-field against
     # CvDataSchema and falls back per-field so one malformed field (e.g.
     # "skills" returned as a string) doesn't take down the whole result.
-    return validate_cv_data(parsed)
+    cv_data = validate_cv_data(parsed)
+    _strip_redundant_language_relocation_bullets(cv_data)
+    return cv_data
+
+
+# A mixed source section (commonly "Additional Information") getting captured
+# BOTH into the dedicated languages/relocation fields AND, under its original
+# heading, into other_sections — same content rendered twice under two
+# section titles. STRUCT_SYSTEM_PROMPT rule 9 now tells the model not to do
+# this; this is the defensive backend net for when it does anyway. Only drops
+# bullets that are themselves a restatement ("Languages ...", "Relocation
+# ..."), not the whole section, so genuinely distinct leftover content (e.g.
+# hobbies mixed into the same block) survives.
+_REDUNDANT_BULLET_RE = re.compile(r"^\s*(languages?|relocation)\b", re.I)
+
+
+def _strip_redundant_language_relocation_bullets(cv_data: dict[str, Any]) -> None:
+    sections = cv_data.get("other_sections") or []
+    cv_data["other_sections"] = [
+        {**s, "bullets": kept}
+        for s in sections
+        if (kept := [b for b in (s.get("bullets") or []) if not _REDUNDANT_BULLET_RE.match(b)])
+    ]
 
 
 # ── Tailoring prose (JD-specific, cached per resume+job+prompt+model) ──
@@ -276,8 +365,21 @@ async def _generate_tailor_prose_uncached(
     )
     transferable_block = "; ".join(analysis.transferable_strengths[:6]) or "(none)"
     critical_block = "; ".join(analysis.critical_missing[:6]) or "(none)"
-    missing_block = ", ".join(analysis.missing_keywords) or "(none)"
     matched_block = ", ".join(analysis.matched_keywords[:15]) or "(none)"
+
+    # grounded_missing_keywords are the subset of "missing" keywords with a
+    # STRONG embedding match somewhere in the resume — terminology gaps, not
+    # capability gaps (see matcher.py::_find_grounded_missing_keywords). Pulled
+    # out of the MISSING KEYWORDS ban list and given their own block with the
+    # specific evidence that justifies each one, so the model can legitimately
+    # use the JD's own term instead of being told to avoid it entirely.
+    grounded_by_keyword = {g.keyword: g for g in analysis.grounded_missing_keywords}
+    genuine_missing = [k for k in analysis.missing_keywords if k not in grounded_by_keyword]
+    missing_block = ", ".join(genuine_missing) or "(none)"
+    terminology_gaps_block = (
+        "\n".join(f'- "{g.keyword}" — evidence: "{g.evidence}"' for g in analysis.grounded_missing_keywords)
+        or "(none)"
+    )
 
     prompt = f"""DETERMINISTIC ANALYSIS (do not recompute, just use):
 OVERALL SCORE: {analysis.overall_score}
@@ -285,7 +387,9 @@ SCORE BREAKDOWN: {json.dumps(analysis.score_breakdown)}
 MATCHED KEYWORDS (use these to pick headline skills — prefer the ones most role-relevant): {matched_block}
 TRANSFERABLE STRENGTHS: {transferable_block}
 CRITICAL GAPS (do not invent experience to cover these): {critical_block}
-MISSING KEYWORDS — absent from resume, do not mention in any prose field: {missing_block}
+TERMINOLOGY GAPS (JD term missing, but grounded by the evidence shown — see the TERMINOLOGY GAPS rules above for how to use these):
+{terminology_gaps_block}
+MISSING KEYWORDS — no grounded evidence anywhere in the resume, do not mention in any prose field under any framing: {missing_block}
 
 REWRITE CANDIDATES (only patch these — echo the bracketed id, not the text):
 {rewrites_block}
@@ -327,6 +431,15 @@ RESUME (for extracting target_role/target_company and grounding prose only):
 
     validation_flags: list[str] = []
 
+    # Casefolded allowlist of terminology-gap keywords — validate_* below
+    # accepts these as grounded even though they aren't literally in
+    # resume_text, because matcher.py already required a STRONG embedding
+    # match against a specific resume bullet before including them here. This
+    # is what lets a legitimate rewrite ("predictive ML models" -> "predictive
+    # analytics") survive the same anti-hallucination check that blocks an
+    # actually-fabricated claim.
+    grounded_keywords_cf = {g.keyword.casefold() for g in analysis.grounded_missing_keywords}
+
     bullet_text_by_id = {f"b{i}": chunk.text for i, chunk in enumerate(resume_chunks)}
     bullet_rewrites: list[dict[str, str]] = []
     for patch in parsed.get("bullet_patches") or []:
@@ -335,7 +448,7 @@ RESUME (for extracting target_role/target_company and grounding prose only):
         original = bullet_text_by_id.get(bullet_id) if bullet_id else None
         if not improved or original is None:
             continue
-        result = validate_bullet_patch(bullet_id, improved, resume_text)
+        result = validate_bullet_patch(bullet_id, improved, resume_text, extra_grounded_keywords_cf=grounded_keywords_cf)
         if not result.ok:
             validation_flags.append(f"{bullet_id}: {'; '.join(result.violations)}")
             continue
@@ -348,17 +461,41 @@ RESUME (for extracting target_role/target_company and grounding prose only):
     # untailored value," so this composes for free, no extra fallback logic.
     profile_headline = parsed.get("profile_headline", "")
     if profile_headline:
-        headline_check = validate_headline_skills(profile_headline, resume_text)
+        headline_check = validate_headline_skills(profile_headline, resume_text, extra_grounded_keywords_cf=grounded_keywords_cf)
         if not headline_check.ok:
             validation_flags.append(f"profile_headline: {'; '.join(headline_check.violations)}")
             profile_headline = ""
 
     tailored_summary = parsed.get("tailored_summary", "")
     if tailored_summary:
-        summary_check = validate_summary(tailored_summary, resume_text)
+        summary_check = validate_summary(tailored_summary, resume_text, extra_grounded_keywords_cf=grounded_keywords_cf)
         if not summary_check.ok:
-            validation_flags.append(f"tailored_summary: {'; '.join(summary_check.violations)}")
-            tailored_summary = ""
+            # A weak-match JD often has the model try to acknowledge a gap
+            # in-line ("...though it lacks direct computer vision
+            # experience"), mentioning ONE missing keyword in an otherwise
+            # well-grounded 2-4 sentence summary. Dropping the whole field
+            # for that (the old behavior) meant a real, correctly-tailored
+            # summary was discarded wholesale, leaving the resume's stock
+            # original untouched. Try a surgical repair first.
+            repaired, repaired_ok = repair_summary(tailored_summary, resume_text, extra_grounded_keywords_cf=grounded_keywords_cf)
+            if repaired_ok:
+                validation_flags.append(
+                    f"tailored_summary: dropped ungrounded sentence(s) ({'; '.join(summary_check.violations)}), kept the rest"
+                )
+                tailored_summary = repaired
+            else:
+                validation_flags.append(f"tailored_summary: {'; '.join(summary_check.violations)}")
+                tailored_summary = ""
+
+    # implied_skills_to_add is NOT trusted from the LLM as-is — measured live,
+    # the model does not reliably distinguish "genuinely implied" from "the
+    # whole missing-keywords list" (it copied MISSING KEYWORDS verbatim in
+    # testing). validate_implied_skills is the hard backstop: only a listed
+    # peer-tool pair survives.
+    implied_skills_to_add, implied_violations = validate_implied_skills(
+        parsed.get("implied_skills_to_add") or [], resume_text,
+    )
+    validation_flags.extend(implied_violations)
 
     return TailorProseResult(
         target_role=parsed.get("target_role", ""),
@@ -366,7 +503,7 @@ RESUME (for extracting target_role/target_company and grounding prose only):
         profile_headline=profile_headline,
         tailored_summary=tailored_summary,
         bullet_rewrites=bullet_rewrites,
-        implied_skills_to_add=parsed.get("implied_skills_to_add") or [],
+        implied_skills_to_add=implied_skills_to_add,
         summary=parsed.get("summary", ""),
         ai_status="ok",
         ai_provider=provider,
