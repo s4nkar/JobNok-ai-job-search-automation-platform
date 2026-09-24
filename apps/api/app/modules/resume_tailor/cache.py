@@ -104,6 +104,12 @@ def deserialize_embeddings(raw: list[list[float]] | None) -> "np.ndarray":
 # hashes prompt text only, with no version/model axis).
 
 _PROSE_CACHE_TTL_SECONDS = 60 * 60 * 24 * 7  # 7 days
+# A degraded (AI-unavailable) prose result is cached only this long — long
+# enough to absorb a burst of "try again" retries without re-hitting an
+# exhausted provider chain each time (which also keeps re-arming the LLM
+# circuit breaker), short enough that a genuine recovery is picked up within
+# ~2 minutes without the user having to force_refresh.
+PROSE_DEGRADED_CACHE_TTL_SECONDS = 120
 _PROSE_LOCK_TTL_SECONDS = settings.ai_request_timeout_seconds + 5  # covers one LLM call
 PROSE_SINGLE_FLIGHT_POLL_INTERVAL_SECONDS = 0.5
 PROSE_SINGLE_FLIGHT_MAX_WAIT_SECONDS = 10
@@ -129,11 +135,12 @@ async def get_prose_cache(
 
 async def set_prose_cache(
     user_id: str, resume_hash: str, job_hash: str, prompt_version: str, model: str, entry: dict[str, Any],
+    ttl_seconds: int = _PROSE_CACHE_TTL_SECONDS,
 ) -> None:
     await set_cached(
         _prose_cache_key(user_id, resume_hash, job_hash, prompt_version, model),
         json.dumps(entry),
-        ttl_seconds=_PROSE_CACHE_TTL_SECONDS,
+        ttl_seconds=ttl_seconds,
     )
 
 

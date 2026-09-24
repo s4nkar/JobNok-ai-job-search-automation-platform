@@ -58,7 +58,7 @@ from typing import AsyncGenerator
 import httpx
 
 from app.core.config import settings
-from app.services.cache import circuit_is_open, record_provider_result
+from app.services.cache import check_tool_budget, circuit_is_open, record_provider_result
 
 logger = logging.getLogger(__name__)
 
@@ -74,19 +74,45 @@ _CIRCUIT_SCOPE = "ai_llm"
 # and a couple seconds' wait is cheaper than switching models mid-request
 # (different model, different prompt-adherence characteristics).
 _RATE_LIMIT_BACKOFF_SECONDS = 2.0
+# Same idea for a json_validate_failed (Groq JSON mode occasionally rejecting
+# its own decode) — nondeterministic, so an immediate-ish retry on the same
+# provider usually succeeds. Shorter wait than a 429 since it's not load-related.
+_SOFT_RETRY_BACKOFF_SECONDS = 0.5
 
 
 class _ProviderError(Exception):
-    """Transient provider failure — caller should try the next provider."""
+    """Transient provider failure — caller should try the next provider.
+
+    count_as_outage: whether this failure should feed the provider's circuit
+    breaker. True for genuine outages (5xx, network, empty/garbled response);
+    False for recoverable conditions (429, json_validate_failed) that don't
+    mean the provider is down — counting those was tripping the breaker (a
+    180s all-tools blackout) on an otherwise-healthy provider.
+    """
+
+    count_as_outage: bool = True
 
 
 class _ProviderUnavailable(_ProviderError):
     """Provider is not configured (e.g. missing API key) — skip without logging as error."""
 
+    count_as_outage = False
+
 
 class _ProviderRateLimited(_ProviderError):
     """The provider responded 429 — worth one short same-provider retry before
     falling through to the next provider in the chain."""
+
+    count_as_outage = False
+
+
+class _ProviderJSONInvalid(_ProviderError):
+    """The provider's JSON mode returned HTTP 400 json_validate_failed — it
+    couldn't validate its own output as JSON (usually a truncated/edge decode,
+    not a bad request from us). Nondeterministic, so retried once on the same
+    provider like a 429 before falling through."""
+
+    count_as_outage = False
 
 
 class AIGenerationError(RuntimeError):
@@ -101,6 +127,7 @@ async def _openai_compat_generate(
     prompt: str, system: str, max_tokens: int,
     base_url: str, api_key: str, model: str, label: str,
     response_format: dict | None = None,
+    reasoning_effort: str | None = None,
 ) -> str:
     if not api_key:
         raise _ProviderUnavailable(f"{label}: API key not configured")
@@ -111,6 +138,12 @@ async def _openai_compat_generate(
     messages.append({"role": "user", "content": prompt})
 
     body: dict = {"model": model, "messages": messages, "max_tokens": max_tokens, "temperature": 0.7}
+    if reasoning_effort and "gpt-oss" in model.lower():
+        # gpt-oss models spend max_tokens on hidden reasoning before writing
+        # the answer; "low" caps that so a tight JSON-extraction budget isn't
+        # starved (see config.py::groq_reasoning_effort). Only gpt-oss accepts
+        # this param — sending it to any other model is a 400.
+        body["reasoning_effort"] = reasoning_effort
     if response_format:
         # Structural JSON enforcement (constrains decoding to valid JSON
         # tokens), not a prompt instruction — a "return ONLY JSON" system
@@ -136,6 +169,9 @@ async def _openai_compat_generate(
 
     if resp.status_code == 429:
         raise _ProviderRateLimited(f"{label} HTTP 429: {resp.text[:200]}")
+
+    if resp.status_code == 400 and "json_validate_failed" in resp.text:
+        raise _ProviderJSONInvalid(f"{label} HTTP 400 json_validate_failed: {resp.text[:200]}")
 
     if resp.status_code >= 400:
         # Every call site here always sends a well-formed payload (message shape
@@ -226,19 +262,20 @@ def _groq_model(tier: str) -> str:
 
 
 async def _dispatch_generate(
-    provider: str, prompt: str, system: str, max_tokens: int, tier: str, response_format: dict | None = None,
+    provider: str, prompt: str, system: str, max_tokens: int, tier: str,
+    response_format: dict | None = None, reasoning_effort: str | None = None,
 ) -> str:
     if provider == "groq":
         return await _openai_compat_generate(
             prompt, system, max_tokens,
             settings.groq_base_url, settings.groq_api_key, _groq_model(tier), "groq",
-            response_format=response_format,
+            response_format=response_format, reasoning_effort=reasoning_effort,
         )
     if provider == "openrouter":
         return await _openai_compat_generate(
             prompt, system, max_tokens,
             settings.openrouter_base_url, settings.openrouter_api_key, settings.openrouter_model, "openrouter",
-            response_format=response_format,
+            response_format=response_format, reasoning_effort=reasoning_effort,
         )
     raise ValueError(f"Unknown AI provider: {provider!r}")
 
@@ -260,10 +297,21 @@ def _dispatch_stream(provider: str, prompt: str, system: str, max_tokens: int, t
 # ── Public Interface ─────────────────────────────────────────────
 
 async def _run_chain(
-    prompt: str, system: str, max_tokens: int, tier: str, response_format: dict | None = None,
+    prompt: str, system: str, max_tokens: int, tier: str,
+    response_format: dict | None = None, reasoning_effort: str | None = None,
 ) -> tuple[str, str]:
     """Shared dispatch loop for generate_text/generate_text_with_provider. Returns
     (content, provider_name). Raises AIGenerationError if every provider fails."""
+    if settings.ai_llm_daily_call_budget and not await check_tool_budget(
+        _CIRCUIT_SCOPE, settings.ai_llm_daily_call_budget,
+    ):
+        # Global cost ceiling hit — degrade like a full provider outage rather
+        # than 500. Callers already catch AIGenerationError and fall back to
+        # deterministic-only output. Resets midnight UTC.
+        raise AIGenerationError(
+            f"AI daily call budget ({settings.ai_llm_daily_call_budget}) exhausted"
+        )
+
     chain = _provider_chain()
     last_error: Exception | None = None
     for provider in chain:
@@ -271,7 +319,9 @@ async def _run_chain(
             logger.info("ai_provider circuit open, skipping %s", provider)
             continue
         try:
-            content = await _dispatch_generate(provider, prompt, system, max_tokens, tier, response_format)
+            content = await _dispatch_generate(
+                provider, prompt, system, max_tokens, tier, response_format, reasoning_effort,
+            )
         except _ProviderUnavailable as exc:
             # Not configured, not a live failure - don't record it, or a
             # provider with no API key would look like a repeatedly-failing
@@ -279,29 +329,37 @@ async def _run_chain(
             logger.info("ai_provider skip %s: %s", provider, exc)
             last_error = exc
             continue
-        except _ProviderRateLimited as exc:
+        except (_ProviderRateLimited, _ProviderJSONInvalid) as exc:
+            # Recoverable: one short same-provider retry before falling
+            # through. Deliberately NOT recorded against the circuit breaker
+            # on either outcome — a 429 blip or a nondeterministic
+            # json_validate_failed is not a provider outage, and counting
+            # them was tripping the breaker (a 180s all-tools blackout) on an
+            # otherwise-healthy provider.
+            backoff = _RATE_LIMIT_BACKOFF_SECONDS if isinstance(exc, _ProviderRateLimited) else _SOFT_RETRY_BACKOFF_SECONDS
             logger.warning(
-                "ai_provider rate-limited on %s, backing off %.1fs before one retry: %s",
-                provider, _RATE_LIMIT_BACKOFF_SECONDS, exc,
+                "ai_provider soft failure on %s (%s), one retry after %.1fs: %s",
+                provider, type(exc).__name__, backoff, exc,
             )
             last_error = exc
-            await asyncio.sleep(_RATE_LIMIT_BACKOFF_SECONDS)
+            await asyncio.sleep(backoff)
             try:
-                content = await _dispatch_generate(provider, prompt, system, max_tokens, tier, response_format)
+                content = await _dispatch_generate(
+                    provider, prompt, system, max_tokens, tier, response_format, reasoning_effort,
+                )
             except _ProviderError as retry_exc:
-                logger.warning("ai_provider retry after rate limit also failed on %s: %s", provider, retry_exc)
+                logger.warning("ai_provider retry also failed on %s: %s", provider, retry_exc)
                 last_error = retry_exc
-                await record_provider_result(_CIRCUIT_SCOPE, provider, ok=False)
                 continue
-            # Recorded once here for the whole 429-then-retry sequence, not
-            # once per attempt - a single rate-limit blip that a retry
-            # recovers from isn't a real outage and must not trip the breaker.
             await record_provider_result(_CIRCUIT_SCOPE, provider, ok=True)
             return content, provider
         except _ProviderError as exc:
-            logger.warning("ai_provider transient failure on %s: %s", provider, exc)
             last_error = exc
-            await record_provider_result(_CIRCUIT_SCOPE, provider, ok=False)
+            if exc.count_as_outage:
+                logger.warning("ai_provider transient failure on %s: %s", provider, exc)
+                await record_provider_result(_CIRCUIT_SCOPE, provider, ok=False)
+            else:
+                logger.warning("ai_provider non-outage failure on %s (breaker untouched): %s", provider, exc)
             continue
         else:
             await record_provider_result(_CIRCUIT_SCOPE, provider, ok=True)
@@ -310,19 +368,21 @@ async def _run_chain(
 
 
 async def generate_text(
-    prompt: str, system: str = "", max_tokens: int = 2048, tier: str = "heavy", response_format: dict | None = None,
+    prompt: str, system: str = "", max_tokens: int = 2048, tier: str = "heavy",
+    response_format: dict | None = None, reasoning_effort: str | None = None,
 ) -> str:
-    content, _ = await _run_chain(prompt, system, max_tokens, tier, response_format)
+    content, _ = await _run_chain(prompt, system, max_tokens, tier, response_format, reasoning_effort)
     return content
 
 
 async def generate_text_with_provider(
-    prompt: str, system: str = "", max_tokens: int = 2048, tier: str = "heavy", response_format: dict | None = None,
+    prompt: str, system: str = "", max_tokens: int = 2048, tier: str = "heavy",
+    response_format: dict | None = None, reasoning_effort: str | None = None,
 ) -> tuple[str, str]:
     """Same as generate_text but also returns which provider served the response —
     for callers surfacing provider-level observability (e.g. resume-tailor's
     ai.provider field). Most callers should keep using generate_text."""
-    return await _run_chain(prompt, system, max_tokens, tier, response_format)
+    return await _run_chain(prompt, system, max_tokens, tier, response_format, reasoning_effort)
 
 
 async def stream_text(prompt: str, system: str = "", max_tokens: int = 2048, tier: str = "heavy") -> AsyncGenerator[str, None]:

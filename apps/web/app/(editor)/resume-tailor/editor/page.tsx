@@ -23,6 +23,7 @@ import { TemplatePickerDialog } from './template-picker'
 import { CompareDialog } from './compare-dialog'
 import { TemplateRail } from './template-rail'
 import { PREVIEW_BASE_HEIGHT, PREVIEW_BASE_WIDTH, ZOOM_LEVELS } from './constants'
+import { ResumeSkeleton } from '@/components/shared/ResumeSkeleton'
 
 // ── Step-tab form ─────────────────────────────────────────────────
 // One section's fields fill the form pane at a time (switched via the
@@ -356,10 +357,18 @@ function EditorInner() {
   const sectionDragSensors = useSensors(useSensor(PointerSensor, { activationConstraint: { distance: 4 } }))
   const [templatePickerOpen, setTemplatePickerOpen] = useState(false)
   const [thumbnails, setThumbnails] = useState<Record<string, string> | null>(null)
+  // JD keywords the resume doesn't have — offered as one-click optional
+  // additions in the Skills step (see addSuggestedSkill), never auto-inserted.
+  const [missingKeywords, setMissingKeywords] = useState<string[]>([])
   const [railCollapsed, setRailCollapsed] = useState(false)
   const previewDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const draftDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const thumbnailsDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  // Latest cvData without making it a thumbnail-effect dependency — the rail
+  // thumbnails are a layout reference, not a live edit surface, so they
+  // refresh on rail-open, not on every keystroke.
+  const cvDataRef = useRef<CvData | null>(null)
+  const railPrevCollapsedRef = useRef(true)
   const previewCanvasRef = useRef<HTMLDivElement>(null)
   const previewIframeRefA = useRef<HTMLIFrameElement>(null)
   const previewIframeRefB = useRef<HTMLIFrameElement>(null)
@@ -391,6 +400,14 @@ function EditorInner() {
   // effect's dependency array would refire that effect (scheduling a
   // needless extra save) every time a save's own success handler advances it.
   const draftVersionRef = useRef(0)
+  // Guards the "Resumed your saved draft" toast against firing twice for the
+  // same session - loadEditor's own effect can run twice back-to-back for
+  // one real page visit (React 18 double-invokes effects once on mount in
+  // development), and without this both runs' "is_draft" branch shows the
+  // toast, since nothing else about the fetch is different between them.
+  // Keyed by session_id rather than a plain boolean so navigating between
+  // different draft sessions in the same tab still shows it for each one.
+  const resumedDraftToastShownForRef = useRef<string | null>(null)
 
   // Load session's saved draft (if any) or base_cv_data + tailoring overlay,
   // plus template list + profile check. Pulled into its own callback (not
@@ -430,8 +447,12 @@ function EditorInner() {
       setSessionTitle(editorRes.title ?? null)
       if (editorRes.cv_data) {
         setCvData(editorRes.cv_data)
+        setMissingKeywords(editorRes.missing_keywords ?? [])
         draftVersionRef.current = editorRes.draft_version ?? 0
-        if (editorRes.is_draft) toast({ title: 'Resumed your saved draft' })
+        if (editorRes.is_draft && resumedDraftToastShownForRef.current !== sessionId) {
+          resumedDraftToastShownForRef.current = sessionId
+          toast({ title: 'Resumed your saved draft' })
+        }
       } else {
         throw new Error('Resume data came back empty.')
       }
@@ -610,29 +631,34 @@ function EditorInner() {
     return () => window.removeEventListener('message', onMessage)
   }, [])
 
-  // Debounced live thumbnails fetch — powers the template rail/dialog's
-  // real-content swatches. Renders EVERY template in one backend call rather
-  // than one /preview call per template (see routes.py's comment: firing 17
-  // individual calls would blow through the per-user burst limit almost
-  // immediately). Skipped while the rail is collapsed since nothing is
-  // showing the thumbnails anyway. Every one of the 17 templates' rendered
-  // HTML genuinely changes whenever any field does (the edited text shows up
-  // in all of them), so each fetch that lands forces all 17 thumbnail
-  // iframes to reload — a real, unavoidable cost of "live" thumbnails, not a
-  // bug. What IS tunable is how often that lands: 6s (not the main preview's
-  // 450ms, and longer than an earlier 2.5s) so an ordinary pause mid-typing
-  // doesn't repeatedly retrigger a visible reload flash across the whole
-  // rail — it only fires once actual editing has settled.
+  useEffect(() => { cvDataRef.current = cvData }, [cvData])
+
+  // Thumbnails fetch — renders EVERY template in one backend call (firing 17
+  // individual /preview calls would blow the per-user burst limit; see
+  // routes.py). The rail is a layout REFERENCE you click to switch, not an
+  // edit surface, so this deliberately does NOT re-fetch on every keystroke:
+  // it fetches once (first time the rail is open) and again each time the rail
+  // is re-opened after being collapsed — an explicit "let me compare layouts"
+  // action. Combined with lazy-mounted iframes in the rail, editor load spins
+  // up ~4-5 template previews instead of 17-on-every-pause.
   useEffect(() => {
-    if (!cvData || !sessionId || railCollapsed) return
+    const wasCollapsed = railPrevCollapsedRef.current
+    railPrevCollapsedRef.current = railCollapsed
+    if (!sessionId || (railCollapsed && !templatePickerOpen)) return
+    // First load, or the rail was just re-opened to compare layouts.
+    const needsFetch = thumbnails === null || (wasCollapsed && !railCollapsed)
+    if (!needsFetch) return
+
     if (thumbnailsDebounceRef.current) clearTimeout(thumbnailsDebounceRef.current)
     const controller = new AbortController()
     thumbnailsDebounceRef.current = setTimeout(async () => {
+      const cv = cvDataRef.current
+      if (!cv) return
       try {
         const res = await apiFetch(`/api/ai/tailor/${sessionId}/preview/thumbnails`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ cv_data: cvData }),
+          body: JSON.stringify({ cv_data: cv }),
           signal: controller.signal,
         })
         if (res.ok) {
@@ -642,12 +668,12 @@ function EditorInner() {
       } catch (e) {
         if ((e as Error).name !== 'AbortError') { /* silent — thumbnails are cosmetic */ }
       }
-    }, 6000)
+    }, 300)
     return () => {
       if (thumbnailsDebounceRef.current) clearTimeout(thumbnailsDebounceRef.current)
       controller.abort()
     }
-  }, [cvData, sessionId, railCollapsed])
+  }, [sessionId, railCollapsed, templatePickerOpen, thumbnails])
 
   const set = useCallback(<K extends keyof CvData>(key: K, value: CvData[K]) => {
     setCvData(prev => prev ? { ...prev, [key]: value } : prev)
@@ -799,6 +825,33 @@ function EditorInner() {
   function removeSkill(i: number) {
     setCvData(prev => prev ? { ...prev, skills: prev.skills.filter((_, idx) => idx !== i) } : prev)
   }
+
+  // One-click add for a suggested (missing-keyword) skill — appends to an
+  // "Additional Skills" category (reusing it if already added once) rather
+  // than guessing which existing category it belongs in. Never touches
+  // prose/summary: the user is asserting they have this skill, so it's a
+  // plain data edit, not something that needs anti-hallucination validation.
+  const SUGGESTED_SKILLS_CATEGORY = 'Additional Skills'
+  function addSuggestedSkill(keyword: string) {
+    setCvData(prev => {
+      if (!prev) return prev
+      const idx = prev.skills.findIndex(s => s.category.trim().toLowerCase() === SUGGESTED_SKILLS_CATEGORY.toLowerCase())
+      if (idx === -1) {
+        return { ...prev, skills: [...prev.skills, { category: SUGGESTED_SKILLS_CATEGORY, items: keyword }] }
+      }
+      const skills = [...prev.skills]
+      const existingItems = skills[idx].items.split(',').map(s => s.trim()).filter(Boolean)
+      if (existingItems.some(i => i.toLowerCase() === keyword.toLowerCase())) return prev
+      skills[idx] = { ...skills[idx], items: [...existingItems, keyword].join(', ') }
+      return { ...prev, skills }
+    })
+  }
+
+  // Keywords not already covered by any skills category (case-insensitive
+  // substring check — "React" already in "React, Redux" shouldn't re-offer).
+  const suggestableKeywords = cvData
+    ? missingKeywords.filter(kw => !cvData.skills.some(s => s.items.toLowerCase().includes(kw.toLowerCase())))
+    : []
 
   // ── Project helpers ─────────────────────────────────────────────
 
@@ -1276,6 +1329,27 @@ function EditorInner() {
             {activeStep === 'skills' && (
               <>
                 <SubHeading icon={<Wrench className="h-4 w-4" />} title="Skills" badge={`${cvData.skills.length} categories`} />
+                {suggestableKeywords.length > 0 && (
+                  <div className="rounded-xl border border-indigo-100 bg-indigo-50/50 p-3 space-y-2">
+                    <p className="text-xs font-semibold text-indigo-700">
+                      From the job description ({suggestableKeywords.length})
+                    </p>
+                    <p className="text-[11px] text-indigo-400 -mt-1">
+                      Only add ones you actually have — click to insert into Skills.
+                    </p>
+                    <div className="flex flex-wrap gap-1.5">
+                      {suggestableKeywords.map(kw => (
+                        <button
+                          key={kw}
+                          onClick={() => addSuggestedSkill(kw)}
+                          className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-xs font-medium bg-white text-indigo-600 border border-indigo-200 hover:bg-indigo-100 hover:border-indigo-300 transition-colors"
+                        >
+                          <Plus className="h-3 w-3" /> {kw}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                )}
                 <div className="space-y-2">
                   {cvData.skills.map((skill, i) => (
                     <div key={i} className="border border-slate-200/70 rounded-xl p-4 space-y-2 bg-slate-50/60">
@@ -1720,12 +1794,13 @@ function EditorInner() {
                   />
                 )}
                 {!slotAHtml && !slotBHtml && (
-                  <div className="flex flex-col items-center justify-center gap-2 text-slate-400 h-full">
-                    {previewLoading
-                      ? <><Loader2 className="h-6 w-6 animate-spin text-indigo-400" /><span className="text-xs">Rendering preview…</span></>
-                      : <><Eye className="h-6 w-6" /><span className="text-xs">Preview will appear here</span></>
-                    }
-                  </div>
+                  previewLoading ? (
+                    <ResumeSkeleton />
+                  ) : (
+                    <div className="flex flex-col items-center justify-center gap-2 text-slate-400 h-full">
+                      <Eye className="h-6 w-6" /><span className="text-xs">Preview will appear here</span>
+                    </div>
+                  )
                 )}
               </div>
             </div>

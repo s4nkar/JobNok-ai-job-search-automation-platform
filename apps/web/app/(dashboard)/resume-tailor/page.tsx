@@ -612,12 +612,9 @@ function ResumeTailorInner() {
                     <XCircle className="h-4 w-4 text-red-400" />
                     <p className="text-sm font-semibold text-slate-700">Missing Keywords <span className="text-slate-400 font-normal">({result.analysis.missing_keywords.length})</span></p>
                   </div>
-                  <div className="space-y-2">
-                    {result.analysis.missing_keywords.map(({ keyword, suggested_placement }) => (
-                      <div key={keyword} className="flex items-start gap-2 text-sm">
-                        <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-red-50 text-red-600 border border-red-100 shrink-0">{keyword}</span>
-                        <span className="text-slate-400 text-xs pt-0.5">→ {suggested_placement}</span>
-                      </div>
+                  <div className="flex flex-wrap gap-1.5">
+                    {result.analysis.missing_keywords.map(({ keyword }) => (
+                      <span key={keyword} className="inline-flex items-center px-2.5 py-1 rounded-full text-xs font-medium bg-red-50 text-red-600 border border-red-100">{keyword}</span>
                     ))}
                   </div>
                 </div>

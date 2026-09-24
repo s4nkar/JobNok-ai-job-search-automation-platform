@@ -18,6 +18,7 @@ Endpoints:
     POST  /tailor/{id}/preview/thumbnails — render HTML for every template at once (template-switcher rail)
     POST  /tailor/{id}/pdf               — render + return the final PDF
     GET   /tailor/templates              — template registry metadata
+    GET   /tailor/sessions               — every generated resume, for "My Docs" (sessions_routes.py)
 
 Saved-resumes CRUD ("My Resumes", up to 3 per user) lives in
 saved_resumes_routes.py, included into this module's router at the bottom of
@@ -28,7 +29,6 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
-import json
 import logging
 
 import fitz  # PyMuPDF
@@ -41,7 +41,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.config import settings
 from app.core.database import get_db
 from app.core.security import get_current_user_id
-from app.services.cache import check_rate_limit, check_burst_limit, get_cached, set_cached
+from app.services.cache import check_rate_limit, check_burst_limit
 from app.shared.utils import _rl_error
 from app.modules.usage.service import record_event as record_tool_usage
 from app.modules.resume_tailor import cache as resume_cache
@@ -53,6 +53,7 @@ from app.modules.resume_tailor.matcher import match_resume_to_jd
 from app.modules.resume_tailor.models import ResumeVersion, TailoringSession
 from app.modules.resume_tailor.repository import ResumeVersionRepository, SavedResumeRepository, TailoringSessionRepository
 from app.modules.resume_tailor.saved_resumes_routes import router as saved_resumes_router
+from app.modules.resume_tailor.sessions_routes import router as sessions_router
 from app.modules.resume_tailor.schemas import (
     DraftSaveRequest,
     EditorResponse,
@@ -70,6 +71,30 @@ from app.ai.llm.provider import AIGenerationError
 logger = logging.getLogger(__name__)
 
 router = APIRouter()
+
+# Included here, before any /tailor/{session_id}-shaped route below, not at
+# the bottom of this file - FastAPI/Starlette matches routes in REGISTRATION
+# order, not by specificity, so a literal path like /tailor/sessions must be
+# registered before any dynamic /tailor/{session_id} route that would
+# otherwise swallow it first (matching "sessions" as if it were a session_id -
+# hit exactly this in a running container: `invalid UUID 'sessions'`).
+# saved_resumes_router doesn't have this problem (different path prefix
+# entirely - /resumes, not /tailor/...) so it stays included at the bottom.
+router.include_router(sessions_router)
+
+
+# GET /tailor/templates - same reason this must be defined here and not
+# further down: it's a literal path matching the same /tailor/<segment>
+# shape as /tailor/{session_id} below, which would otherwise swallow it
+# first (confirmed live: this endpoint was silently unreachable - every call
+# to it returned {"session_id": "templates"} instead of the template
+# registry - dormant/unnoticed until now only because the frontend never
+# actually calls this directly, it gets templates for free embedded in
+# GET /tailor/{id}/editor's own response instead).
+@router.get("/tailor/templates", response_model=TemplateListResponse)
+async def list_tailor_templates():
+    return {"templates": rendering.list_templates()}
+
 
 _MAX_PDF_BYTES = 5 * 1024 * 1024  # 5 MB
 # Generous upper bound for a pasted JD (including any tracker-appended role
@@ -320,6 +345,21 @@ async def tailor_resume(
         jd_for_processing = await generation.translate_jd_if_needed(job_description)
         jd_text_clean = clean_jd_text(jd_for_processing)
         jd_chunks = chunk_jd(jd_text_clean)
+        if not jd_chunks:
+            # Cleaning heuristics produced nothing usable — never let a
+            # perfectly good posting fall through to keyword-only matching
+            # (and a 0 ATS score) because of an over-eager trim.
+            logger.warning("chunk_jd produced 0 chunks after cleaning — retrying on raw JD text")
+            jd_text_clean = jd_for_processing.strip()
+            jd_chunks = chunk_jd(jd_for_processing)
+
+        # LLM-primary JD chunking — every JD goes through the LLM first (cheap:
+        # a Flash/Flash-Lite-class model call), with this regex pass kept only
+        # as the fallback for a provider outage or a validation failure. See
+        # generation.py::chunk_jd_with_llm_repair's docstring for why this is
+        # no longer gated on the regex output looking obviously broken.
+        jd_chunks, jd_chunking_degraded = await generation.chunk_jd_with_llm_repair(jd_text_clean, jd_chunks)
+
         try:
             jd_embeddings = await embed([c.text for c in jd_chunks], purpose="matching") if jd_chunks else _empty_array()
         except EmbeddingError as exc:
@@ -331,6 +371,14 @@ async def tailor_resume(
             jd_chunks=jd_chunks, jd_embeddings=jd_embeddings,
             resume_text=resume_version.raw_text, jd_text=jd_text_clean,
         )
+        if jd_chunking_degraded:
+            # The LLM chunking pass wasn't available or didn't validate, AND
+            # the regex fallback it fell back to still looks pathological on
+            # its own — both the primary and the safety net came up short.
+            # Flag it the same way an embedding outage does, so the UI can
+            # warn the user the score may be unreliable rather than
+            # presenting it at face value.
+            analysis.degraded = True
         prose = await generation.generate_tailor_prose(
             user_id, resume_hash, job_hash, resume_version.raw_text, resume_chunks, jd_for_processing, analysis,
         )
@@ -397,6 +445,7 @@ async def get_tailor_editor(session_id: str, request: Request, db: AsyncSession 
             "is_draft": True,
             "title": session.title,
             "draft_version": session.draft_version,
+            "missing_keywords": session.analysis.get("missing_keywords", []),
         }
 
     resume_repo = ResumeVersionRepository(db)
@@ -438,6 +487,7 @@ async def get_tailor_editor(session_id: str, request: Request, db: AsyncSession 
         "templates": rendering.list_templates(),
         "is_draft": False,
         "title": session.title,
+        "missing_keywords": session.analysis.get("missing_keywords", []),
         "draft_version": session.draft_version,
     }
 
@@ -551,29 +601,6 @@ async def get_original_pdf(session_id: str, request: Request, db: AsyncSession =
 
 # ── POST /tailor/{session_id}/preview ─────────────────────────────
 
-async def _render_cv_template(template_id: str, cv_data: dict, user_id: str, db: AsyncSession) -> str:
-    """Shared by /preview and /preview/thumbnails. Callers must already have
-    run rendering.normalize_cv_data on cv_data — that step is template-
-    independent, so the batch endpoint runs it once rather than once per
-    template."""
-    data = dict(cv_data)
-    if template_id == "lebenslauf":
-        lebenslauf_cache_key = f"lebenslauf_profile:{user_id}"
-        cached_profile = await get_cached(lebenslauf_cache_key)
-        if cached_profile:
-            lp = json.loads(cached_profile)
-        else:
-            profile = await resume_tailor_service.get_profile_photo_fields(db, user_id)
-            lp = await rendering.fetch_lebenslauf_photo_fields(profile)
-            await set_cached(lebenslauf_cache_key, json.dumps(lp), ttl_seconds=3600)
-        data.update(lp)
-    else:
-        data.setdefault("photo_base64", None)
-        data.setdefault("date_of_birth", None)
-        data.setdefault("nationality", None)
-    return rendering.render_html(template_id, data)
-
-
 @router.post("/tailor/{session_id}/preview")
 async def preview_tailor_html(session_id: str, request: Request, body: PreviewRequest, db: AsyncSession = Depends(get_db)):
     """Render CV template to HTML for live preview — burst-limited only (cheap
@@ -601,7 +628,7 @@ async def preview_tailor_html(session_id: str, request: Request, body: PreviewRe
 
     cv_data = dict(body.cv_data)
     rendering.normalize_cv_data(cv_data)
-    html_out = await _render_cv_template(body.template_id, cv_data, user_id, db)
+    html_out = await resume_tailor_service.render_cv_template_html(db, user_id, body.template_id, cv_data)
     return HTMLResponse(content=html_out)
 
 
@@ -636,7 +663,7 @@ async def preview_tailor_thumbnails(session_id: str, request: Request, body: Thu
 
     thumbnails: dict[str, str] = {}
     for template_id in rendering.TEMPLATE_REGISTRY:
-        thumbnails[template_id] = await _render_cv_template(template_id, cv_data, user_id, db)
+        thumbnails[template_id] = await resume_tailor_service.render_cv_template_html(db, user_id, template_id, cv_data)
 
     return ThumbnailsResponse(thumbnails=thumbnails)
 
@@ -696,12 +723,6 @@ async def generate_tailor_pdf(session_id: str, request: Request, body: PdfReques
         headers={"Content-Disposition": f'attachment; filename="tailored_cv_{body.template_id}.pdf"'},
     )
 
-
-# ── GET /tailor/templates ─────────────────────────────────────────
-
-@router.get("/tailor/templates", response_model=TemplateListResponse)
-async def list_tailor_templates():
-    return {"templates": rendering.list_templates()}
 
 
 # Saved-resumes CRUD ("My Resumes") — see saved_resumes_routes.py's own docstring.

@@ -74,6 +74,11 @@ class EditorResponse(BaseModel):
     # The client's starting point for optimistic-concurrency checks on its
     # first PATCH /draft — see TailoringSession.draft_version.
     draft_version: int = 0
+    # JD keywords absent from the resume (from the deterministic analysis) —
+    # lets the editor offer them as one-click optional additions in the
+    # Skills step instead of leaving them as an un-actionable gap list on the
+    # separate analysis page. Never auto-inserted; the user decides.
+    missing_keywords: list[str] = Field(default_factory=list)
 
 
 class TemplateListResponse(BaseModel):
@@ -109,6 +114,33 @@ class DraftSaveRequest(BaseModel):
 
 class TitleUpdateRequest(BaseModel):
     title: str = Field(..., max_length=200)
+
+
+# ── My Docs (session list) ────────────────────────────────────────
+# display_label is computed server-side (service.py::list_sessions_for_docs_page)
+# from a fallback chain: user-set title -> a real linked opportunity/
+# application's company+role -> AI-parsed target_role/target_company from the
+# tailoring prose -> "Standalone Resume". is_ai_matched is true only for the
+# AI-parsed case, so the frontend can flag it as a best-guess rather than
+# showing it with the same confidence as a real tracked-job link.
+
+class SessionSummary(BaseModel):
+    id: str
+    title: str | None
+    display_label: str
+    is_ai_matched: bool
+    template_id: str | None
+    match_score: int
+    created_at: str
+    is_draft: bool
+    # Only populated for sessions with a draft already saved - see
+    # service.py::list_sessions_for_docs_page for why a never-opened
+    # session gets no preview rather than paying for one.
+    preview_html: str | None = None
+
+
+class SessionListResponse(BaseModel):
+    sessions: list[SessionSummary]
 
 
 # ── Saved resumes ("My Resumes") ─────────────────────────────────

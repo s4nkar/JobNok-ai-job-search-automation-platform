@@ -24,12 +24,34 @@ class Settings(BaseSettings):
     ai_fallback_chain: str = "openrouter"
     # Per-call timeout (seconds) — applies to non-streaming generate_text only.
     ai_request_timeout_seconds: int = 60
+    # Global daily ceiling on LLM calls across ALL tools combined (resume
+    # tailor, cover letter, interview prep, salary, job-search scoring, ...).
+    # Distinct from the per-user daily quotas — this catches aggregate cost
+    # growth or a runaway retry loop that no individual user's quota would.
+    # Enforced in app/ai/llm/provider.py via check_tool_budget("ai_llm", ...).
+    # 0 disables the ceiling. PLACEHOLDER — tune from real usage once known.
+    ai_llm_daily_call_budget: int = 3000
+    # Reasoning-effort hint sent to Groq reasoning models (gpt-oss family) on
+    # JSON-extraction calls — "low" keeps the model from spending its
+    # max_tokens budget on invisible chain-of-thought before writing the JSON
+    # (measured: ~600 reasoning tokens -> ~10 with this set, and the
+    # json_validate_failed rate on Groq's JSON mode drops to ~0). Only sent
+    # when the configured model is a gpt-oss model; ignored otherwise. Empty
+    # string = don't send the param at all.
+    groq_reasoning_effort: str = "low"
     # Shared cache for free-text-prompt-to-structured-JSON parsing (e.g. job_search's
     # preferences_prompt, startup_hunt's strategy_prompt) — same input text always
     # extracts to the same structured filters, so no need to re-hit the LLM per request.
     prompt_parse_cache_ttl_seconds: int = 3600
 
     # Groq (OpenAI-compatible)
+    # gpt-oss-20b is a reasoning model — paired with GROQ_REASONING_EFFORT=low
+    # (above) and response_format=json_object it is a reliable structured-JSON
+    # extractor. It stays the pick because this Groq account's catalog has no
+    # plain non-reasoning general chat model (only gpt-oss 20b/120b, qwen3,
+    # allam, and the compound agentic systems) — a straight swap isn't
+    # available. Raising the effort or removing it reintroduces the
+    # max_tokens-starvation / json_validate_failed failures.
     groq_api_key: str = ""
     groq_model: str = "openai/gpt-oss-20b"
     # Fast, non-reasoning model for small "light" tier calls (e.g. free-text-prompt
@@ -59,6 +81,12 @@ class Settings(BaseSettings):
     embedding_provider: str = "jina"
     embedding_fallback_chain: str = "cohere"
     embedding_request_timeout_seconds: int = 30
+    # Global daily ceiling on embedding API calls across all callers combined —
+    # same rationale as ai_llm_daily_call_budget. Enforced in
+    # app/ai/embeddings.py via check_tool_budget("embeddings", ...). One
+    # tailoring run costs ~2 (resume once per new upload, JD every time).
+    # 0 disables. PLACEHOLDER — tune from real usage.
+    embeddings_daily_call_budget: int = 6000
 
     # Jina AI (free tier: 1M tokens/month, no card required)
     jina_api_key: str = ""

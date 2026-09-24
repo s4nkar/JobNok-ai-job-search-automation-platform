@@ -10,6 +10,7 @@ import {
   FileText, Linkedin, FileSearch, PenLine, MessageSquare,
   Briefcase, Compass, DollarSign, Mail, Radar, LogOut,
   Settings, ChevronLeft, ChevronRight, Check, X, LayoutDashboard, Search,
+  FolderOpen,
 } from 'lucide-react'
 import { useToast } from '@jobnok/ui'
 import { apiGet } from '@/lib/api'
@@ -42,6 +43,7 @@ const navGroups = [
     section: 'Manage',
     items: [
       { href: '/tracker', label: 'Follow-Up Tracker', icon: Briefcase },
+      { href: '/my-docs', label: 'My Docs', icon: FolderOpen },
       { href: '/bulk-email', label: 'Bulk Email', icon: Mail },
       { href: '/salary', label: 'Salary Research', icon: DollarSign },
     ],

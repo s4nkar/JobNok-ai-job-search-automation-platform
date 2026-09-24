@@ -11,7 +11,7 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from typing import Any
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 
 from app.shared.repository import UserScopedRepository
 from app.modules.resume_tailor.models import ResumeVersion, SavedResume, TailoringSession
@@ -121,6 +121,12 @@ class TailoringSessionRepository(UserScopedRepository[TailoringSession]):
         job_hash) backing this as a DB-level upsert; two truly-concurrent
         identical submissions are handled by the Redis single-flight lock in
         cache.py, not by a DB constraint.
+
+        A session whose analysis came back degraded (embeddings unavailable /
+        JD chunking produced nothing) is treated as stale, NOT a cache hit — it
+        re-processes on the next analyze so a transient embedding outage or a
+        since-fixed cleaning bug doesn't permanently pin a (resume, JD) pair to
+        a keyword-only result.
         """
         stmt = (
             self._scoped(select(self.model), user_id)
@@ -130,6 +136,7 @@ class TailoringSessionRepository(UserScopedRepository[TailoringSession]):
                 self.model.matcher_version == matcher_version,
                 self.model.prompt_version == prompt_version,
                 self.model.ai_status == "ok",
+                func.coalesce(self.model.analysis["degraded"].astext, "false") != "true",
             )
             .order_by(self.model.created_at.desc())
             .limit(1)

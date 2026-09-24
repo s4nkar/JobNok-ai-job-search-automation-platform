@@ -3,7 +3,7 @@
 import { TemplateId, TemplateMeta } from '@/lib/types'
 import { cn } from '@jobnok/ui'
 import { Check, ChevronLeft, ChevronRight, Lock } from 'lucide-react'
-import { ScaledResumeThumb } from './scaled-thumb'
+import { ScaledResumeThumb } from '@/components/shared/ScaledResumeThumb'
 
 const RAIL_WIDTH = 192
 
@@ -31,7 +31,7 @@ function RailCard({
         locked && 'opacity-60'
       )}
     >
-      <ScaledResumeThumb html={html} label={template.label} className="rounded-md border border-slate-200 bg-white" />
+      <ScaledResumeThumb html={html} label={template.label} lazy className="rounded-md border border-slate-200 bg-white" />
       <p className="text-[11px] font-semibold text-slate-700 mt-1.5 leading-tight truncate">{template.label}</p>
 
       {selected && (

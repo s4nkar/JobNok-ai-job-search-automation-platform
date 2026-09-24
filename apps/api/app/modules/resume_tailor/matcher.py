@@ -38,9 +38,11 @@ logger = logging.getLogger(__name__)
 STRONG_THRESHOLD = 0.72
 PARTIAL_THRESHOLD = 0.55
 # Bullets in this band are best candidates for AI rewrite — meaningful overlap,
-# but framing could be sharpened.
-REWRITE_BAND = (0.50, 0.78)
-MAX_REWRITE_BULLETS = 5
+# but framing could be sharpened. Widened from (0.50, 0.78): the tighter band
+# left many resumes with 0-1 rewrite candidates, so the editor's tailoring
+# overlay changed almost nothing beyond the headline.
+REWRITE_BAND = (0.45, 0.82)
+MAX_REWRITE_BULLETS = 7
 
 # Category weights — match the architecture doc's example scoring shape.
 SCORE_WEIGHTS = {
@@ -91,10 +93,32 @@ class RewriteCandidate:
 
 
 @dataclass
+class GroundedKeywordEvidence:
+    """A "missing" JD keyword that the candidate demonstrably already covers,
+    just in different words — e.g. the JD says "predictive analytics", the
+    resume says "predictive ML models". `evidence` is the specific resume
+    bullet that justifies it, so this is traceable, not a blanket allowance.
+    See matcher.py::_find_grounded_missing_keywords for how this is decided."""
+    keyword: str
+    evidence: str
+    evidence_section: str | None
+    score: float
+
+    def as_dict(self) -> dict:
+        return {
+            "keyword": self.keyword,
+            "evidence": self.evidence,
+            "evidence_section": self.evidence_section,
+            "score": round(self.score, 3),
+        }
+
+
+@dataclass
 class MatchResult:
     matches: list[RequirementMatch] = field(default_factory=list)
     matched_keywords: list[str] = field(default_factory=list)
     missing_keywords: list[str] = field(default_factory=list)
+    grounded_missing_keywords: list[GroundedKeywordEvidence] = field(default_factory=list)
     transferable_strengths: list[str] = field(default_factory=list)
     critical_missing: list[str] = field(default_factory=list)
     rewrite_candidates: list[RewriteCandidate] = field(default_factory=list)
@@ -107,6 +131,7 @@ class MatchResult:
             "matches": [m.as_dict() for m in self.matches],
             "matched_keywords": self.matched_keywords,
             "missing_keywords": self.missing_keywords,
+            "grounded_missing_keywords": [g.as_dict() for g in self.grounded_missing_keywords],
             "transferable_strengths": self.transferable_strengths,
             "critical_missing": self.critical_missing,
             "rewrite_candidates": [r.as_dict() for r in self.rewrite_candidates],
@@ -118,22 +143,163 @@ class MatchResult:
 
 # ── Keyword extraction (deterministic, no AI) ─────────────────────
 
-# Match likely technical tokens:
-#   - acronyms (2+ uppercase chars):  AWS, GCP, SQL, ML, NLP, API
-#   - CamelCase / PascalCase:         PyTorch, TensorFlow, JavaScript, FastAPI
-#   - dotted/hyphenated tech:         .NET, CI/CD, Node.js, C++
-#   - multi-word phrases (curated):   machine learning, computer vision
-_TOKEN_RE = re.compile(
+# Technical-token extraction is SHAPE + ALLOWLIST, not "any capitalised word".
+# The old open `[A-Z][a-z]{2,}` branch matched every sentence-initial word in a
+# JD ("Ability", "Customer", "Zealand", "Practical", "Demonstrated") and no
+# hand-maintained stopword list could keep up — the missing-keywords panel
+# filled with noise, and the same loose extraction made validation.py reject
+# perfectly good AI prose for containing the word "Proven".
+#
+# Now:
+#   - _STRUCT_TOKEN_RE  — token SHAPES that are almost never ordinary prose:
+#       acronyms (AWS, GCP, SQL, NLP, MCP), CamelCase (PyTorch, FastAPI,
+#       LangGraph), dotted (Node.js), version-suffixed (S3, GPT4, Log4j),
+#       plus/hash langs (C++, C#), and X-Y compounds (Fine-tuning, CI-CD).
+#   - _TECH_ALLOWLIST  — a bounded, stable vocabulary of real single-word tech
+#       names (python, docker, kafka, azure, terraform, langchain, ...),
+#       matched case-insensitively. Bounded list beats an unbounded blocklist.
+#   - slash compounds (LangChain/LangGraph) are split and each half re-checked;
+#       "Senior/Tech" survives neither test and is dropped.
+#   - _PHRASES (below) still covers curated multi-word terms.
+_STRUCT_TOKEN_RE = re.compile(
     r"""
     \b(
-        [A-Z][A-Za-z0-9]*(?:[+\-./][A-Za-z0-9]+)+     # C++, CI/CD, Node.js
-        | [A-Z]{2,}(?:[0-9]+)?                         # AWS, GCP, S3, ML
-        | [A-Z][a-z]+[A-Z][A-Za-z0-9]*                 # PyTorch, FastAPI
-        | [A-Z][a-z]{2,}                               # Python, Docker (single-cap is allowed)
+        [A-Za-z][A-Za-z0-9]*[+#]{1,2}                 # C++, C#, F#
+        | [A-Z][a-z]+\.[a-z]{2,}                      # Node.js, Vue.js
+        | [A-Z]{2,}[0-9]*                             # AWS, GCP, S3, NLP, MCP
+        | [A-Z][a-z]+[A-Z][A-Za-z0-9]*               # PyTorch, FastAPI, LangGraph
+        | [A-Za-z]{2,}[0-9]+[A-Za-z]*                 # S3, EC2, GPT4, Log4j, OAuth2
     )\b
     """,
     re.VERBOSE,
 )
+
+# Slash-joined tokens ("LangChain/LangGraph", "OpenAI/Microsoft", "Senior/Tech").
+_SLASH_TOKEN_RE = re.compile(r"\b[A-Za-z][A-Za-z0-9.+#-]*(?:/[A-Za-z][A-Za-z0-9.+#-]*)+\b")
+
+# Plural acronyms ("LLMs", "MCPs", "APIs"). The acronym branch of
+# _STRUCT_TOKEN_RE requires a word boundary right after the caps run, which a
+# trailing lowercase plural "s" breaks (no boundary between two word chars) -
+# so "LLMs" matched neither the acronym shape nor the allowlist. Captured
+# separately here and the "s" stripped before adding to the token set.
+_PLURAL_ACRONYM_RE = re.compile(r"\b([A-Z]{2,}[0-9]*)s\b")
+
+# Lowercase-word scan on lowercased text, for the allowlist lookup.
+_WORD_RE = re.compile(r"\b[a-z][a-z0-9]*(?:[-.+#][a-z0-9]+)*\b")
+
+# Shape test reused when re-checking each half of a split slash token.
+_CAMEL_OR_ACRONYM_RE = re.compile(r"[A-Z]{2,}[0-9]*|[A-Z][a-z]+[A-Z][A-Za-z0-9]*")
+
+# Bounded vocabulary of real single-word / dotted tech names. Canonical display
+# casing; matched case-insensitively via the derived lookup below. Grow this
+# when a genuine skill is being missed — never add prose words.
+_TECH_ALLOWLIST_CANON = {
+    # languages
+    "Python", "JavaScript", "TypeScript", "Java", "Kotlin", "Swift", "Go", "Golang",
+    "Rust", "Ruby", "PHP", "Scala", "Clojure", "Elixir", "Erlang", "Haskell", "R",
+    "MATLAB", "Julia", "Perl", "Lua", "Dart", "Groovy", "Bash", "Shell", "PowerShell",
+    "SQL", "NoSQL", "HTML", "CSS", "Sass", "SCSS", "GraphQL", "Solidity", "COBOL",
+    # runtimes / platforms
+    "Node.js", "Nodejs", "Node", "Deno", "Bun", "JVM", ".NET", "dotnet",
+    # backend frameworks / libs
+    "Django", "Flask", "FastAPI", "Rails", "Spring", "Laravel", "Express", "NestJS",
+    "Symfony", "Gin", "Phoenix", "Quarkus", "Micronaut", "Ktor", "Hibernate",
+    "SQLAlchemy", "Prisma", "TypeORM", "Sequelize", "Alembic", "Celery", "Sidekiq",
+    "Pydantic", "GraphQL",
+    # frontend
+    "React", "Angular", "Vue", "Svelte", "SolidJS", "Next.js", "Nextjs", "Nuxt",
+    "Remix", "Gatsby", "Astro", "Redux", "MobX", "RxJS", "jQuery", "Ember", "Preact",
+    "Vite", "Webpack", "Rollup", "Parcel", "esbuild", "Babel", "Tailwind", "Bootstrap",
+    "Storybook", "TanStack",
+    # testing
+    "Jest", "Vitest", "Cypress", "Playwright", "Puppeteer", "Selenium", "Mocha",
+    "Chai", "Jasmine", "Pytest", "JUnit", "TestNG", "Cucumber",
+    # mobile
+    "Flutter", "SwiftUI", "UIKit", "Jetpack", "Kotlin", "Xamarin", "Ionic",
+    # databases / stores
+    "PostgreSQL", "Postgres", "MySQL", "MariaDB", "SQLite", "Oracle", "MongoDB",
+    "DynamoDB", "Cassandra", "ScyllaDB", "CouchDB", "Redis", "Memcached",
+    "Elasticsearch", "OpenSearch", "Solr", "Neo4j", "InfluxDB", "TimescaleDB",
+    "ClickHouse", "CockroachDB", "Snowflake", "BigQuery", "Redshift", "Firebase",
+    "Firestore", "Supabase", "Pinecone", "Weaviate", "Milvus", "Qdrant", "Chroma",
+    "pgvector", "DuckDB",
+    # messaging / streaming / rpc
+    "Kafka", "RabbitMQ", "ActiveMQ", "NATS", "ZeroMQ", "Pulsar", "Kinesis", "SQS",
+    "SNS", "PubSub", "MQTT", "gRPC", "Thrift", "Avro", "Protobuf", "GraphQL",
+    # cloud providers
+    "AWS", "Azure", "GCP", "DigitalOcean", "Heroku", "Vercel", "Netlify",
+    "Cloudflare", "Linode", "Render", "Railway",
+    # cloud services
+    "EC2", "S3", "Lambda", "ECS", "EKS", "Fargate", "RDS", "Aurora", "CloudFront",
+    "Route53", "CloudWatch", "CloudFormation", "IAM", "VPC", "Athena", "Glue", "EMR",
+    "SageMaker", "Bedrock", "Cognito", "AKS", "GKE", "Foundry", "Synapse", "Dataflow",
+    "Dataproc", "Bigtable", "Vertex",
+    # containers / orchestration / mesh
+    "Docker", "Kubernetes", "K8s", "Podman", "containerd", "Helm", "Kustomize",
+    "Rancher", "OpenShift", "Nomad", "Istio", "Linkerd", "Envoy", "Consul",
+    # IaC / config mgmt
+    "Terraform", "Pulumi", "Ansible", "Chef", "Puppet", "SaltStack", "CDK",
+    "Vagrant", "Packer",
+    # CI/CD / VCS
+    "Jenkins", "CircleCI", "TravisCI", "Bamboo", "TeamCity", "ArgoCD", "Flux",
+    "Spinnaker", "Drone", "Buildkite", "Git", "GitHub", "GitLab", "Bitbucket",
+    "SVN", "Mercurial",
+    # observability
+    "Prometheus", "Grafana", "Datadog", "Splunk", "Logstash", "Kibana", "Fluentd",
+    "Jaeger", "Zipkin", "OpenTelemetry", "Sentry", "PagerDuty", "Nagios", "Zabbix",
+    "Loki", "Dynatrace",
+    # data / ETL / compute
+    "Spark", "PySpark", "Hadoop", "Hive", "Presto", "Trino", "Flink", "Beam",
+    "Airflow", "Dagster", "Prefect", "Luigi", "dbt", "Fivetran", "Airbyte", "NiFi",
+    "Talend", "Informatica", "Pandas", "NumPy", "Polars", "Dask", "Ray", "Iceberg",
+    "Hudi",
+    # ML / DL
+    "PyTorch", "TensorFlow", "Keras", "JAX", "scikit-learn", "sklearn", "XGBoost",
+    "LightGBM", "CatBoost", "Transformers", "spaCy", "NLTK", "Gensim", "OpenCV",
+    "ONNX", "MLflow", "Kubeflow", "DVC", "BentoML", "Seldon", "Triton", "TensorRT",
+    "CUDA", "cuDNN",
+    # LLM / GenAI tooling
+    "LangChain", "LangGraph", "LlamaIndex", "Haystack", "AutoGen", "CrewAI", "DSPy",
+    "Guardrails", "Ollama", "vLLM", "LiteLLM", "OpenAI", "Anthropic", "Claude",
+    "Gemini", "Mistral", "Cohere", "Llama", "RAG", "MCP", "LoRA", "QLoRA", "PEFT",
+    "RLHF", "GPT", "BERT",
+    # protocols / standards / formats
+    "HTTP", "HTTPS", "REST", "RESTful", "WebSocket", "WebRTC", "SOAP", "OAuth",
+    "OAuth2", "OIDC", "SAML", "JWT", "LDAP", "Kerberos", "TLS", "SSL", "SSH", "TCP",
+    "UDP", "DNS", "SMTP", "gRPC", "AMQP", "JSON", "XML", "YAML", "Protobuf", "Parquet",
+    "ORC",
+    # methods / practices
+    "Agile", "Scrum", "Kanban", "DevOps", "DevSecOps", "MLOps", "DataOps", "GitOps",
+    "TDD", "BDD", "DDD", "OOP", "SOLID", "CQRS",
+    # hyphenated technical terms (the _WORD_RE scan keeps the hyphen)
+    "fine-tuning", "event-driven", "test-driven", "domain-driven", "object-oriented",
+    "ci-cd", "server-side", "client-side", "multi-agent", "open-source", "low-latency",
+    "real-time", "end-to-end",
+    # OS
+    "Linux", "Unix", "Ubuntu", "Debian", "CentOS", "RHEL", "Alpine", "Windows",
+    "macOS", "iOS", "Android",
+    # tooling / BI / SaaS commonly listed as skills
+    "Jira", "Confluence", "Figma", "Postman", "Swagger", "OpenAPI", "Tableau",
+    "Looker", "Metabase", "Superset", "Segment", "Amplitude", "Mixpanel",
+    "Optimizely", "LaunchDarkly", "Auth0", "Okta", "Keycloak", "Stripe", "Twilio",
+    "Algolia", "Contentful", "Strapi", "Salesforce",
+}
+# lower -> canonical display form
+_TECH_ALLOWLIST = {s.lower(): s for s in _TECH_ALLOWLIST_CANON}
+# Collapse common spelling variants onto one canonical so "Postgres" in a
+# resume matches "PostgreSQL" in a JD (and vice versa).
+_TECH_ALLOWLIST.update({
+    "postgres": "PostgreSQL", "postgresql": "PostgreSQL",
+    "k8s": "Kubernetes", "golang": "Go", "node": "Node.js", "nodejs": "Node.js",
+    "sklearn": "scikit-learn", "restful": "REST", "oauth2": "OAuth",
+    "dotnet": ".NET", "gcp": "GCP",
+})
+
+# Slash tokens that are ONE keyword, not two — checked before splitting so
+# "CI/CD" doesn't become "CI" + "CD".
+_KNOWN_SLASH_TOKENS = {
+    "ci/cd": "CI/CD", "a/b": "A/B", "tcp/ip": "TCP/IP", "ui/ux": "UI/UX", "i/o": "I/O",
+}
 
 # Multi-word tech phrases that won't survive single-token extraction.
 _PHRASES = [
@@ -146,7 +312,7 @@ _PHRASES = [
     "design patterns",
     # Tools / platforms that read as two tokens individually
     "weights and biases", "weights & biases",
-    "amazon web services", "aws",
+    "amazon web services",
     "data pipeline", "data pipelines",
     "predictive analytics", "predictive modeling",
     "model deployment", "model serving",
@@ -159,6 +325,11 @@ _PHRASES = [
     "change detection",
     "time series",
     "object detection",
+    # Computer vision / edge / embedded
+    "pose estimation", "depth sensing", "depth estimation", "3d vision",
+    "edge ai", "embedded vision", "edge deployment", "ground truth",
+    "model optimisation", "model optimization", "image segmentation",
+    "semantic segmentation", "instance segmentation",
     # Recommender system domain
     "recommender system", "recommender systems", "collaborative filtering",
     "content-based filtering", "content based filtering",
@@ -318,26 +489,72 @@ _KEYWORD_STOPWORDS = {
     "Work",        # generic label
 }
 
+# Casefolded view, for case-insensitive checks against allowlist / split tokens.
+_KEYWORD_STOPWORDS_CF = {s.casefold() for s in _KEYWORD_STOPWORDS}
+
+
+def _stopworded(token: str) -> bool:
+    return token in _KEYWORD_STOPWORDS or token.casefold() in _KEYWORD_STOPWORDS_CF
+
 
 def extract_keywords(text: str) -> set[str]:
     """Return a set of likely technical keywords from arbitrary text.
 
-    Output is the original token casing (e.g. "PyTorch", not "pytorch"). For
-    matching, callers should casefold both sides.
+    Output is canonical / original token casing (e.g. "PyTorch", not "pytorch").
+    Callers casefold both sides for matching.
     """
-    tokens = {m.group(1) for m in _TOKEN_RE.finditer(text)}
-    tokens = {t for t in tokens if t not in _KEYWORD_STOPWORDS and len(t) >= 2}
+    tokens: set[str] = set()
 
-    # Collapse bare acronym tokens into their canonical phrase form so that
-    # e.g. "ETL" and "etl process" don't both appear as separate keywords.
-    tokens = {_TOKEN_ALIASES.get(t, t) for t in tokens}
+    # 1. High-confidence structural shapes (acronyms, CamelCase, Node.js, C++,
+    #    Fine-tuning, S3/GPT4). Stopword-filtered to drop ALL-CAPS prose words
+    #    ("REQUIREMENTS", "AND") that look like acronyms.
+    for m in _STRUCT_TOKEN_RE.finditer(text):
+        tok = m.group(1)
+        if len(tok) >= 2 and not _stopworded(tok):
+            tokens.add(_TOKEN_ALIASES.get(tok, tok))
 
+    # 1b. Plural acronyms ("LLMs" -> "LLM", "MCPs" -> "MCP").
+    for m in _PLURAL_ACRONYM_RE.finditer(text):
+        tok = m.group(1)
+        if len(tok) >= 2 and not _stopworded(tok):
+            tokens.add(_TOKEN_ALIASES.get(tok, tok))
+
+    # 2. Allowlisted single words (case-insensitive), e.g. python, docker, kafka.
     lower = text.lower()
+    for w in _WORD_RE.findall(lower):
+        canon = _TECH_ALLOWLIST.get(w)
+        if canon and not _stopworded(canon):
+            tokens.add(_TOKEN_ALIASES.get(canon, canon))
+
+    # 3. Slash compounds. A known joined form ("CI/CD") stays one token;
+    #    otherwise split and re-check each half — "LangChain/LangGraph" yields
+    #    both, "Senior/Tech" yields neither.
+    for m in _SLASH_TOKEN_RE.finditer(text):
+        whole = m.group(0)
+        known = _KNOWN_SLASH_TOKENS.get(whole.lower())
+        if known:
+            tokens.add(known)
+            continue
+        for part in whole.split("/"):
+            part = part.strip()
+            if len(part) < 2 or _stopworded(part):
+                continue
+            canon = _TECH_ALLOWLIST.get(part.lower())
+            if canon:
+                tokens.add(_TOKEN_ALIASES.get(canon, canon))
+            elif _CAMEL_OR_ACRONYM_RE.fullmatch(part):
+                tokens.add(_TOKEN_ALIASES.get(part, part))
+
+    # 4. Curated multi-word phrases.
     for phrase in _PHRASES:
         if phrase in lower:
-            # Normalise to canonical form so plural/variant forms match their base
-            canonical = _PHRASE_ALIASES.get(phrase, phrase)
-            tokens.add(canonical)
+            tokens.add(_PHRASE_ALIASES.get(phrase, phrase))
+
+    # A joined slash token subsumes its parts ("CI/CD" beats "CI" + "CD",
+    # which the acronym shape also matched at the "/" boundary).
+    for joined in _KNOWN_SLASH_TOKENS.values():
+        if joined in tokens:
+            tokens -= set(joined.split("/"))
 
     return tokens
 
@@ -345,6 +562,48 @@ def extract_keywords(text: str) -> set[str]:
 def _casefold_set(items: set[str]) -> dict[str, str]:
     """Map casefolded form → original display form. Last-write wins on collisions."""
     return {it.casefold(): it for it in items}
+
+
+# Bar for treating a "missing" keyword as terminology (grounded) rather than a
+# genuine capability gap. Deliberately the STRONG threshold, not PARTIAL — this
+# gates what generation.py's tailoring prompt is allowed to write onto the
+# candidate's resume, so it needs the same bar as an actual strong match, not
+# a loose one.
+_GROUNDED_KEYWORD_THRESHOLD = STRONG_THRESHOLD
+
+
+def _find_grounded_missing_keywords(
+    missing_keywords: list[str], jd_chunks: list[Chunk], matches: list[RequirementMatch],
+) -> list[GroundedKeywordEvidence]:
+    """For each keyword the literal keyword-set diff flagged as "missing",
+    check whether the JD sentence it came from already has a STRONG embedding
+    match against some resume bullet. If so, the candidate demonstrably has
+    the underlying skill — the JD chunk containing "predictive analytics" is a
+    strong semantic match against a resume bullet about "predictive ML
+    models" — just described in different words, and generation.py's tailoring
+    prompt may legitimately use the JD's own term when rewriting THAT specific
+    evidence. A keyword whose JD context has no strong resume match anywhere
+    is a genuine capability gap and is never auto-inserted.
+
+    `matches` is assumed aligned by position with `jd_chunks` (one
+    RequirementMatch per jd_chunk, in order — guaranteed by the loop that
+    builds `matches` in match_resume_to_jd).
+    """
+    grounded: list[GroundedKeywordEvidence] = []
+    for keyword in missing_keywords:
+        kw_cf = keyword.casefold()
+        best: RequirementMatch | None = None
+        for jd_chunk, match in zip(jd_chunks, matches):
+            if kw_cf not in jd_chunk.text.casefold():
+                continue
+            if best is None or match.score > best.score:
+                best = match
+        if best is not None and best.score >= _GROUNDED_KEYWORD_THRESHOLD and best.best_evidence:
+            grounded.append(GroundedKeywordEvidence(
+                keyword=keyword, evidence=best.best_evidence,
+                evidence_section=best.best_evidence_section, score=best.score,
+            ))
+    return grounded
 
 
 # ── Core matching ─────────────────────────────────────────────────
@@ -448,6 +707,10 @@ def match_resume_to_jd(
         critical.append(m.requirement)
     result.critical_missing = critical[:10]
 
+    result.grounded_missing_keywords = _find_grounded_missing_keywords(
+        result.missing_keywords, jd_chunks, result.matches,
+    )
+
     # Rewrite candidates: resume bullets that landed in the partial band against
     # a requirement-kind JD chunk. Sharpening the framing of these bullets is the
     # highest-value AI rewrite work.
@@ -487,7 +750,8 @@ def match_resume_to_jd(
 
     # Score breakdown.
     result.score_breakdown = _compute_score_breakdown(result.matches, len(jd_kw), len(matched_lower))
-    result.overall_score = _weighted_overall(result.score_breakdown)
+    has_domain_signal = any(m.requirement_kind == "domain" for m in result.matches)
+    result.overall_score = _weighted_overall(result.score_breakdown, has_domain_signal)
 
     return result
 
@@ -535,8 +799,23 @@ def _compute_score_breakdown(
     }
 
 
-def _weighted_overall(breakdown: dict[str, int]) -> int:
+def _weighted_overall(breakdown: dict[str, int], has_domain_signal: bool) -> int:
+    """Weighted sum of the category scores. When the JD had NO chunk
+    classified as "domain" (many postings never write an explicit "About
+    us"/company-overview section — they launch straight into responsibilities
+    and requirements), domain's 0 is an absence of signal, not evidence of a
+    poor fit — scoring it 0 anyway cost every such candidate a flat 15-point
+    penalty regardless of true fit (hit live: a strong, on-domain match
+    landed at 52% purely because the JD had no distinct "about" section).
+    Redistribute domain's weight proportionally across the categories that DO
+    have real signal instead."""
+    weights = dict(SCORE_WEIGHTS)
+    if not has_domain_signal:
+        domain_weight = weights.pop("domain")
+        remaining_total = sum(weights.values())
+        weights = {k: w + (w / remaining_total) * domain_weight for k, w in weights.items()}
+
     total = 0.0
-    for key, weight in SCORE_WEIGHTS.items():
+    for key, weight in weights.items():
         total += breakdown.get(key, 0) * weight
     return int(round(total))

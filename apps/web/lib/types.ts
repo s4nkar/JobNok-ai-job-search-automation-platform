@@ -154,6 +154,23 @@ export interface SavedResume {
   updated_at: string
 }
 
+// "My Docs" row — display_label is already computed server-side (title, or a
+// real linked job's company+role, or an AI-parsed one, or "Standalone
+// Resume"). is_ai_matched is true only for the AI-parsed case.
+export interface SessionSummary {
+  id: string
+  title: string | null
+  display_label: string
+  is_ai_matched: boolean
+  template_id: string | null
+  match_score: number
+  created_at: string
+  is_draft: boolean
+  // Only set for sessions that already have a saved draft — see the backend's
+  // list_sessions_for_docs_page for why a never-opened session gets none.
+  preview_html: string | null
+}
+
 export type TemplateId =
   | 'standard' | 'modern' | 'creative' | 'classic' | 'balanced'
   | 'minimalist' | 'professional' | 'corporate' | 'bold' | 'slate'

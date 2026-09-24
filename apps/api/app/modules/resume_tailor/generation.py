@@ -28,7 +28,11 @@ from typing import TYPE_CHECKING, Any
 from app.core.config import settings
 from app.ai.llm import provider as ai_provider
 from app.modules.resume_tailor import cache as resume_cache
+from app.modules.resume_tailor.chunker import jd_chunking_is_pathological
+from app.modules.resume_tailor.extraction import build_base_cv_data_deterministic
 from app.modules.resume_tailor.prompts import (
+    JD_CHUNK_PROMPT_VERSION,
+    JD_CHUNK_SYSTEM_PROMPT,
     JD_TRANSLATE_SYSTEM_PROMPT,
     MATCHER_VERSION,
     PROSE_PROMPT_VERSION,
@@ -37,7 +41,10 @@ from app.modules.resume_tailor.prompts import (
     TAILOR_PROSE_SYSTEM_PROMPT,
 )
 from app.modules.resume_tailor.schemas import validate_cv_data
-from app.modules.resume_tailor.validation import validate_bullet_patch, validate_headline_skills, validate_summary
+from app.modules.resume_tailor.validation import (
+    repair_summary, validate_bullet_patch, validate_headline_skills, validate_implied_skills,
+    validate_llm_jd_chunks, validate_summary,
+)
 
 if TYPE_CHECKING:
     from app.modules.resume_tailor.chunker import Chunk
@@ -50,8 +57,8 @@ logger = logging.getLogger(__name__)
 # `generation.STRUCT_PROMPT_VERSION` etc.; kept accessible here so callers
 # don't need to know the constants physically live in a sibling file.
 __all__ = [
-    "MATCHER_VERSION", "STRUCT_PROMPT_VERSION", "PROSE_PROMPT_VERSION",
-    "generate_base_cv_data", "generate_tailor_prose", "translate_jd_if_needed",
+    "MATCHER_VERSION", "STRUCT_PROMPT_VERSION", "PROSE_PROMPT_VERSION", "JD_CHUNK_PROMPT_VERSION",
+    "generate_base_cv_data", "generate_tailor_prose", "translate_jd_if_needed", "chunk_jd_with_llm_repair",
     "TailorProseResult",
 ]
 
@@ -93,7 +100,10 @@ async def _translate_jd(text: str) -> str:
     # "Let me translate this..." would silently become part of the "clean"
     # JD text fed into chunking/matching, with no error or degraded flag —
     # not a loud failure, a silently worse match score.
-    return await ai_provider.generate_text(text[:4000], JD_TRANSLATE_SYSTEM_PROMPT, max_tokens=4000, tier="light")
+    return await ai_provider.generate_text(
+        text[:4000], JD_TRANSLATE_SYSTEM_PROMPT, max_tokens=4000, tier="light",
+        reasoning_effort=settings.groq_reasoning_effort,
+    )
 
 
 async def translate_jd_if_needed(job_description: str) -> str:
@@ -109,6 +119,67 @@ async def translate_jd_if_needed(job_description: str) -> str:
         return job_description
 
 
+# ── JD chunking (LLM-primary, regex as the fallback) ──────────────────
+
+async def chunk_jd_with_llm_repair(
+    jd_text_clean: str, regex_chunks: list["Chunk"],
+) -> tuple[list["Chunk"], bool]:
+    """Returns (chunks, degraded).
+
+    LLM-PRIMARY: every JD is chunked by the LLM (JD_CHUNK_SYSTEM_PROMPT,
+    strictly validated by validate_llm_jd_chunks) — not just as a repair path
+    for a regex result that already looks broken. Previously this only fired
+    when chunker.py::jd_chunking_is_pathological flagged a near-total
+    collapse. That caught the big failures (an entire JD misclassified) but
+    structurally CANNOT catch a minor, isolated one — one bullet silently
+    dropped, one stray sentence misclassified as a requirement — because a
+    single line out of twenty-plus doesn't move an AGGREGATE statistic enough
+    to trip any threshold, however sensitive. Both of those hit live on real
+    JDs in the same session (see MATCHER_VERSION v13's note) and shipped
+    unnoticed under the old gate. Reading each line for what it actually
+    means is exactly what an LLM call does by default; no statistical gate
+    can substitute for that.
+
+    regex_chunks is now purely the FALLBACK — used only when the AI provider
+    chain is exhausted, returns malformed JSON, or the output fails
+    validate_llm_jd_chunks's verbatim/coverage check. Never raises.
+
+    degraded=True only when that fallback had to be used AND jd_chunking_
+    is_pathological still flags the fallback's own output as a likely
+    collapse — i.e. both the primary (LLM) and the safety net (regex) came up
+    short. A regex fallback that's merely imperfect (the class of bug this
+    change targets) is NOT flagged degraded — there's no reliable statistical
+    way to detect that case, which is the whole reason this is no longer
+    gated on it. degraded=False whenever the LLM path succeeds.
+    """
+    try:
+        raw = await ai_provider.generate_text(
+            f"JOB DESCRIPTION TEXT:\n{jd_text_clean[:6000]}",
+            JD_CHUNK_SYSTEM_PROMPT, max_tokens=3000, tier="heavy",
+            response_format={"type": "json_object"},
+            reasoning_effort=settings.groq_reasoning_effort,
+        )
+    except ai_provider.AIGenerationError as exc:
+        logger.warning("JD LLM chunking: all AI providers exhausted (%r) — using regex fallback", exc)
+        return regex_chunks, jd_chunking_is_pathological(regex_chunks, jd_text_clean)
+
+    try:
+        start = raw.find("{")
+        end = raw.rfind("}") + 1
+        parsed = json.loads(raw[start:end])
+    except Exception as exc:
+        logger.warning("JD LLM chunking: malformed JSON (%r) — using regex fallback", exc)
+        return regex_chunks, jd_chunking_is_pathological(regex_chunks, jd_text_clean)
+
+    chunked = validate_llm_jd_chunks(parsed.get("chunks") or [], jd_text_clean)
+    if chunked is None:
+        logger.warning("JD LLM chunking: output failed verbatim/coverage validation — using regex fallback")
+        return regex_chunks, jd_chunking_is_pathological(regex_chunks, jd_text_clean)
+
+    logger.info("JD LLM chunking succeeded: %d chunks (regex fallback would have been %d)", len(chunked), len(regex_chunks))
+    return chunked, False
+
+
 # ── Base CV structuring (JD-agnostic, cached per resume version) ───
 
 async def generate_base_cv_data(resume_text: str) -> dict[str, Any]:
@@ -121,29 +192,59 @@ RESUME TEXT:
 
     # response_format=json_object structurally constrains the output to valid
     # JSON — a "return ONLY JSON" prompt instruction alone was observed NOT
-    # being reliably honored: switching this call to tier="light" to dodge a
-    # reasoning model's chain-of-thought leak didn't fix it either, since the
-    # OpenRouter fallback model (and, on retest, the light model's own
-    # provider) exhibited the same leak. JSON mode fixes it at the API level
-    # regardless of which model serves the request, so tier="heavy" is back —
-    # better quality and a materially higher per-minute token ceiling on Groq
-    # than the light model had.
-    raw = await ai_provider.generate_text(
-        prompt, STRUCT_SYSTEM_PROMPT, max_tokens=4000, tier="heavy",
-        response_format={"type": "json_object"},
-    )
+    # being reliably honored. reasoning_effort=low (config) stops a gpt-oss
+    # model burning this max_tokens budget on hidden chain-of-thought before
+    # the JSON. max_tokens=2000 is ample for a structured CV (~800-1500 tok)
+    # and keeps this call + the separate prose call from colliding in Groq's
+    # per-minute token window.
+    try:
+        raw = await ai_provider.generate_text(
+            prompt, STRUCT_SYSTEM_PROMPT, max_tokens=2000, tier="heavy",
+            response_format={"type": "json_object"},
+            reasoning_effort=settings.groq_reasoning_effort,
+        )
+    except ai_provider.AIGenerationError as exc:
+        # Every AI provider exhausted — fall back to deterministic regex/chunker
+        # extraction instead of a 500. Lower quality, but the editor opens and
+        # the user can hand-fix fields (CLAUDE.md "Phase 2" fallback).
+        logger.warning("Base CV structuring: all AI providers exhausted (%r) — deterministic extraction", exc)
+        return build_base_cv_data_deterministic(resume_text)
+
     try:
         start = raw.find("{")
         end = raw.rfind("}") + 1
         parsed = json.loads(raw[start:end])
     except Exception as exc:
-        raise ValueError(f"Failed to structure resume: malformed LLM JSON response: {exc!r}") from exc
+        logger.warning("Base CV structuring: malformed LLM JSON (%r) — deterministic extraction", exc)
+        return build_base_cv_data_deterministic(resume_text)
 
     # response_format=json_object only guarantees valid JSON syntax, not the
     # right shape — validate_cv_data checks it field-by-field against
     # CvDataSchema and falls back per-field so one malformed field (e.g.
     # "skills" returned as a string) doesn't take down the whole result.
-    return validate_cv_data(parsed)
+    cv_data = validate_cv_data(parsed)
+    _strip_redundant_language_relocation_bullets(cv_data)
+    return cv_data
+
+
+# A mixed source section (commonly "Additional Information") getting captured
+# BOTH into the dedicated languages/relocation fields AND, under its original
+# heading, into other_sections — same content rendered twice under two
+# section titles. STRUCT_SYSTEM_PROMPT rule 9 now tells the model not to do
+# this; this is the defensive backend net for when it does anyway. Only drops
+# bullets that are themselves a restatement ("Languages ...", "Relocation
+# ..."), not the whole section, so genuinely distinct leftover content (e.g.
+# hobbies mixed into the same block) survives.
+_REDUNDANT_BULLET_RE = re.compile(r"^\s*(languages?|relocation)\b", re.I)
+
+
+def _strip_redundant_language_relocation_bullets(cv_data: dict[str, Any]) -> None:
+    sections = cv_data.get("other_sections") or []
+    cv_data["other_sections"] = [
+        {**s, "bullets": kept}
+        for s in sections
+        if (kept := [b for b in (s.get("bullets") or []) if not _REDUNDANT_BULLET_RE.match(b)])
+    ]
 
 
 # ── Tailoring prose (JD-specific, cached per resume+job+prompt+model) ──
@@ -230,6 +331,23 @@ def _bullet_ids_for_rewrites(
     return ids
 
 
+def _deterministic_fit_summary(analysis: "MatchResult") -> str:
+    """A plain-language fit assessment built only from the deterministic
+    matcher output — used to fill TailorProseResult.summary when the AI prose
+    call degrades, so the analysis panel still shows something concrete
+    instead of an empty box. Purely descriptive: it never touches
+    profile_headline/tailored_summary/bullet_rewrites (those modify the CV and
+    must stay empty on degrade so the overlay keeps the resume's real values)."""
+    parts: list[str] = []
+    if analysis.matched_keywords:
+        parts.append(f"Direct overlap on {', '.join(analysis.matched_keywords[:6])}.")
+    if analysis.transferable_strengths:
+        parts.append("Related experience: " + "; ".join(analysis.transferable_strengths[:3]) + ".")
+    if analysis.critical_missing:
+        parts.append("Gaps to address: " + "; ".join(analysis.critical_missing[:3]) + ".")
+    return " ".join(parts)
+
+
 async def _generate_tailor_prose_uncached(
     resume_text: str,
     resume_chunks: list["Chunk"],
@@ -247,8 +365,21 @@ async def _generate_tailor_prose_uncached(
     )
     transferable_block = "; ".join(analysis.transferable_strengths[:6]) or "(none)"
     critical_block = "; ".join(analysis.critical_missing[:6]) or "(none)"
-    missing_block = ", ".join(analysis.missing_keywords) or "(none)"
     matched_block = ", ".join(analysis.matched_keywords[:15]) or "(none)"
+
+    # grounded_missing_keywords are the subset of "missing" keywords with a
+    # STRONG embedding match somewhere in the resume — terminology gaps, not
+    # capability gaps (see matcher.py::_find_grounded_missing_keywords). Pulled
+    # out of the MISSING KEYWORDS ban list and given their own block with the
+    # specific evidence that justifies each one, so the model can legitimately
+    # use the JD's own term instead of being told to avoid it entirely.
+    grounded_by_keyword = {g.keyword: g for g in analysis.grounded_missing_keywords}
+    genuine_missing = [k for k in analysis.missing_keywords if k not in grounded_by_keyword]
+    missing_block = ", ".join(genuine_missing) or "(none)"
+    terminology_gaps_block = (
+        "\n".join(f'- "{g.keyword}" — evidence: "{g.evidence}"' for g in analysis.grounded_missing_keywords)
+        or "(none)"
+    )
 
     prompt = f"""DETERMINISTIC ANALYSIS (do not recompute, just use):
 OVERALL SCORE: {analysis.overall_score}
@@ -256,7 +387,9 @@ SCORE BREAKDOWN: {json.dumps(analysis.score_breakdown)}
 MATCHED KEYWORDS (use these to pick headline skills — prefer the ones most role-relevant): {matched_block}
 TRANSFERABLE STRENGTHS: {transferable_block}
 CRITICAL GAPS (do not invent experience to cover these): {critical_block}
-MISSING KEYWORDS — absent from resume, do not mention in any prose field: {missing_block}
+TERMINOLOGY GAPS (JD term missing, but grounded by the evidence shown — see the TERMINOLOGY GAPS rules above for how to use these):
+{terminology_gaps_block}
+MISSING KEYWORDS — no grounded evidence anywhere in the resume, do not mention in any prose field under any framing: {missing_block}
 
 REWRITE CANDIDATES (only patch these — echo the bracketed id, not the text):
 {rewrites_block}
@@ -268,17 +401,22 @@ RESUME (for extracting target_role/target_company and grounding prose only):
 {resume_text[:3500]}"""
 
     try:
-        # response_format=json_object — see generate_base_cv_data's comment.
-        # tier="heavy" for the same reason: JSON compliance is now enforced
-        # structurally, so there's no need to trade down to the light
-        # model's lower quality and lower per-minute token ceiling.
+        # response_format=json_object + reasoning_effort=low — see
+        # generate_base_cv_data's comment. max_tokens=1800: the full JSON
+        # (headline + summary + up to 5 bullet patches + skills + fit summary)
+        # can run 700-900 tokens, and 1200 left too thin a margin, especially
+        # when a reasoning model also wants a few hundred tokens.
         raw, provider = await ai_provider.generate_text_with_provider(
-            prompt, TAILOR_PROSE_SYSTEM_PROMPT, max_tokens=1200, tier="heavy",
+            prompt, TAILOR_PROSE_SYSTEM_PROMPT, max_tokens=1800, tier="heavy",
             response_format={"type": "json_object"},
+            reasoning_effort=settings.groq_reasoning_effort,
         )
     except ai_provider.AIGenerationError as exc:
         logger.warning("Tailor prose generation failed: %r — returning deterministic analysis only", exc)
-        return TailorProseResult(ai_status="degraded", ai_error=str(exc))
+        return TailorProseResult(
+            ai_status="degraded", ai_error=str(exc),
+            summary=_deterministic_fit_summary(analysis),
+        )
 
     try:
         start = raw.find("{")
@@ -286,9 +424,21 @@ RESUME (for extracting target_role/target_company and grounding prose only):
         parsed = json.loads(raw[start:end])
     except Exception:
         logger.warning("LLM tailor prose returned malformed JSON: %r", raw[:300])
-        return TailorProseResult(ai_status="degraded", ai_provider=provider, ai_error="malformed JSON response")
+        return TailorProseResult(
+            ai_status="degraded", ai_provider=provider, ai_error="malformed JSON response",
+            summary=_deterministic_fit_summary(analysis),
+        )
 
     validation_flags: list[str] = []
+
+    # Casefolded allowlist of terminology-gap keywords — validate_* below
+    # accepts these as grounded even though they aren't literally in
+    # resume_text, because matcher.py already required a STRONG embedding
+    # match against a specific resume bullet before including them here. This
+    # is what lets a legitimate rewrite ("predictive ML models" -> "predictive
+    # analytics") survive the same anti-hallucination check that blocks an
+    # actually-fabricated claim.
+    grounded_keywords_cf = {g.keyword.casefold() for g in analysis.grounded_missing_keywords}
 
     bullet_text_by_id = {f"b{i}": chunk.text for i, chunk in enumerate(resume_chunks)}
     bullet_rewrites: list[dict[str, str]] = []
@@ -298,7 +448,7 @@ RESUME (for extracting target_role/target_company and grounding prose only):
         original = bullet_text_by_id.get(bullet_id) if bullet_id else None
         if not improved or original is None:
             continue
-        result = validate_bullet_patch(bullet_id, improved, resume_text)
+        result = validate_bullet_patch(bullet_id, improved, resume_text, extra_grounded_keywords_cf=grounded_keywords_cf)
         if not result.ok:
             validation_flags.append(f"{bullet_id}: {'; '.join(result.violations)}")
             continue
@@ -311,17 +461,41 @@ RESUME (for extracting target_role/target_company and grounding prose only):
     # untailored value," so this composes for free, no extra fallback logic.
     profile_headline = parsed.get("profile_headline", "")
     if profile_headline:
-        headline_check = validate_headline_skills(profile_headline, resume_text)
+        headline_check = validate_headline_skills(profile_headline, resume_text, extra_grounded_keywords_cf=grounded_keywords_cf)
         if not headline_check.ok:
             validation_flags.append(f"profile_headline: {'; '.join(headline_check.violations)}")
             profile_headline = ""
 
     tailored_summary = parsed.get("tailored_summary", "")
     if tailored_summary:
-        summary_check = validate_summary(tailored_summary, resume_text)
+        summary_check = validate_summary(tailored_summary, resume_text, extra_grounded_keywords_cf=grounded_keywords_cf)
         if not summary_check.ok:
-            validation_flags.append(f"tailored_summary: {'; '.join(summary_check.violations)}")
-            tailored_summary = ""
+            # A weak-match JD often has the model try to acknowledge a gap
+            # in-line ("...though it lacks direct computer vision
+            # experience"), mentioning ONE missing keyword in an otherwise
+            # well-grounded 2-4 sentence summary. Dropping the whole field
+            # for that (the old behavior) meant a real, correctly-tailored
+            # summary was discarded wholesale, leaving the resume's stock
+            # original untouched. Try a surgical repair first.
+            repaired, repaired_ok = repair_summary(tailored_summary, resume_text, extra_grounded_keywords_cf=grounded_keywords_cf)
+            if repaired_ok:
+                validation_flags.append(
+                    f"tailored_summary: dropped ungrounded sentence(s) ({'; '.join(summary_check.violations)}), kept the rest"
+                )
+                tailored_summary = repaired
+            else:
+                validation_flags.append(f"tailored_summary: {'; '.join(summary_check.violations)}")
+                tailored_summary = ""
+
+    # implied_skills_to_add is NOT trusted from the LLM as-is — measured live,
+    # the model does not reliably distinguish "genuinely implied" from "the
+    # whole missing-keywords list" (it copied MISSING KEYWORDS verbatim in
+    # testing). validate_implied_skills is the hard backstop: only a listed
+    # peer-tool pair survives.
+    implied_skills_to_add, implied_violations = validate_implied_skills(
+        parsed.get("implied_skills_to_add") or [], resume_text,
+    )
+    validation_flags.extend(implied_violations)
 
     return TailorProseResult(
         target_role=parsed.get("target_role", ""),
@@ -329,7 +503,7 @@ RESUME (for extracting target_role/target_company and grounding prose only):
         profile_headline=profile_headline,
         tailored_summary=tailored_summary,
         bullet_rewrites=bullet_rewrites,
-        implied_skills_to_add=parsed.get("implied_skills_to_add") or [],
+        implied_skills_to_add=implied_skills_to_add,
         summary=parsed.get("summary", ""),
         ai_status="ok",
         ai_provider=provider,
@@ -374,10 +548,22 @@ async def generate_tailor_prose(
 
     result = await _generate_tailor_prose_uncached(resume_text, resume_chunks, job_description, analysis)
 
-    if result.ai_status == "ok":
-        try:
-            await resume_cache.set_prose_cache(user_id, resume_hash, job_hash, PROSE_PROMPT_VERSION, model_label, result.as_dict())
-        except Exception:
-            pass
+    try:
+        if result.ai_status == "ok":
+            await resume_cache.set_prose_cache(
+                user_id, resume_hash, job_hash, PROSE_PROMPT_VERSION, model_label, result.as_dict(),
+            )
+        else:
+            # Fail static: cache the degraded result for a short window so the
+            # burst of retries the UI banner invites ("try again shortly")
+            # doesn't re-run the whole exhausted provider chain each time (which
+            # also kept re-arming the LLM circuit breaker). A genuine recovery
+            # is picked up once this short TTL lapses — no force_refresh needed.
+            await resume_cache.set_prose_cache(
+                user_id, resume_hash, job_hash, PROSE_PROMPT_VERSION, model_label, result.as_dict(),
+                ttl_seconds=resume_cache.PROSE_DEGRADED_CACHE_TTL_SECONDS,
+            )
+    except Exception:
+        pass
 
     return result
