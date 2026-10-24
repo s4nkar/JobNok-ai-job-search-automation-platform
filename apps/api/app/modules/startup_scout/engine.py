@@ -789,7 +789,7 @@ def _parse_company(item: dict[str, str], source_platform: str = "web") -> dict[s
     # anything real remains after it - "Berlin, Germany. Investor Name. Seed
     # round." must survive this (real content follows the location), while
     # "Berlin, Germany." alone must not.
-    _name_word = r"[A-Za-zÀ-ÖØ-öø-ÿ][\w'’.-]*"
+    _name_word = r"[A-Za-zÀ-ÖØ-öø-ÿ][\w'’-]*"
     _after_location = re.sub(
         rf"^(?:private\.?\s*)?{_name_word}(?:\s{_name_word})*,\s*{_name_word}(?:\s{_name_word})*\.?\s*",
         "", body, count=1, flags=re.I,

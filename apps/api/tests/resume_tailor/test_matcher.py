@@ -96,24 +96,36 @@ def test_match_resume_to_jd_degraded_when_embeddings_shape_mismatched():
 
 
 def test_match_resume_to_jd_non_english_text_documents_current_ascii_limitation():
-    """matcher.py has no language awareness — extract_keywords() is a plain
-    ASCII-letter regex with no translation/language filtering (that lives
-    upstream in generation.py's _is_english/_translate_jd). Non-English
-    structural words simply pass through as if they were skills; this test
-    documents that as a known limitation of the deterministic layer, not a
-    behavior to assert as correct."""
+    """matcher.py has no language awareness — extract_keywords() has no
+    translation/language filtering (that lives upstream in generation.py's
+    _is_english/_translate_jd). This used to also mean a bare capitalised
+    German word like "Erfahrung" got swept in as if it were a skill, back
+    when technical-token extraction was an open `[A-Z][a-z]{2,}` regex
+    matching any capitalised word. It no longer does: extraction is now
+    SHAPE (acronym/CamelCase/dotted) + a bounded allowlist (see
+    extract_keywords's module comment), and "Erfahrung" matches neither — a
+    side effect of that precision rewrite, not something this layer set out
+    to fix for non-English text specifically. Kept as a regression check
+    for that side effect, not as a claim the matcher understands German."""
     kws = extract_keywords("Erfahrung mit Python und Kubernetes")
     assert "Python" in kws
     assert "Kubernetes" in kws
-    assert "Erfahrung" in kws
+    assert "Erfahrung" not in kws
 
 
 def test_rewrite_candidates_capped_at_max_rewrite_bullets():
+    # The rewrite-pool loop takes only the top-3 resume bullets (by
+    # similarity) PER JD requirement chunk (see matcher.py's `order[:3]`) —
+    # with only 2 JD chunks the raw pool can never exceed 2*3=6 candidates,
+    # so MAX_REWRITE_BULLETS=7 could never be the binding constraint. 3 JD
+    # chunks (3*3=9 raw, before the cap) is the minimum needed to actually
+    # exercise the cap instead of the per-chunk top-3 limit.
     jd_chunks = [
         Chunk(kind="requirement", section="requirements", text="Requires strong backend engineering"),
         Chunk(kind="requirement", section="requirements", text="Requires distributed systems experience"),
+        Chunk(kind="requirement", section="requirements", text="Requires cloud infrastructure experience"),
     ]
-    jd_embeddings = np.array([[1.0, 0.0], [0.0, 1.0]], dtype="float32")
+    jd_embeddings = np.array([[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]], dtype="float32")
 
     resume_chunks = [
         Chunk(kind="bullet", section="experience", text=f"Built backend service number {i} for production traffic")
@@ -121,8 +133,18 @@ def test_rewrite_candidates_capped_at_max_rewrite_bullets():
     ] + [
         Chunk(kind="bullet", section="experience", text=f"Designed distributed system component number {i} at scale")
         for i in range(3)
+    ] + [
+        Chunk(kind="bullet", section="experience", text=f"Managed cloud infrastructure component number {i} at scale")
+        for i in range(3)
     ]
-    resume_embeddings = np.array([[0.65, 0.1]] * 3 + [[0.1, 0.65]] * 3, dtype="float32")
+    # Each group of 3 sits squarely in REWRITE_BAND against its own JD chunk
+    # (dot product 0.65) and well below the band against the other two (0.1) —
+    # similarity_matrix is a raw dot product on these pre-"normalized"
+    # fixtures (see app/ai/embeddings.py::similarity_matrix), same pattern as
+    # the original 2-group version of this test.
+    resume_embeddings = np.array(
+        [[0.65, 0.1, 0.1]] * 3 + [[0.1, 0.65, 0.1]] * 3 + [[0.1, 0.1, 0.65]] * 3, dtype="float32",
+    )
 
     result = match_resume_to_jd(
         resume_chunks=resume_chunks, resume_embeddings=resume_embeddings,
