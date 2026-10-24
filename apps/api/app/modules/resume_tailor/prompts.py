@@ -121,7 +121,22 @@ from __future__ import annotations
 # current Flash-class model) so the always-on cost is worth it for closing
 # this entire class of failure instead of chasing it one regex pattern at a
 # time.
-MATCHER_VERSION = "matcher-v13"
+# v14: three fixes together, all changing `analysis` for the same JD/resume
+# pair - bumped together so a cached session can't straddle them. (a)
+# JD_CHUNK_PROMPT_VERSION v2 - the LLM-primary chunker (now the normal path,
+# not just the fallback) was classifying recruiting-pitch and section-
+# transition sentences as "requirement", surfacing them as a nonsensical
+# transferable strength / literal critical gap. (b) chunker.py's regex
+# fallback got the same fix (_NON_REQUIREMENT_SENTENCE_RE), since it's still
+# live whenever the LLM chain is exhausted or its output fails validation.
+# (c) matcher.py::extract_keywords now infers the generic "vector database"
+# category keyword from a specific product name (ChromaDB, Pinecone, ...) -
+# previously a resume demonstrating e.g. ChromaDB + BM25 + RRF hybrid
+# retrieval was marked a CRITICAL GAP against a JD asking generically for
+# "vector databases" because neither the literal keyword overlap nor (in this
+# case) the embedding similarity bridged the product-name-vs-category-noun
+# gap.
+MATCHER_VERSION = "matcher-v14"
 # v3 switched these to tier="light" to dodge a reasoning model leaking
 # chain-of-thought instead of JSON — didn't fully fix it (the OpenRouter
 # fallback model leaked too, and the light model's own lower per-minute
@@ -166,7 +181,27 @@ STRUCT_PROMPT_VERSION = "struct-v5"
 # keywords stay banned exactly as before. validation.py's grounding check now
 # accepts an allowlist of these terms — see validate_text_against_resume's
 # extra_grounded_keywords_cf parameter.
-PROSE_PROMPT_VERSION = "prose-v11"
+# v12: hit live — a bullet_patch ended "...demonstrating proficiency across
+# experimentation, architecture, and delivery", lifted near-verbatim from an
+# unrelated JD requirement ("Comfortable working across experimentation,
+# architecture, and delivery") that had NO resume evidence and was separately
+# listed as a critical gap. The existing keyword-grounding check couldn't see
+# this at all — "experimentation"/"architecture"/"delivery" are ordinary
+# words, not tech/proper-noun tokens. The "don't paraphrase JD sentence
+# fragments" rule existed for tailored_summary already but was never extended
+# to bullet_patches, which is exactly where this hit. New hard rule added for
+# bullet_patches; validation.py::validate_no_jd_phrase_copying is the
+# deterministic backstop for both fields (a shared 5+-word sequence with the
+# JD not also present in the bullet's own original / the whole resume is
+# rejected), and repair_summary now checks it per-sentence too.
+# v13: hit live — a 54%/"Moderate match" result's "summary" field read "Strong
+# fit for Deloitte's AI Engineer role," flatly contradicting the numeric score
+# shown right next to it on screen. OVERALL SCORE was already in the prompt
+# (DETERMINISTIC ANALYSIS block) but nothing told the model to anchor its
+# qualitative language to it. Added explicit score-band calibration mirroring
+# the frontend's own thresholds (page.tsx: 70+ strong, 40-69 moderate, <40
+# weak) so the two numbers users see together can't disagree.
+PROSE_PROMPT_VERSION = "prose-v13"
 
 
 JD_TRANSLATE_SYSTEM_PROMPT = (
@@ -257,6 +292,7 @@ Hard rules:
   * PRESERVE every number, percentage, and metric from the original
   * NEVER add tools, methods, or domains absent from the original, UNLESS it's a TERMINOLOGY GAP term whose evidence bullet is THIS bullet_id — then using that exact term is allowed
   * Adjust only verb / framing / emphasis — the evidence must stay identical
+  * Do NOT copy or closely paraphrase wording from the TARGET REQUIREMENT or the job description into the rewrite. Describe what the candidate actually did — never restate the JD's own language as if it were the candidate's achievement, even when the bullet is being sharpened to align with that requirement.
 - implied_skills_to_add: from the MISSING KEYWORDS list, add an item ONLY when it is a close sibling of something the candidate demonstrably already uses — either (a) a standard supporting library for their existing stack (Pandas/NumPy implied by hands-on PyTorch/ML work), or (b) a direct peer/alternative tool within the SAME ecosystem as one they already use (LangGraph or LlamaIndex implied by hands-on LangChain experience; Docker Compose implied by Docker). Group under a category name matching this resume's own skills section labelling.
   NEVER add: a different vendor's managed platform for something the resume already covers a different way (e.g. AWS SageMaker/Bedrock when the resume only shows direct OpenAI API use), a tool from a domain the resume shows no evidence of, or anything requiring dedicated infrastructure/training the resume doesn't demonstrate. When genuinely unsure, leave it out — omission is always safer than a claim the candidate can't defend in an interview.
   Leave empty if nothing qualifies.
@@ -271,7 +307,7 @@ Hard rules:
   * Write in your own words — do NOT copy or paraphrase sentence fragments from the JD requirements. The summary must read as the candidate's own story, not a reflection of the job posting.
   * A TERMINOLOGY GAP term may appear here ONLY when the sentence is describing that term's specific evidence (see the TERMINOLOGY GAPS explanation above).
   * NEVER mention any skill from the MISSING KEYWORDS list — those have no grounded evidence anywhere in the resume.
-- summary: ground the fit assessment in the provided CRITICAL GAPS and TRANSFERABLE STRENGTHS.
+- summary: ground the fit assessment in the provided CRITICAL GAPS and TRANSFERABLE STRENGTHS. Calibrate your language to OVERALL SCORE so it never contradicts the number shown next to it on screen: below 40 is a weak match ("needs significant tailoring" — lead with the gaps), 40-69 is a moderate match (acknowledge real gaps alongside strengths — do NOT call this "strong"), 70+ is a strong match. Never describe the fit as "strong" when OVERALL SCORE is under 70.
 - Return ONLY valid JSON, no markdown fences."""
 
 
@@ -279,7 +315,23 @@ Hard rules:
 # chunker.py::jd_chunking_is_pathological flags the regex chunker's output as a
 # likely collapse (see MATCHER_VERSION v9's note) - bump this if the prompt text
 # changes in a way that could change chunk boundaries/kinds.
-JD_CHUNK_PROMPT_VERSION = "jdchunk-v1"
+# v2: hit live on a Deloitte JD (now LLM-PRIMARY per MATCHER_VERSION v13, so
+# this prompt runs on every JD, not just pathological ones). Two sentences
+# with no concrete skill/tool/experience content got classified "requirement"
+# instead of "domain": "We're looking for an AI Engineer in our Auckland
+# office to create solutions for our clients!" (surfaced as a nonsensical
+# "transferable strength" - nothing there to reframe) and "Enough about us -
+# let's talk about you. You are someone with:" (surfaced as a literal
+# "Critical Gap", as if the sentence itself were a missing skill). Root cause:
+# rule 3's old "requirement" definition listed "what they're looking for" as
+# a trigger phrase, meant for section lead-ins, but the model pattern-matched
+# it onto a literal "We're looking for a/an <role>..." recruiting-pitch
+# sentence that names no actual qualification. Tightened rule 3 to require a
+# CONCRETE skill/tool/experience for "requirement" and added three worked
+# examples (including both sentences above) disambiguating recruiting-pitch
+# and section-transition sentences from real asks, regardless of which
+# section they physically sit in.
+JD_CHUNK_PROMPT_VERSION = "jdchunk-v2"
 
 JD_CHUNK_SYSTEM_PROMPT = """You segment a job description into typed chunks for a resume-matching system. You do NOT rewrite, summarise, or paraphrase anything - every chunk's "text" must be copied EXACTLY, character for character, from the source, or it will be discarded by a downstream verbatim check.
 
@@ -287,9 +339,12 @@ CRITICAL RULES:
 1. Split the JD into individual requirement / responsibility / company-context statements - roughly one bullet point or one sentence per chunk. Do not merge multiple distinct asks into one chunk, even if the source text has no line break between them (job boards often strip formatting, gluing several bullet items onto one line with no separator between them).
 2. "text" must be an EXACT verbatim substring of the source - same words, same punctuation, same casing, no added or removed words. No summarising, no combining two source bullets into one, no fixing typos.
 3. Classify each chunk's "kind":
-   - "requirement": a qualification, skill, or experience the candidate must have (years of experience, tools, "you should have...", "what they're looking for", bonus / nice-to-have items).
+   - "requirement": a qualification, skill, tool, or experience the candidate must have — the sentence names something CONCRETE (a tool, technique, years of experience, a credential, a specific trait). "What they're looking for" / "you should have" is the SECTION's lead-in phrasing, not itself a requirement — classify the individual sentences that actually name something concrete, not the lead-in sentence.
    - "responsibility": a task or activity the role involves day to day ("what you'll do", "you'll be...", "you'd be...").
-   - "domain": company background, culture, funding, customers, benefits, or anything that isn't a specific ask of the candidate.
+   - "domain": company background, culture, funding, customers, benefits, recruiting-pitch / mission statements, and boilerplate section transitions that name no concrete skill or task. Classify these "domain" even when they sit directly inside a Qualifications/Requirements section, immediately before or after real requirement bullets — their location in the document doesn't change what they are.
+     Example: "We're looking for a Senior Engineer with 5+ years of Python experience" -> requirement (names a concrete skill: 5+ years Python).
+     Example: "We're looking for an AI Engineer in our Auckland office to create solutions for our clients!" -> domain (no skill, tool, or qualification named — a mission/recruiting-pitch sentence, not an ask).
+     Example: "Enough about us - let's talk about you. You are someone with:" -> domain (a section hand-off sentence with no concrete content of its own, even though real requirements immediately follow it).
 4. Cover the ENTIRE source text - do not skip sentences. If a sentence doesn't clearly fit requirement/responsibility, classify it "domain" rather than omitting it.
 5. Do not invent chunks that aren't in the source text, and do not output the same sentence twice.
 

@@ -43,7 +43,7 @@ from app.modules.resume_tailor.prompts import (
 from app.modules.resume_tailor.schemas import validate_cv_data
 from app.modules.resume_tailor.validation import (
     repair_summary, validate_bullet_patch, validate_headline_skills, validate_implied_skills,
-    validate_llm_jd_chunks, validate_summary,
+    validate_llm_jd_chunks, validate_no_jd_phrase_copying, validate_summary,
 )
 
 if TYPE_CHECKING:
@@ -449,8 +449,17 @@ RESUME (for extracting target_role/target_company and grounding prose only):
         if not improved or original is None:
             continue
         result = validate_bullet_patch(bullet_id, improved, resume_text, extra_grounded_keywords_cf=grounded_keywords_cf)
-        if not result.ok:
-            validation_flags.append(f"{bullet_id}: {'; '.join(result.violations)}")
+        # Complementary to the check above: catches wording LIFTED FROM THE JD
+        # itself (ordinary words, not tech keywords, so the check above can't
+        # see it) rather than the candidate's own experience — e.g. a bullet
+        # about React frontend work ending "...demonstrating proficiency
+        # across experimentation, architecture, and delivery", copied
+        # near-verbatim from an unrelated JD requirement that has no resume
+        # evidence at all. See validate_no_jd_phrase_copying's docstring.
+        phrase_copy_result = validate_no_jd_phrase_copying(bullet_id, improved, job_description, original)
+        if not result.ok or not phrase_copy_result.ok:
+            violations = result.violations + phrase_copy_result.violations
+            validation_flags.append(f"{bullet_id}: {'; '.join(violations)}")
             continue
         bullet_rewrites.append({"original": original, "improved": improved})
 
@@ -469,7 +478,13 @@ RESUME (for extracting target_role/target_company and grounding prose only):
     tailored_summary = parsed.get("tailored_summary", "")
     if tailored_summary:
         summary_check = validate_summary(tailored_summary, resume_text, extra_grounded_keywords_cf=grounded_keywords_cf)
-        if not summary_check.ok:
+        # Same complementary phrase-copy check as bullet_patches above — the
+        # prompt already tells the model not to paraphrase JD sentence
+        # fragments into the summary, but that's prompt-level only until this
+        # verifies it.
+        summary_phrase_copy_check = validate_no_jd_phrase_copying("tailored_summary", tailored_summary, job_description, resume_text)
+        if not summary_check.ok or not summary_phrase_copy_check.ok:
+            combined_violations = summary_check.violations + summary_phrase_copy_check.violations
             # A weak-match JD often has the model try to acknowledge a gap
             # in-line ("...though it lacks direct computer vision
             # experience"), mentioning ONE missing keyword in an otherwise
@@ -477,14 +492,16 @@ RESUME (for extracting target_role/target_company and grounding prose only):
             # for that (the old behavior) meant a real, correctly-tailored
             # summary was discarded wholesale, leaving the resume's stock
             # original untouched. Try a surgical repair first.
-            repaired, repaired_ok = repair_summary(tailored_summary, resume_text, extra_grounded_keywords_cf=grounded_keywords_cf)
+            repaired, repaired_ok = repair_summary(
+                tailored_summary, resume_text, extra_grounded_keywords_cf=grounded_keywords_cf, jd_text=job_description,
+            )
             if repaired_ok:
                 validation_flags.append(
-                    f"tailored_summary: dropped ungrounded sentence(s) ({'; '.join(summary_check.violations)}), kept the rest"
+                    f"tailored_summary: dropped ungrounded/copied sentence(s) ({'; '.join(combined_violations)}), kept the rest"
                 )
                 tailored_summary = repaired
             else:
-                validation_flags.append(f"tailored_summary: {'; '.join(summary_check.violations)}")
+                validation_flags.append(f"tailored_summary: {'; '.join(combined_violations)}")
                 tailored_summary = ""
 
     # implied_skills_to_add is NOT trusted from the LLM as-is — measured live,

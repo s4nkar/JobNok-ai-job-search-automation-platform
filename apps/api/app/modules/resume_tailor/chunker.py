@@ -583,8 +583,29 @@ def _split_sentences(text: str) -> list[str]:
 # "we're looking for engineers who want to..." (a real requirements lead-in
 # elsewhere this session) has real content after "looking for" and is left
 # alone by the trailing-word anchor.
+#
+# Two more shapes added, both hit live on a Deloitte JD whose body had no
+# header the chunker recognised before "About The Role And Team" - every
+# sentence before that landed in the default "requirement" kind (see
+# chunk_jd's current_kind init) with nothing to correct it:
+#   - "We're looking for an AI Engineer in our Auckland office to create
+#     artificial intelligence solutions for Deloitte's staff and clients!" -
+#     a recruiting-pitch sentence, not a specific ask - surfaced as a
+#     "transferable strength" needing to be "reframed," which makes no sense
+#     for a sentence with no actual skill content. Anchored to the "a/an
+#     <role> in our <place> office" shape so it doesn't swallow a real
+#     "we're looking for someone who can architect X" requirement sentence.
+#   - "Enough about us - let's talk about you." / "You are someone with:" -
+#     boilerplate hand-off sentences immediately before a real Qualifications
+#     list (whether the regex sentence-splitter keeps them as one chunk or
+#     two depends on punctuation, so both are covered separately). Landed as
+#     a literal "Critical Gap," as if the sentence itself were a missing
+#     skill.
 _NON_REQUIREMENT_SENTENCE_RE = re.compile(
-    r"^(this\s+is\s+not\s+a\s+.{0,30}?\s+role\b|we'?re\s+looking\s+for\s+\w+\.?\s*$)",
+    r"^(this\s+is\s+not\s+a\s+.{0,30}?\s+role\b|we'?re\s+looking\s+for\s+\w+\.?\s*$"
+    r"|we'?re\s+looking\s+for\s+(?:a|an)\s+.{0,40}?\s+in\s+our\s+.{0,30}?\s+office\b"
+    r"|enough\s+about\s+us\b|let'?s\s+talk\s+about\s+you\b"
+    r"|you\s+are\s+someone\s+with\s*:?\s*$)",
     re.I,
 )
 
