@@ -66,6 +66,24 @@ __all__ = [
     "TailorProseResult",
 ]
 
+# Every LLM call in this module that reads resume/JD text truncated it with
+# its own ad-hoc, separately-too-tight character limit (6000 for base CV
+# structuring and resume chunking, 3500/2500 for the prose call's grounding
+# snippets). Hit live: a dense but ordinary 2-page resume (6,593 chars) got
+# silently cut off mid-"SELECTED PROJECTS" at the 6000-char structuring
+# limit - BEFORE a real project (EmoTract) and the entire "ADDITIONAL
+# INFORMATION" section (Languages, Work Authorisation), both of which simply
+# never existed as far as the model could tell. No error, no warning - the
+# tailored CV just quietly came out missing real content. One shared, generous
+# ceiling used everywhere resume/JD text is truncated, instead of N
+# independently-wrong numbers. ~16k chars covers a dense 3-4 page resume with
+# real margin; input-token cost at this size is negligible against a Groq-
+# class model's context window, and every one of these calls is cached
+# (per resume version, or per JD content hash), so it's a one-time cost, not
+# a per-request one.
+_RESUME_TEXT_MAX_CHARS = 16000
+_JD_TEXT_MAX_CHARS = 12000
+
 
 # ── JD language detection/translation ───────────────────────────────
 
@@ -158,7 +176,7 @@ async def chunk_jd_with_llm_repair(
     """
     try:
         raw = await ai_provider.generate_text(
-            f"JOB DESCRIPTION TEXT:\n{jd_text_clean[:6000]}",
+            f"JOB DESCRIPTION TEXT:\n{jd_text_clean[:_JD_TEXT_MAX_CHARS]}",
             JD_CHUNK_SYSTEM_PROMPT, max_tokens=3000, tier="heavy",
             response_format={"type": "json_object"},
             reasoning_effort=settings.groq_reasoning_effort,
@@ -204,7 +222,7 @@ async def chunk_resume_with_llm_repair(
     """
     try:
         raw = await ai_provider.generate_text(
-            f"RESUME TEXT:\n{resume_text[:6000]}",
+            f"RESUME TEXT:\n{resume_text[:_RESUME_TEXT_MAX_CHARS]}",
             RESUME_CHUNK_SYSTEM_PROMPT, max_tokens=3000, tier="heavy",
             response_format={"type": "json_object"},
             reasoning_effort=settings.groq_reasoning_effort,
@@ -235,10 +253,19 @@ async def chunk_resume_with_llm_repair(
 async def generate_base_cv_data(resume_text: str) -> dict[str, Any]:
     """Pure structural parsing, no JD/tailoring context — called at most once
     per resume_version_id and persisted to resume_versions.base_cv_data."""
+    if len(resume_text) > _RESUME_TEXT_MAX_CHARS:
+        # Silent truncation is exactly what produced the EmoTract/Additional-
+        # Information bug (see _RESUME_TEXT_MAX_CHARS's comment) - this is
+        # still a truncation (an even longer resume could still exceed 16k),
+        # but now it's a logged, investigable event instead of an invisible one.
+        logger.warning(
+            "Base CV structuring: resume_text is %d chars, truncating to %d — content past that point will be invisible to the model",
+            len(resume_text), _RESUME_TEXT_MAX_CHARS,
+        )
     prompt = f"""Parse this resume into the required JSON format.
 
 RESUME TEXT:
-{resume_text[:6000]}"""
+{resume_text[:_RESUME_TEXT_MAX_CHARS]}"""
 
     # response_format=json_object structurally constrains the output to valid
     # JSON — a "return ONLY JSON" prompt instruction alone was observed NOT
@@ -273,28 +300,84 @@ RESUME TEXT:
     # CvDataSchema and falls back per-field so one malformed field (e.g.
     # "skills" returned as a string) doesn't take down the whole result.
     cv_data = validate_cv_data(parsed)
-    _strip_redundant_language_relocation_bullets(cv_data)
+    _strip_redundant_section_duplicates(cv_data)
     return cv_data
 
 
 # A mixed source section (commonly "Additional Information") getting captured
-# BOTH into the dedicated languages/relocation fields AND, under its original
-# heading, into other_sections — same content rendered twice under two
-# section titles. STRUCT_SYSTEM_PROMPT rule 9 now tells the model not to do
-# this; this is the defensive backend net for when it does anyway. Only drops
-# bullets that are themselves a restatement ("Languages ...", "Relocation
-# ..."), not the whole section, so genuinely distinct leftover content (e.g.
-# hobbies mixed into the same block) survives.
-_REDUNDANT_BULLET_RE = re.compile(r"^\s*(languages?|relocation)\b", re.I)
+# BOTH into the dedicated languages/relocation/work_authorization fields AND,
+# under its original heading, into other_sections — same content rendered
+# twice under two section titles. STRUCT_SYSTEM_PROMPT rule 9 now tells the
+# model not to do this; this is the defensive backend net for when it does
+# anyway. Only drops bullets that are themselves a restatement ("Languages
+# ...", "Relocation ...", "Work Authorisation ..."), not the whole section, so
+# genuinely distinct leftover content (e.g. hobbies mixed into the same
+# block) survives.
+_REDUNDANT_BULLET_RE = re.compile(r"^\s*(languages?|relocation|work\s*authori[sz]ation)\b", re.I)
+
+# The same double-extraction failure mode, but for an ENTIRE other_sections
+# entry whose HEADING duplicates a dedicated top-level section — hit live on
+# a real tailoring: an other_sections entry headed like "Selected Projects"
+# (holding a single squashed "<name> - <tech stack>" line with no real
+# bullets) rendered as a second, near-empty "Selected Projects" block
+# alongside the real `projects` array, with "Publications" sandwiched between
+# the two. STRUCT_SYSTEM_PROMPT rule 8 says a heading this specific belongs
+# ONLY in its dedicated field, so a TRUE duplicate (dedicated field already
+# populated) is dropped outright. But "duplicate" was the wrong assumption
+# for languages/relocation/work_authorization specifically: those are simple
+# scalar/list fields the model can get WRONG in the other direction - writing
+# the content ONLY into other_sections and never populating the dedicated
+# field at all (not a double-extraction, just a mis-extraction). Dropping
+# unconditionally would silently delete the only copy - hit exactly this
+# live, immediately after the first version of this function shipped (Work
+# Authorisation vanished from a tailored CV; Languages/Relocation survived
+# only because they happened to land in their dedicated fields correctly
+# that time). So for those three specifically: migrate the content INTO the
+# empty dedicated field instead of discarding it, and only drop the
+# other_sections entry once something now owns that content. The array-
+# shaped dedicated sections (projects/publications/experience/education/
+# skills) stay drop-only - reconstructing a Project{name,tech,bullets} or
+# Publication{title,venue,year} from a flat bullet string is too lossy/
+# error-prone to attempt automatically.
+_RESERVED_SECTION_HEADING_RE = re.compile(
+    r"^\s*((selected\s+|personal\s+|side\s+|featured\s+)?projects?|publications?|"
+    r"experience|education|skills|technical\s+skills)\s*:?\s*$",
+    re.I,
+)
+_SIMPLE_FIELD_HEADING_RE = re.compile(r"^\s*(languages?|relocation|work\s*authori[sz]ation)\s*:?\s*$", re.I)
 
 
-def _strip_redundant_language_relocation_bullets(cv_data: dict[str, Any]) -> None:
+def _migrate_simple_field_if_empty(cv_data: dict[str, Any], heading: str, bullets: list[str]) -> bool:
+    """Returns True if this other_sections entry's content was moved into its
+    dedicated field (or the field already had it) - either way the caller
+    should drop the other_sections entry. Returns False if the heading isn't
+    one of these three fields at all, leaving the entry for the caller to
+    decide on by other means."""
+    m = _SIMPLE_FIELD_HEADING_RE.match(heading)
+    if not m or not bullets:
+        return False
+    key = "relocation" if heading.lower().startswith("reloc") else (
+        "work_authorization" if heading.lower().startswith("work") else "languages"
+    )
+    if not cv_data.get(key):
+        cv_data[key] = list(bullets) if key == "languages" else " ".join(bullets)
+    return True
+
+
+def _strip_redundant_section_duplicates(cv_data: dict[str, Any]) -> None:
     sections = cv_data.get("other_sections") or []
-    cv_data["other_sections"] = [
-        {**s, "bullets": kept}
-        for s in sections
-        if (kept := [b for b in (s.get("bullets") or []) if not _REDUNDANT_BULLET_RE.match(b)])
-    ]
+    kept_sections = []
+    for s in sections:
+        heading = (s.get("heading") or "").strip()
+        bullets = s.get("bullets") or []
+        if _migrate_simple_field_if_empty(cv_data, heading, bullets):
+            continue
+        if _RESERVED_SECTION_HEADING_RE.match(heading):
+            continue
+        kept_bullets = [b for b in bullets if not _REDUNDANT_BULLET_RE.match(b)]
+        if kept_bullets:
+            kept_sections.append({**s, "bullets": kept_bullets})
+    cv_data["other_sections"] = kept_sections
 
 
 # ── Tailoring prose (JD-specific, cached per resume+job+prompt+model) ──
@@ -445,10 +528,10 @@ REWRITE CANDIDATES (only patch these — echo the bracketed id, not the text):
 {rewrites_block}
 
 JOB DESCRIPTION:
-{job_description[:2500]}
+{job_description[:_JD_TEXT_MAX_CHARS]}
 
 RESUME (for extracting target_role/target_company and grounding prose only):
-{resume_text[:3500]}"""
+{resume_text[:_RESUME_TEXT_MAX_CHARS]}"""
 
     try:
         # response_format=json_object + reasoning_effort=low — see
