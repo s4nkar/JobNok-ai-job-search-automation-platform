@@ -671,14 +671,29 @@ def jd_chunking_is_pathological(chunks: list[Chunk], source_text: str) -> bool:
 
     Skipped entirely for short JDs - too little text for the share checks to
     be a meaningful signal rather than noise."""
+    return _chunking_is_pathological(chunks, source_text, {"requirement", "responsibility"})
+
+
+def resume_chunking_is_pathological(chunks: list[Chunk], source_text: str) -> bool:
+    """Resume-chunking counterpart to jd_chunking_is_pathological, same two
+    tells applied to "bullet"+"skill" content instead of "requirement"+
+    "responsibility" — those are the kinds matcher.py actually scores against
+    (rewrite_candidates only draws from kind="bullet"; extract_keywords leans
+    heavily on "skill" chunks), so a regex-chunker collapse that dumps most of
+    a resume into "header"/"summary" would otherwise starve the matcher of
+    scorable content the same way an all-"domain" JD does."""
+    return _chunking_is_pathological(chunks, source_text, {"bullet", "skill"})
+
+
+def _chunking_is_pathological(chunks: list[Chunk], source_text: str, signal_kinds: set[str]) -> bool:
     total_len = len(source_text)
     if total_len < _PATHOLOGICAL_MIN_TEXT_LEN:
         return False
 
-    req_resp_len = sum(len(c.text) for c in chunks if c.kind in ("requirement", "responsibility"))
+    signal_len = sum(len(c.text) for c in chunks if c.kind in signal_kinds)
     max_chunk_len = max((len(c.text) for c in chunks), default=0)
 
     return (
-        req_resp_len / total_len < _PATHOLOGICAL_MAX_REQ_RESP_SHARE
+        signal_len / total_len < _PATHOLOGICAL_MAX_REQ_RESP_SHARE
         or max_chunk_len / total_len > _PATHOLOGICAL_MAX_SINGLE_CHUNK_SHARE
     )

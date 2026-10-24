@@ -32,12 +32,14 @@ class ResumeVersionRepository(UserScopedRepository[ResumeVersion]):
         chunks: list[dict],
         embeddings: list[list[float]],
         embeddings_model: str | None,
+        chunks_version: str | None = None,
     ) -> ResumeVersion:
         return await self.create(
             user_id,
             sha256=sha256,
             raw_text=raw_text,
             chunks=chunks,
+            chunks_version=chunks_version,
             embeddings=embeddings,
             embeddings_model=embeddings_model,
         )

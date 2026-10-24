@@ -12,8 +12,9 @@ Three entry points sharing one implementation, for prose fields:
     validate_headline_skills — the skill segments of profile_headline
     validate_summary         — tailored_summary
 
-Plus one for the LLM-based JD chunking repair path:
-    validate_llm_jd_chunks   — see its own docstring
+Plus one for each LLM-based chunking repair path:
+    validate_llm_jd_chunks     — see its own docstring
+    validate_llm_resume_chunks — see its own docstring
 
 A failing field is dropped (falls back to the untailored original — see
 generation.py/rendering.py), never a hard failure of the whole /tailor
@@ -391,6 +392,75 @@ def validate_llm_jd_chunks(raw_chunks: list[dict], source_text: str) -> list[Chu
         seen_normalized.add(normalized)
         covered_chars += len(normalized)
         kept.append((pos, Chunk(kind=kind, section=JD_KIND_TO_SECTION[kind], text=text.strip())))
+
+    if covered_chars / len(normalized_source) < _LLM_CHUNK_MIN_COVERAGE:
+        return None
+
+    kept.sort(key=lambda pair: pair[0])
+    return [chunk for _, chunk in kept]
+
+
+# ── LLM-based resume chunking repair (generation.py::chunk_resume_with_llm_repair) ──
+
+_LLM_RESUME_CHUNK_KINDS = {"bullet", "skill", "summary", "header"}
+# Matches chunker.py::_RESUME_SECTION_PATTERNS's section names exactly, plus
+# "header" (the pre-first-section / section-title catch-all the regex chunker
+# also uses). Fixed vocabulary, not free text: matcher.py's rewrite-candidate
+# pool explicitly excludes bullets from certain sections by name ("education",
+# "header", "publications", "certifications", "languages" — see its
+# rewrite_pool loop), so a made-up section label from the LLM would silently
+# bypass that exclusion instead of just being dropped here.
+_LLM_RESUME_CHUNK_SECTIONS = {
+    "experience", "projects", "education", "skills", "summary",
+    "publications", "certifications", "languages", "header",
+}
+
+
+def validate_llm_resume_chunks(raw_chunks: list[dict], source_text: str) -> list[Chunk] | None:
+    """Resume-chunking counterpart to validate_llm_jd_chunks — identical
+    verbatim-substring + coverage contract (see that function's docstring for
+    the full rationale), applied to generation.py's resume-chunking path
+    instead of JD chunking.
+
+    One structural difference from the JD version: a JD chunk's "section" is
+    fully determined by its "kind" (JD_KIND_TO_SECTION), but a resume's
+    section varies freely (experience vs projects vs skills vs ...), so the
+    LLM must supply "section" directly here rather than have it derived. It's
+    checked against the fixed _LLM_RESUME_CHUNK_SECTIONS vocabulary above —
+    an unrecognised value drops the chunk, same as an unrecognised "kind".
+    """
+    if not isinstance(raw_chunks, list) or not raw_chunks:
+        return None
+
+    normalized_source = _normalize_for_match(source_text)
+    if not normalized_source:
+        return None
+
+    kept: list[tuple[int, Chunk]] = []
+    covered_chars = 0
+    seen_normalized: set[str] = set()
+
+    for entry in raw_chunks:
+        if not isinstance(entry, dict):
+            continue
+        kind = entry.get("kind")
+        section = entry.get("section")
+        text = entry.get("text")
+        if (
+            kind not in _LLM_RESUME_CHUNK_KINDS
+            or section not in _LLM_RESUME_CHUNK_SECTIONS
+            or not isinstance(text, str)
+        ):
+            continue
+        normalized = _normalize_for_match(text)
+        if len(normalized) < _LLM_CHUNK_MIN_TEXT_LEN or normalized in seen_normalized:
+            continue
+        pos = normalized_source.find(normalized)
+        if pos == -1:
+            continue
+        seen_normalized.add(normalized)
+        covered_chars += len(normalized)
+        kept.append((pos, Chunk(kind=kind, section=section, text=text.strip())))
 
     if covered_chars / len(normalized_source) < _LLM_CHUNK_MIN_COVERAGE:
         return None

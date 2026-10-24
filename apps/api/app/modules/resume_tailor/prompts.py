@@ -350,3 +350,33 @@ CRITICAL RULES:
 
 Return ONLY this JSON shape, no markdown fences:
 {"chunks": [{"kind": "requirement" | "responsibility" | "domain", "text": "<verbatim source substring>"}]}"""
+
+
+# v1: first version. Symmetric to JD_CHUNK_PROMPT_VERSION — resume chunking was
+# pure regex (chunker.py::chunk_resume) until now, the one asymmetry left after
+# JD chunking went LLM-primary (MATCHER_VERSION v13). Same LLM-primary-with-
+# validated-fallback pattern (chunk_resume_with_llm_repair + validate_llm_
+# resume_chunks), on the theory that the regex resume chunker likely has
+# similar edge-case bugs to the ones the JD side had (e.g. the dedicated
+# _looks_like_title_or_company_line heuristic exists because "Software
+# Engineer Feb 2023 - Oct 2023" once got misclassified as a rewritable bullet
+# — an LLM given the same instruction directly just doesn't make that mistake
+# without needing a bespoke regex for it).
+RESUME_CHUNK_PROMPT_VERSION = "resumechunk-v1"
+
+RESUME_CHUNK_SYSTEM_PROMPT = """You segment a resume into typed chunks for a job-matching system. You do NOT rewrite, summarise, or paraphrase anything - every chunk's "text" must be copied EXACTLY, character for character, from the source, or it will be discarded by a downstream verbatim check.
+
+CRITICAL RULES:
+1. Split the resume into individual bullets, skills, and other distinct units - roughly one achievement/bullet point or one skill item per chunk. Do not merge multiple distinct bullets into one chunk, even if the source text has no clear line break between them.
+2. "text" must be an EXACT verbatim substring of the source - same words, same punctuation, same casing, no added or removed words, no fixing typos.
+3. Classify each chunk's "kind":
+   - "bullet": an achievement, responsibility, or accomplishment statement under a job or project entry - something the candidate DID (names an action, a result, a metric, or a tool used).
+   - "skill": a single named tool, technology, language, or skill-list item, typically from a Skills/Technologies section.
+   - "summary": a professional-summary / profile / objective paragraph.
+   - "header": structural metadata that is NOT an achievement - a job-title-plus-date-range line ("Software Engineer Feb 2023 - Oct 2023"), a company/location line, a section title, or the name/contact-info block at the top. Never classify a job-title+date-range line as "bullet" - there's nothing in it to rewrite, and doing so lets a nonsense line get patched later as if it were a real achievement.
+4. Assign each chunk a "section" from EXACTLY this set: experience, projects, education, skills, summary, publications, certifications, languages, header. Use "header" for anything before the first real section (name, title line, contact info) and for section title lines themselves.
+5. Cover the ENTIRE source text - do not skip content. If a line doesn't clearly fit bullet/skill/summary, classify it "header" rather than omitting it.
+6. Do not invent chunks that aren't in the source text, and do not output the same line twice.
+
+Return ONLY this JSON shape, no markdown fences:
+{"chunks": [{"kind": "bullet" | "skill" | "summary" | "header", "section": "<one of the section names above>", "text": "<verbatim source substring>"}]}"""

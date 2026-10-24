@@ -28,7 +28,7 @@ from typing import TYPE_CHECKING, Any
 from app.core.config import settings
 from app.ai.llm import provider as ai_provider
 from app.modules.resume_tailor import cache as resume_cache
-from app.modules.resume_tailor.chunker import jd_chunking_is_pathological
+from app.modules.resume_tailor.chunker import jd_chunking_is_pathological, resume_chunking_is_pathological
 from app.modules.resume_tailor.extraction import build_base_cv_data_deterministic
 from app.modules.resume_tailor.prompts import (
     JD_CHUNK_PROMPT_VERSION,
@@ -36,6 +36,8 @@ from app.modules.resume_tailor.prompts import (
     JD_TRANSLATE_SYSTEM_PROMPT,
     MATCHER_VERSION,
     PROSE_PROMPT_VERSION,
+    RESUME_CHUNK_PROMPT_VERSION,
+    RESUME_CHUNK_SYSTEM_PROMPT,
     STRUCT_PROMPT_VERSION,
     STRUCT_SYSTEM_PROMPT,
     TAILOR_PROSE_SYSTEM_PROMPT,
@@ -43,7 +45,7 @@ from app.modules.resume_tailor.prompts import (
 from app.modules.resume_tailor.schemas import validate_cv_data
 from app.modules.resume_tailor.validation import (
     repair_summary, validate_bullet_patch, validate_headline_skills, validate_implied_skills,
-    validate_llm_jd_chunks, validate_no_jd_phrase_copying, validate_summary,
+    validate_llm_jd_chunks, validate_llm_resume_chunks, validate_no_jd_phrase_copying, validate_summary,
 )
 
 if TYPE_CHECKING:
@@ -58,7 +60,9 @@ logger = logging.getLogger(__name__)
 # don't need to know the constants physically live in a sibling file.
 __all__ = [
     "MATCHER_VERSION", "STRUCT_PROMPT_VERSION", "PROSE_PROMPT_VERSION", "JD_CHUNK_PROMPT_VERSION",
+    "RESUME_CHUNK_PROMPT_VERSION",
     "generate_base_cv_data", "generate_tailor_prose", "translate_jd_if_needed", "chunk_jd_with_llm_repair",
+    "chunk_resume_with_llm_repair",
     "TailorProseResult",
 ]
 
@@ -177,6 +181,52 @@ async def chunk_jd_with_llm_repair(
         return regex_chunks, jd_chunking_is_pathological(regex_chunks, jd_text_clean)
 
     logger.info("JD LLM chunking succeeded: %d chunks (regex fallback would have been %d)", len(chunked), len(regex_chunks))
+    return chunked, False
+
+
+async def chunk_resume_with_llm_repair(
+    resume_text: str, regex_chunks: list["Chunk"],
+) -> tuple[list["Chunk"], bool]:
+    """Resume-chunking counterpart to chunk_jd_with_llm_repair — same
+    LLM-PRIMARY contract: every resume is chunked by the LLM
+    (RESUME_CHUNK_SYSTEM_PROMPT, validated by validate_llm_resume_chunks),
+    regex_chunks is purely the fallback for a provider outage, malformed
+    JSON, or a validation failure. Never raises.
+
+    Unlike JD chunking (recomputed on every /tailor request), this only runs
+    once per resume version — _resolve_resume_version in routes.py persists
+    the result to resume_versions.chunks, so the LLM cost here is one-time
+    per uploaded resume, not per job application tailored against it.
+
+    degraded=True only when the fallback was used AND resume_chunking_is_
+    pathological still flags the fallback's own output as a likely collapse —
+    mirrors chunk_jd_with_llm_repair's degraded semantics exactly.
+    """
+    try:
+        raw = await ai_provider.generate_text(
+            f"RESUME TEXT:\n{resume_text[:6000]}",
+            RESUME_CHUNK_SYSTEM_PROMPT, max_tokens=3000, tier="heavy",
+            response_format={"type": "json_object"},
+            reasoning_effort=settings.groq_reasoning_effort,
+        )
+    except ai_provider.AIGenerationError as exc:
+        logger.warning("Resume LLM chunking: all AI providers exhausted (%r) — using regex fallback", exc)
+        return regex_chunks, resume_chunking_is_pathological(regex_chunks, resume_text)
+
+    try:
+        start = raw.find("{")
+        end = raw.rfind("}") + 1
+        parsed = json.loads(raw[start:end])
+    except Exception as exc:
+        logger.warning("Resume LLM chunking: malformed JSON (%r) — using regex fallback", exc)
+        return regex_chunks, resume_chunking_is_pathological(regex_chunks, resume_text)
+
+    chunked = validate_llm_resume_chunks(parsed.get("chunks") or [], resume_text)
+    if chunked is None:
+        logger.warning("Resume LLM chunking: output failed verbatim/coverage validation — using regex fallback")
+        return regex_chunks, resume_chunking_is_pathological(regex_chunks, resume_text)
+
+    logger.info("Resume LLM chunking succeeded: %d chunks (regex fallback would have been %d)", len(chunked), len(regex_chunks))
     return chunked, False
 
 

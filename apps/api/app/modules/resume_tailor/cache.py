@@ -14,9 +14,14 @@ Key layout:
         "base_cv_data_prompt_version": str | absent,
     }
     prose:{user_id}:{resume_hash}:{job_hash}:{prompt_version}:{model} → JSON tailoring prose
+    jdchunk:{jd_hash}:{chunk_prompt_version} → JSON {"chunks": [...], "degraded": bool}
 
-The hash is scoped per user_id to prevent cross-user content inference via cache
-timing (knowing whether another user uploaded the same resume).
+The resume/prose hashes are scoped per user_id to prevent cross-user content
+inference via cache timing (knowing whether another user uploaded the same
+resume). jdchunk is deliberately NOT user-scoped — JD chunking output reveals
+nothing about any specific user (it's a pure function of the JD's own text),
+and the whole point is letting multiple applicants targeting the same posting
+share one LLM chunking call instead of each paying for their own.
 """
 
 from __future__ import annotations
@@ -178,3 +183,50 @@ async def acquire_tailor_lock(user_id: str, resume_hash: str, job_hash: str, for
     suffix = "force" if force_refresh else "normal"
     key = f"tailor:{user_id}:{resume_hash}:{job_hash}:{suffix}:lock"
     return await acquire_lock(key, _TAILOR_LOCK_TTL_SECONDS)
+
+
+# ── JD chunk cache ───────────────────────────────────────────────────
+# NOT scoped by user_id — see the module docstring's "jdchunk" entry for why.
+# Keyed on the CLEANED jd text (post chunker.py::clean_jd_text), not the raw
+# submitted string: raw text varies between users/sessions even for the exact
+# same posting (different copy-paste source formatting, plus per-session
+# tracker metadata the job-tracker UI appends and clean_jd_text strips — see
+# chunker.py's _JD_METADATA_SENTINEL). Hashing post-clean text is what
+# actually makes "two different applicants, same posting" hit the same key.
+
+# 7 days, not the resume cache's 30 — a job posting gets edited or pulled far
+# more often than a candidate's resume changes, so a stale chunking of a
+# since-edited posting shouldn't linger as long.
+_JD_CHUNK_CACHE_TTL_SECONDS = 60 * 60 * 24 * 7
+
+
+def compute_jd_hash(jd_text_clean: str) -> str:
+    """SHA256 of the CLEANED JD text. Deterministic per normalized content —
+    callers must pass the already-cleaned text (clean_jd_text output), not
+    the raw form submitted, or cross-user cache hits won't materialize."""
+    return hashlib.sha256(jd_text_clean.strip().encode("utf-8")).hexdigest()
+
+
+def _jd_chunk_cache_key(jd_hash: str, chunk_prompt_version: str) -> str:
+    # chunk_prompt_version in the key means a JD_CHUNK_PROMPT_VERSION bump
+    # naturally busts this cache too, same pattern as the prose cache's
+    # prompt_version+model axis above.
+    return f"jdchunk:{jd_hash}:{chunk_prompt_version}"
+
+
+async def get_jd_chunk_cache(jd_hash: str, chunk_prompt_version: str) -> dict[str, Any] | None:
+    raw = await get_cached(_jd_chunk_cache_key(jd_hash, chunk_prompt_version))
+    if not raw:
+        return None
+    try:
+        return json.loads(raw)
+    except (json.JSONDecodeError, TypeError):
+        return None
+
+
+async def set_jd_chunk_cache(jd_hash: str, chunk_prompt_version: str, entry: dict[str, Any]) -> None:
+    await set_cached(
+        _jd_chunk_cache_key(jd_hash, chunk_prompt_version),
+        json.dumps(entry),
+        ttl_seconds=_JD_CHUNK_CACHE_TTL_SECONDS,
+    )
