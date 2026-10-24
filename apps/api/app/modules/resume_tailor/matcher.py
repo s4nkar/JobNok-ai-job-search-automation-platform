@@ -222,7 +222,7 @@ _TECH_ALLOWLIST_CANON = {
     "Elasticsearch", "OpenSearch", "Solr", "Neo4j", "InfluxDB", "TimescaleDB",
     "ClickHouse", "CockroachDB", "Snowflake", "BigQuery", "Redshift", "Firebase",
     "Firestore", "Supabase", "Pinecone", "Weaviate", "Milvus", "Qdrant", "Chroma",
-    "pgvector", "DuckDB",
+    "ChromaDB", "FAISS", "pgvector", "DuckDB",
     # messaging / streaming / rpc
     "Kafka", "RabbitMQ", "ActiveMQ", "NATS", "ZeroMQ", "Pulsar", "Kinesis", "SQS",
     "SNS", "PubSub", "MQTT", "gRPC", "Thrift", "Avro", "Protobuf", "GraphQL",
@@ -355,6 +355,22 @@ _PHRASE_ALIASES: dict[str, str] = {
     "recommender systems": "recommender system",
     "agentic pipelines": "agentic pipeline",
     "mcp servers": "mcp server",
+}
+
+# Specific vector-DB product names imply the generic "vector database"
+# category phrase. Hit live: a resume listing "ChromaDB" + BM25 + RRF +
+# cross-encoder re-ranking was marked a CRITICAL GAP against a JD asking for
+# "vector databases, embedding models, retrieval frameworks, and evaluation
+# techniques" — exact-string keyword overlap never bridges "ChromaDB" ↔
+# "vector database" (different tokens), and the embedding similarity between
+# that generic category phrase and the specific-tool-name resume bullet
+# landed under PARTIAL_THRESHOLD too, so nothing caught it. Deliberately
+# narrow to products that ARE vector databases and nothing else — unlike
+# Cohere/OpenAI (ambiguous: used for LLMs as often as embeddings), a
+# ChromaDB/Pinecone/Weaviate/etc. mention is unambiguous evidence.
+_VECTOR_DB_PRODUCTS_CF = {
+    "chroma", "chromadb", "pinecone", "weaviate", "milvus", "qdrant",
+    "pgvector", "faiss",
 }
 
 # Token → canonical phrase. Applied after stopword filtering so a bare acronym
@@ -555,6 +571,12 @@ def extract_keywords(text: str) -> set[str]:
     for joined in _KNOWN_SLASH_TOKENS.values():
         if joined in tokens:
             tokens -= set(joined.split("/"))
+
+    # A specific vector-DB product implies the generic "vector database"
+    # category (see _VECTOR_DB_PRODUCTS_CF) — added, not substituted, so the
+    # specific product name is still visible as its own matched keyword too.
+    if {t.casefold() for t in tokens} & _VECTOR_DB_PRODUCTS_CF:
+        tokens.add("vector database")
 
     return tokens
 

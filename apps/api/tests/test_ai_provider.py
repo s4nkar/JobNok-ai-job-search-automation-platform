@@ -23,8 +23,34 @@ def _patch_settings(monkeypatch):
     monkeypatch.setattr(settings, "openrouter_api_key", "test-openrouter-key")
 
 
+def _patch_cache_bypass(monkeypatch):
+    """Isolates _run_chain's dispatch loop from Redis/Upstash entirely.
+    circuit_is_open and check_tool_budget both go out over HTTP (Upstash's
+    REST API) through the exact same httpx.AsyncClient.post these tests
+    monkeypatch for the LLM provider calls below — left unpatched, that real
+    (or CI's placeholder) Upstash call gets intercepted by fake_post too,
+    silently popping a response meant for the LLM mock and desyncing the
+    whole sequence (hit live: a 3-response 429/429/200 fixture produced a
+    successful result attributed to the wrong provider, because the first two
+    "provider" calls fake_post saw were actually circuit_is_open checks, not
+    LLM calls at all)."""
+    async def _not_open(scope, provider_name):
+        return False
+
+    async def _record_noop(scope, provider_name, *, ok):
+        return None
+
+    async def _budget_ok(scope, daily_budget):
+        return True
+
+    monkeypatch.setattr(provider, "circuit_is_open", _not_open)
+    monkeypatch.setattr(provider, "record_provider_result", _record_noop)
+    monkeypatch.setattr(provider, "check_tool_budget", _budget_ok)
+
+
 async def test_run_chain_retries_same_provider_once_after_429_then_succeeds(monkeypatch):
     _patch_settings(monkeypatch)
+    _patch_cache_bypass(monkeypatch)
 
     sleep_calls = []
 
@@ -50,6 +76,7 @@ async def test_run_chain_retries_same_provider_once_after_429_then_succeeds(monk
 
 async def test_run_chain_falls_through_to_next_provider_if_retry_also_rate_limited(monkeypatch):
     _patch_settings(monkeypatch)
+    _patch_cache_bypass(monkeypatch)
 
     async def fake_sleep(seconds):
         return None
@@ -73,6 +100,7 @@ async def test_run_chain_falls_through_to_next_provider_if_retry_also_rate_limit
 
 async def test_run_chain_raises_after_all_providers_exhausted_on_429(monkeypatch):
     _patch_settings(monkeypatch)
+    _patch_cache_bypass(monkeypatch)
 
     async def fake_sleep(seconds):
         return None

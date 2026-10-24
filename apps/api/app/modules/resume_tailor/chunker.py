@@ -583,8 +583,29 @@ def _split_sentences(text: str) -> list[str]:
 # "we're looking for engineers who want to..." (a real requirements lead-in
 # elsewhere this session) has real content after "looking for" and is left
 # alone by the trailing-word anchor.
+#
+# Two more shapes added, both hit live on a Deloitte JD whose body had no
+# header the chunker recognised before "About The Role And Team" - every
+# sentence before that landed in the default "requirement" kind (see
+# chunk_jd's current_kind init) with nothing to correct it:
+#   - "We're looking for an AI Engineer in our Auckland office to create
+#     artificial intelligence solutions for Deloitte's staff and clients!" -
+#     a recruiting-pitch sentence, not a specific ask - surfaced as a
+#     "transferable strength" needing to be "reframed," which makes no sense
+#     for a sentence with no actual skill content. Anchored to the "a/an
+#     <role> in our <place> office" shape so it doesn't swallow a real
+#     "we're looking for someone who can architect X" requirement sentence.
+#   - "Enough about us - let's talk about you." / "You are someone with:" -
+#     boilerplate hand-off sentences immediately before a real Qualifications
+#     list (whether the regex sentence-splitter keeps them as one chunk or
+#     two depends on punctuation, so both are covered separately). Landed as
+#     a literal "Critical Gap," as if the sentence itself were a missing
+#     skill.
 _NON_REQUIREMENT_SENTENCE_RE = re.compile(
-    r"^(this\s+is\s+not\s+a\s+.{0,30}?\s+role\b|we'?re\s+looking\s+for\s+\w+\.?\s*$)",
+    r"^(this\s+is\s+not\s+a\s+.{0,30}?\s+role\b|we'?re\s+looking\s+for\s+\w+\.?\s*$"
+    r"|we'?re\s+looking\s+for\s+(?:a|an)\s+.{0,40}?\s+in\s+our\s+.{0,30}?\s+office\b"
+    r"|enough\s+about\s+us\b|let'?s\s+talk\s+about\s+you\b"
+    r"|you\s+are\s+someone\s+with\s*:?\s*$)",
     re.I,
 )
 
@@ -650,14 +671,29 @@ def jd_chunking_is_pathological(chunks: list[Chunk], source_text: str) -> bool:
 
     Skipped entirely for short JDs - too little text for the share checks to
     be a meaningful signal rather than noise."""
+    return _chunking_is_pathological(chunks, source_text, {"requirement", "responsibility"})
+
+
+def resume_chunking_is_pathological(chunks: list[Chunk], source_text: str) -> bool:
+    """Resume-chunking counterpart to jd_chunking_is_pathological, same two
+    tells applied to "bullet"+"skill" content instead of "requirement"+
+    "responsibility" — those are the kinds matcher.py actually scores against
+    (rewrite_candidates only draws from kind="bullet"; extract_keywords leans
+    heavily on "skill" chunks), so a regex-chunker collapse that dumps most of
+    a resume into "header"/"summary" would otherwise starve the matcher of
+    scorable content the same way an all-"domain" JD does."""
+    return _chunking_is_pathological(chunks, source_text, {"bullet", "skill"})
+
+
+def _chunking_is_pathological(chunks: list[Chunk], source_text: str, signal_kinds: set[str]) -> bool:
     total_len = len(source_text)
     if total_len < _PATHOLOGICAL_MIN_TEXT_LEN:
         return False
 
-    req_resp_len = sum(len(c.text) for c in chunks if c.kind in ("requirement", "responsibility"))
+    signal_len = sum(len(c.text) for c in chunks if c.kind in signal_kinds)
     max_chunk_len = max((len(c.text) for c in chunks), default=0)
 
     return (
-        req_resp_len / total_len < _PATHOLOGICAL_MAX_REQ_RESP_SHARE
+        signal_len / total_len < _PATHOLOGICAL_MAX_REQ_RESP_SHARE
         or max_chunk_len / total_len > _PATHOLOGICAL_MAX_SINGLE_CHUNK_SHARE
     )

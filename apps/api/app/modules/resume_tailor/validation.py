@@ -12,8 +12,9 @@ Three entry points sharing one implementation, for prose fields:
     validate_headline_skills — the skill segments of profile_headline
     validate_summary         — tailored_summary
 
-Plus one for the LLM-based JD chunking repair path:
-    validate_llm_jd_chunks   — see its own docstring
+Plus one for each LLM-based chunking repair path:
+    validate_llm_jd_chunks     — see its own docstring
+    validate_llm_resume_chunks — see its own docstring
 
 A failing field is dropped (falls back to the untailored original — see
 generation.py/rendering.py), never a hard failure of the whole /tailor
@@ -104,6 +105,60 @@ def validate_text_against_resume(
     return FieldValidationResult(field_id=field_id, ok=not violations, violations=violations)
 
 
+# Length of a shared word-sequence treated as "copied phrasing," not
+# coincidental overlap. Hit live: a bullet_patch ended "...demonstrating
+# proficiency across experimentation, architecture, and delivery" - lifted
+# near-verbatim from the JD's own "Comfortable working across experimentation,
+# architecture, and delivery", which was separately listed as a CRITICAL GAP
+# with no resume evidence. validate_text_against_resume's keyword check
+# doesn't catch this at all: "experimentation"/"architecture"/"delivery" are
+# ordinary English words, not tech/proper-noun tokens extract_keywords()
+# extracts, so copying the JD's own sentence onto an unrelated bullet slips
+# through untouched even though it reads as directly claiming a capability
+# the JD asked for, in the JD's own words, on a bullet that has nothing to do
+# with it.
+_PHRASE_COPY_NGRAM_SIZE = 5
+_WORD_TOKEN_RE = re.compile(r"[a-z0-9']+")
+
+
+def _word_ngrams(text: str, n: int) -> set[tuple[str, ...]]:
+    words = _WORD_TOKEN_RE.findall(text.lower())
+    if len(words) < n:
+        return set()
+    return {tuple(words[i:i + n]) for i in range(len(words) - n + 1)}
+
+
+def validate_no_jd_phrase_copying(
+    field_id: str, text: str, jd_text: str, exempt_source_text: str,
+) -> FieldValidationResult:
+    """Flags wording lifted near-verbatim from the JD rather than describing
+    the candidate's real experience. A shared 5+-word sequence with the JD
+    that is NOT also present in exempt_source_text is treated as copied:
+    - for a bullet_patch, exempt_source_text is that bullet's own ORIGINAL
+      text (the rewrite is allowed to keep whatever the original already said,
+      even if the JD happens to phrase something the same way)
+    - for tailored_summary, exempt_source_text is the whole resume (a shared
+      phrase that's independently grounded in the resume isn't "copied", it's
+      coincidentally shared vocabulary)
+    This is a coarser, complementary check to validate_text_against_resume —
+    that one catches fabricated TECH keywords; this one catches ordinary-word
+    JD phrasing being restated as if it were the candidate's own achievement.
+    """
+    jd_ngrams = _word_ngrams(jd_text, _PHRASE_COPY_NGRAM_SIZE)
+    if not jd_ngrams:
+        return FieldValidationResult(field_id=field_id, ok=True)
+    exempt_ngrams = _word_ngrams(exempt_source_text, _PHRASE_COPY_NGRAM_SIZE)
+    text_ngrams = _word_ngrams(text, _PHRASE_COPY_NGRAM_SIZE)
+    copied = (text_ngrams & jd_ngrams) - exempt_ngrams
+    if copied:
+        sample = " ".join(sorted(copied)[0])
+        return FieldValidationResult(
+            field_id=field_id, ok=False,
+            violations=[f"wording copied from the JD rather than describing real experience: \"{sample}...\""],
+        )
+    return FieldValidationResult(field_id=field_id, ok=True)
+
+
 def validate_bullet_patch(
     bullet_id: str, improved_text: str, resume_full_text: str,
     *, extra_grounded_keywords_cf: set[str] | None = None,
@@ -151,16 +206,26 @@ _SENTENCE_BOUNDARY_RE = re.compile(r"(?<=[.!?])\s+")
 
 def repair_summary(
     summary: str, resume_full_text: str, *, extra_grounded_keywords_cf: set[str] | None = None,
+    jd_text: str | None = None,
 ) -> tuple[str, bool]:
-    """Sentence-level repair for a tailored_summary that failed
-    validate_summary — a 2-4 sentence summary against a genuinely weak-match
-    JD often has the model try to acknowledge a gap in-line ("...though it
-    lacks direct computer vision experience"), which mentions a MISSING
-    KEYWORD and fails the whole-field check even though the other sentences
-    are perfectly grounded. Dropping the entire summary back to the resume's
-    untailored original (the prior behavior) throws away real, valid
-    tailoring for the sake of one clause. This drops only the offending
-    sentence(s) and keeps the rest.
+    """Sentence-level repair for a tailored_summary that failed validate_summary
+    and/or validate_no_jd_phrase_copying — a 2-4 sentence summary against a
+    genuinely weak-match JD often has the model try to acknowledge a gap
+    in-line ("...though it lacks direct computer vision experience"), which
+    mentions a MISSING KEYWORD and fails the whole-field check even though the
+    other sentences are perfectly grounded. Dropping the entire summary back
+    to the resume's untailored original (the prior behavior) throws away
+    real, valid tailoring for the sake of one clause. This drops only the
+    offending sentence(s) and keeps the rest.
+
+    jd_text is optional (kept backward compatible for any caller that only
+    cares about keyword grounding) — when provided, a sentence sharing a
+    5+-word sequence with the JD that ISN'T also present in resume_full_text
+    is dropped too, same rule as validate_no_jd_phrase_copying. Without this,
+    a summary whose ONLY problem is copied JD phrasing (no ungrounded
+    keyword) would sail through this repair unchanged, since no sentence
+    would fail the keyword-only check — silently defeating the whole point of
+    the phrase-copy check that sent it here.
 
     Returns (repaired_text, ok) — ok=False means the repair itself didn't
     produce a clean, substantial-enough result and the caller should fall
@@ -168,6 +233,8 @@ def repair_summary(
     """
     resume_keywords_cf = {k.casefold() for k in extract_keywords(resume_full_text)}
     resume_keywords_cf |= extra_grounded_keywords_cf or set()
+    jd_ngrams = _word_ngrams(jd_text, _PHRASE_COPY_NGRAM_SIZE) if jd_text else set()
+    resume_ngrams = _word_ngrams(resume_full_text, _PHRASE_COPY_NGRAM_SIZE) if jd_text else set()
     sentences = [s for s in _SENTENCE_BOUNDARY_RE.split(summary.strip()) if s.strip()]
 
     kept: list[str] = []
@@ -180,7 +247,8 @@ def repair_summary(
             for kw in extract_keywords(sentence)
             if kw.casefold() not in exempt_cf
         )
-        if not ungrounded:
+        copied_from_jd = bool((_word_ngrams(sentence, _PHRASE_COPY_NGRAM_SIZE) & jd_ngrams) - resume_ngrams) if jd_text else False
+        if not ungrounded and not copied_from_jd:
             kept.append(sentence)
 
     repaired = " ".join(kept).strip()
@@ -188,6 +256,8 @@ def repair_summary(
     # actually clean now (defensive - the per-sentence check above should
     # already guarantee this).
     if len(repaired) < 60 or not validate_summary(repaired, resume_full_text, extra_grounded_keywords_cf=extra_grounded_keywords_cf).ok:
+        return "", False
+    if jd_text and not validate_no_jd_phrase_copying("tailored_summary", repaired, jd_text, resume_full_text).ok:
         return "", False
     return repaired, True
 
@@ -322,6 +392,75 @@ def validate_llm_jd_chunks(raw_chunks: list[dict], source_text: str) -> list[Chu
         seen_normalized.add(normalized)
         covered_chars += len(normalized)
         kept.append((pos, Chunk(kind=kind, section=JD_KIND_TO_SECTION[kind], text=text.strip())))
+
+    if covered_chars / len(normalized_source) < _LLM_CHUNK_MIN_COVERAGE:
+        return None
+
+    kept.sort(key=lambda pair: pair[0])
+    return [chunk for _, chunk in kept]
+
+
+# ── LLM-based resume chunking repair (generation.py::chunk_resume_with_llm_repair) ──
+
+_LLM_RESUME_CHUNK_KINDS = {"bullet", "skill", "summary", "header"}
+# Matches chunker.py::_RESUME_SECTION_PATTERNS's section names exactly, plus
+# "header" (the pre-first-section / section-title catch-all the regex chunker
+# also uses). Fixed vocabulary, not free text: matcher.py's rewrite-candidate
+# pool explicitly excludes bullets from certain sections by name ("education",
+# "header", "publications", "certifications", "languages" — see its
+# rewrite_pool loop), so a made-up section label from the LLM would silently
+# bypass that exclusion instead of just being dropped here.
+_LLM_RESUME_CHUNK_SECTIONS = {
+    "experience", "projects", "education", "skills", "summary",
+    "publications", "certifications", "languages", "header",
+}
+
+
+def validate_llm_resume_chunks(raw_chunks: list[dict], source_text: str) -> list[Chunk] | None:
+    """Resume-chunking counterpart to validate_llm_jd_chunks — identical
+    verbatim-substring + coverage contract (see that function's docstring for
+    the full rationale), applied to generation.py's resume-chunking path
+    instead of JD chunking.
+
+    One structural difference from the JD version: a JD chunk's "section" is
+    fully determined by its "kind" (JD_KIND_TO_SECTION), but a resume's
+    section varies freely (experience vs projects vs skills vs ...), so the
+    LLM must supply "section" directly here rather than have it derived. It's
+    checked against the fixed _LLM_RESUME_CHUNK_SECTIONS vocabulary above —
+    an unrecognised value drops the chunk, same as an unrecognised "kind".
+    """
+    if not isinstance(raw_chunks, list) or not raw_chunks:
+        return None
+
+    normalized_source = _normalize_for_match(source_text)
+    if not normalized_source:
+        return None
+
+    kept: list[tuple[int, Chunk]] = []
+    covered_chars = 0
+    seen_normalized: set[str] = set()
+
+    for entry in raw_chunks:
+        if not isinstance(entry, dict):
+            continue
+        kind = entry.get("kind")
+        section = entry.get("section")
+        text = entry.get("text")
+        if (
+            kind not in _LLM_RESUME_CHUNK_KINDS
+            or section not in _LLM_RESUME_CHUNK_SECTIONS
+            or not isinstance(text, str)
+        ):
+            continue
+        normalized = _normalize_for_match(text)
+        if len(normalized) < _LLM_CHUNK_MIN_TEXT_LEN or normalized in seen_normalized:
+            continue
+        pos = normalized_source.find(normalized)
+        if pos == -1:
+            continue
+        seen_normalized.add(normalized)
+        covered_chars += len(normalized)
+        kept.append((pos, Chunk(kind=kind, section=section, text=text.strip())))
 
     if covered_chars / len(normalized_source) < _LLM_CHUNK_MIN_COVERAGE:
         return None

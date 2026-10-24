@@ -43,6 +43,14 @@ class ResumeVersion(Base, UUIDPKMixin, CreatedAtMixin):
     sha256: Mapped[str] = mapped_column(nullable=False)
     raw_text: Mapped[str] = mapped_column(nullable=False)
     chunks: Mapped[list] = mapped_column(JSONB, server_default="[]", nullable=False)
+    # Which chunking pipeline produced `chunks` (RESUME_CHUNK_PROMPT_VERSION,
+    # e.g. "resumechunk-v1") — NULL means this row predates LLM-primary resume
+    # chunking (written by the old pure-regex chunk_resume()). Checked the same
+    # way embeddings_model is checked below: a mismatch means _resolve_resume_
+    # version re-chunks with the current pipeline on next read rather than
+    # serving a stale resume's chunks forever just because it was uploaded once
+    # before this column existed.
+    chunks_version: Mapped[str | None] = mapped_column(nullable=True)
     embeddings: Mapped[list] = mapped_column(JSONB, server_default="[]", nullable=False)
     embeddings_model: Mapped[str | None] = mapped_column(nullable=True)
     # NULL = not yet structured into cv_data. Populated lazily on first editor visit.

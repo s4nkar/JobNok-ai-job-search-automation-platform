@@ -30,6 +30,7 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import logging
+from typing import Any
 
 import fitz  # PyMuPDF
 import numpy as np
@@ -176,21 +177,43 @@ async def _resolve_resume_version(
             # Redis has it but Postgres doesn't (e.g. cached before this
             # migration shipped) — backfill Postgres from the Redis blob.
             resume_version = await _create_resume_version(
-                repo, user_id, resume_hash, cached["text"], cached["chunks"], cached["embeddings"], cached.get("embeddings_model"),
+                repo, user_id, resume_hash, cached["text"], cached["chunks"], cached["embeddings"],
+                cached.get("embeddings_model"), cached.get("chunks_version"),
             )
         else:
             await repo.touch_last_used(user_id, str(resume_version.id))
+        # Redis cache hits aren't checked for chunks_version/embeddings_model
+        # staleness (the Postgres-hit branch below is) — same pre-existing gap
+        # for both, not introduced by the chunking change; a stale Redis entry
+        # self-heals once its TTL expires and the Postgres branch is hit.
         return resume_version, chunks_from_dicts(cached["chunks"]), resume_cache.deserialize_embeddings(cached["embeddings"])
 
     resume_version = await repo.get_by_hash(user_id, resume_hash)
     if resume_version is not None:
         resume_chunks = chunks_from_dicts(resume_version.chunks)
         resume_embeddings = resume_cache.deserialize_embeddings(resume_version.embeddings)
+        update_fields: dict[str, Any] = {}
+
+        # Chunking pipeline changed since this row was written (RESUME_CHUNK_
+        # PROMPT_VERSION bump, or this row predates LLM-primary resume
+        # chunking entirely — chunks_version is NULL then) — re-chunk with the
+        # current pipeline. Checked BEFORE the embeddings staleness check
+        # below: embeddings are stored one-per-chunk, position-aligned to
+        # `chunks`, so new chunk boundaries invalidate old embeddings
+        # regardless of whether the embeddings MODEL itself is still current.
+        if resume_version.chunks_version != generation.RESUME_CHUNK_PROMPT_VERSION:
+            resume_chunks, _ = await generation.chunk_resume_with_llm_repair(
+                resume_version.raw_text, chunk_resume(resume_version.raw_text),
+            )
+            update_fields["chunks"] = chunks_to_dicts(resume_chunks)
+            update_fields["chunks_version"] = generation.RESUME_CHUNK_PROMPT_VERSION
+            resume_embeddings = _empty_array()  # force the re-embed branch below
 
         if resume_version.embeddings_model != model_label or resume_embeddings.size == 0:
             # Stale or missing embeddings (provider/model config changed since
-            # this row was written, or a prior embedding-provider outage left
-            # it without any) — re-embed and persist.
+            # this row was written, chunk boundaries just changed above, or a
+            # prior embedding-provider outage left it without any) — re-embed
+            # and persist.
             try:
                 resume_embeddings = await embed([c.text for c in resume_chunks], purpose="matching")
                 embeddings_model = model_label
@@ -198,16 +221,17 @@ async def _resolve_resume_version(
                 logger.warning("Resume embeddings unavailable: %r — falling back to keyword-only matching", exc)
                 resume_embeddings = _empty_array()
                 embeddings_model = None
-            embeddings_list = resume_cache.serialize_embeddings(resume_embeddings) if resume_embeddings.size > 0 else []
-            resume_version = await repo.update(
-                user_id, str(resume_version.id), embeddings=embeddings_list, embeddings_model=embeddings_model,
-            )
-            await resume_cache.update_resume_cache(user_id, resume_hash, embeddings=embeddings_list, embeddings_model=embeddings_model)
+            update_fields["embeddings"] = resume_cache.serialize_embeddings(resume_embeddings) if resume_embeddings.size > 0 else []
+            update_fields["embeddings_model"] = embeddings_model
+
+        if update_fields:
+            resume_version = await repo.update(user_id, str(resume_version.id), **update_fields)
+            await resume_cache.update_resume_cache(user_id, resume_hash, **update_fields)
 
         await repo.touch_last_used(user_id, str(resume_version.id))
         await resume_cache.update_resume_cache(
             user_id, resume_hash,
-            text=resume_version.raw_text, chunks=resume_version.chunks,
+            text=resume_version.raw_text, chunks=resume_version.chunks, chunks_version=resume_version.chunks_version,
             embeddings=resume_version.embeddings, embeddings_model=resume_version.embeddings_model,
         )
         return resume_version, resume_chunks, resume_embeddings
@@ -222,7 +246,12 @@ async def _resolve_resume_version(
     except Exception:
         raise HTTPException(status_code=400, detail="Could not parse PDF. Ensure it's a valid PDF file.")
 
-    resume_chunks = chunk_resume(resume_text)
+    # LLM-primary resume chunking — mirrors chunk_jd_with_llm_repair, but only
+    # runs once per (user, PDF hash): this branch is reached exactly once per
+    # distinct resume upload, with the result persisted below, so the LLM
+    # call is a one-time cost amortized across every future JD this resume
+    # gets tailored against.
+    resume_chunks, _ = await generation.chunk_resume_with_llm_repair(resume_text, chunk_resume(resume_text))
     embeddings_model = None
     try:
         resume_embeddings = await embed([c.text for c in resume_chunks], purpose="matching")
@@ -236,9 +265,11 @@ async def _resolve_resume_version(
 
     resume_version = await _create_resume_version(
         repo, user_id, resume_hash, resume_text, chunk_dicts, embeddings_list, embeddings_model,
+        generation.RESUME_CHUNK_PROMPT_VERSION,
     )
     await resume_cache.update_resume_cache(
-        user_id, resume_hash, text=resume_text, chunks=chunk_dicts, embeddings=embeddings_list, embeddings_model=embeddings_model,
+        user_id, resume_hash, text=resume_text, chunks=chunk_dicts, chunks_version=generation.RESUME_CHUNK_PROMPT_VERSION,
+        embeddings=embeddings_list, embeddings_model=embeddings_model,
     )
     return resume_version, resume_chunks, resume_embeddings
 
@@ -246,6 +277,7 @@ async def _resolve_resume_version(
 async def _create_resume_version(
     repo: ResumeVersionRepository, user_id: str, resume_hash: str,
     raw_text: str, chunks: list[dict], embeddings: list[list[float]], embeddings_model: str | None,
+    chunks_version: str | None = None,
 ) -> ResumeVersion:
     """Insert, tolerating the rare race where two concurrent first-ever
     uploads of the identical PDF both reach this point — the UniqueConstraint
@@ -254,7 +286,9 @@ async def _create_resume_version(
     request's outer transaction (same pattern as usage/service.py)."""
     try:
         async with repo.session.begin_nested():
-            return await repo.create_from_upload(user_id, resume_hash, raw_text, chunks, embeddings, embeddings_model)
+            return await repo.create_from_upload(
+                user_id, resume_hash, raw_text, chunks, embeddings, embeddings_model, chunks_version,
+            )
     except IntegrityError:
         existing = await repo.get_by_hash(user_id, resume_hash)
         if existing is None:
@@ -353,18 +387,41 @@ async def tailor_resume(
             jd_text_clean = jd_for_processing.strip()
             jd_chunks = chunk_jd(jd_for_processing)
 
-        # LLM-primary JD chunking — every JD goes through the LLM first (cheap:
-        # a Flash/Flash-Lite-class model call), with this regex pass kept only
-        # as the fallback for a provider outage or a validation failure. See
-        # generation.py::chunk_jd_with_llm_repair's docstring for why this is
-        # no longer gated on the regex output looking obviously broken.
-        jd_chunks, jd_chunking_degraded = await generation.chunk_jd_with_llm_repair(jd_text_clean, jd_chunks)
+        # JD chunk cache — NOT scoped by user_id (see cache.py's module
+        # docstring): two different applicants pasting the same posting share
+        # one LLM chunking call + one embeddings call instead of each paying
+        # for their own. Keyed on the CLEANED text, which is what actually
+        # lets that cross-user hit happen (raw pasted text varies between
+        # users even for the same posting — see compute_jd_hash's docstring).
+        jd_hash = resume_cache.compute_jd_hash(jd_text_clean)
+        model_label = _embeddings_model_label()
+        cached_jd = await resume_cache.get_jd_chunk_cache(jd_hash, generation.JD_CHUNK_PROMPT_VERSION)
 
-        try:
-            jd_embeddings = await embed([c.text for c in jd_chunks], purpose="matching") if jd_chunks else _empty_array()
-        except EmbeddingError as exc:
-            logger.warning("JD embeddings unavailable: %r — falling back to keyword-only matching", exc)
-            jd_embeddings = _empty_array()
+        if cached_jd and cached_jd.get("chunks") and cached_jd.get("embeddings_model") == model_label:
+            jd_chunks = chunks_from_dicts(cached_jd["chunks"])
+            jd_chunking_degraded = bool(cached_jd.get("degraded", False))
+            jd_embeddings = resume_cache.deserialize_embeddings(cached_jd.get("embeddings"))
+        else:
+            # LLM-primary JD chunking — every JD goes through the LLM first
+            # (cheap: a Flash/Flash-Lite-class model call), with this regex
+            # pass kept only as the fallback for a provider outage or a
+            # validation failure. See generation.py::chunk_jd_with_llm_repair's
+            # docstring for why this is no longer gated on the regex output
+            # looking obviously broken.
+            jd_chunks, jd_chunking_degraded = await generation.chunk_jd_with_llm_repair(jd_text_clean, jd_chunks)
+
+            try:
+                jd_embeddings = await embed([c.text for c in jd_chunks], purpose="matching") if jd_chunks else _empty_array()
+            except EmbeddingError as exc:
+                logger.warning("JD embeddings unavailable: %r — falling back to keyword-only matching", exc)
+                jd_embeddings = _empty_array()
+
+            await resume_cache.set_jd_chunk_cache(jd_hash, generation.JD_CHUNK_PROMPT_VERSION, {
+                "chunks": chunks_to_dicts(jd_chunks),
+                "degraded": jd_chunking_degraded,
+                "embeddings": resume_cache.serialize_embeddings(jd_embeddings) if jd_embeddings.size > 0 else [],
+                "embeddings_model": model_label if jd_embeddings.size > 0 else None,
+            })
 
         analysis = match_resume_to_jd(
             resume_chunks=resume_chunks, resume_embeddings=resume_embeddings,

@@ -73,8 +73,44 @@ def list_templates() -> list[dict[str, Any]]:
     return [{"id": k, **{kk: vv for kk, vv in v.items() if kk != "file"}} for k, v in TEMPLATE_REGISTRY.items()]
 
 
+# Hit live: generate_base_cv_data populated education[].details with the
+# literal string "N/A" (the resume had nothing there — original text had no
+# "details" line at all) instead of leaving the field null, and the template
+# rendered it verbatim as a stray "N/A" line under the degree. response_
+# format=json_object constrains syntax, not content — nothing stops a model
+# from treating an optional field as "must write something" and reaching for
+# a placeholder word. Applied to every optional descriptive field below
+# rather than just `details`, since the same failure mode could hit any of
+# them and there's no reason to special-case just the one that happened to
+# be observed.
+_PLACEHOLDER_VALUE_RE = re.compile(r"^\s*(n\s*/?\s*a|none|null|n\.a\.?|-|—)\s*$", re.I)
+
+
+def _clear_placeholder(value: Any) -> Any:
+    return None if isinstance(value, str) and _PLACEHOLDER_VALUE_RE.match(value) else value
+
+
 def normalize_cv_data(cv_data: dict) -> None:
-    """Strip bullet prefixes and normalise skill items in-place."""
+    """Strip bullet prefixes, normalise skill items, and clear literal
+    placeholder strings ("N/A", "None", ...) from optional fields, in-place."""
+    for key in ("phone", "github", "linkedin", "website", "work_authorization", "relocation"):
+        if key in cv_data:
+            cv_data[key] = _clear_placeholder(cv_data[key])
+    for entry in cv_data.get("education") or []:
+        for key in ("location", "details"):
+            if key in entry:
+                entry[key] = _clear_placeholder(entry[key])
+    for entry in cv_data.get("experience") or []:
+        if "location" in entry:
+            entry["location"] = _clear_placeholder(entry["location"])
+    for entry in cv_data.get("projects") or []:
+        if "tech" in entry:
+            entry["tech"] = _clear_placeholder(entry["tech"])
+    if cv_data.get("featured_project"):
+        for key in ("tech", "results", "year"):
+            if key in cv_data["featured_project"]:
+                cv_data["featured_project"][key] = _clear_placeholder(cv_data["featured_project"][key])
+
     for section_key in ("featured_project",):
         if cv_data.get(section_key) and isinstance(cv_data[section_key].get("bullets"), list):
             cv_data[section_key]["bullets"] = [
@@ -124,6 +160,18 @@ async def fetch_lebenslauf_photo_fields(profile: dict) -> dict[str, Any]:
     }
 
 
+#  resolve_or_create_profile (app/modules/auth/service.py) inserts this exact
+# shape as a placeholder when a request races the Clerk user.created webhook
+# - "normally" corrected within moments once the webhook lands, but hit live:
+# a profile stuck in this state (webhook never landed/processed) got this
+# placeholder rendered as the candidate's email on an exported resume,
+# clobbering a perfectly good email the structuring LLM had already extracted
+# from the uploaded PDF itself. An "authoritative" source is only authoritative
+# when it's actually been populated - this is a known sentinel value, not a
+# real email, so it must never override cv_data's own extracted value.
+_PLACEHOLDER_EMAIL_RE = re.compile(r"@unknown\.local$", re.I)
+
+
 async def apply_profile_overlay(cv_data: dict, profile: dict, profile_headline: str, template_id: str) -> None:
     """Overlay authoritative profile contact fields onto cv_data in-place."""
     profile_name = (profile.get("full_name") or "").strip()
@@ -132,7 +180,7 @@ async def apply_profile_overlay(cv_data: dict, profile: dict, profile_headline: 
     if not profile_headline and profile.get("job_title"):
         cv_data["job_title"] = profile["job_title"]
     cv_email = profile.get("cv_email") or profile.get("email")
-    if cv_email:
+    if cv_email and not _PLACEHOLDER_EMAIL_RE.search(cv_email):
         cv_data["email"] = cv_email
     if profile.get("phone"):
         cv_data["phone"] = profile["phone"]

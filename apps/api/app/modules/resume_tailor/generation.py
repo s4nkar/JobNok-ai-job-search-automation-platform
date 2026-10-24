@@ -28,7 +28,7 @@ from typing import TYPE_CHECKING, Any
 from app.core.config import settings
 from app.ai.llm import provider as ai_provider
 from app.modules.resume_tailor import cache as resume_cache
-from app.modules.resume_tailor.chunker import jd_chunking_is_pathological
+from app.modules.resume_tailor.chunker import jd_chunking_is_pathological, resume_chunking_is_pathological
 from app.modules.resume_tailor.extraction import build_base_cv_data_deterministic
 from app.modules.resume_tailor.prompts import (
     JD_CHUNK_PROMPT_VERSION,
@@ -36,6 +36,8 @@ from app.modules.resume_tailor.prompts import (
     JD_TRANSLATE_SYSTEM_PROMPT,
     MATCHER_VERSION,
     PROSE_PROMPT_VERSION,
+    RESUME_CHUNK_PROMPT_VERSION,
+    RESUME_CHUNK_SYSTEM_PROMPT,
     STRUCT_PROMPT_VERSION,
     STRUCT_SYSTEM_PROMPT,
     TAILOR_PROSE_SYSTEM_PROMPT,
@@ -43,7 +45,7 @@ from app.modules.resume_tailor.prompts import (
 from app.modules.resume_tailor.schemas import validate_cv_data
 from app.modules.resume_tailor.validation import (
     repair_summary, validate_bullet_patch, validate_headline_skills, validate_implied_skills,
-    validate_llm_jd_chunks, validate_summary,
+    validate_llm_jd_chunks, validate_llm_resume_chunks, validate_no_jd_phrase_copying, validate_summary,
 )
 
 if TYPE_CHECKING:
@@ -58,9 +60,29 @@ logger = logging.getLogger(__name__)
 # don't need to know the constants physically live in a sibling file.
 __all__ = [
     "MATCHER_VERSION", "STRUCT_PROMPT_VERSION", "PROSE_PROMPT_VERSION", "JD_CHUNK_PROMPT_VERSION",
+    "RESUME_CHUNK_PROMPT_VERSION",
     "generate_base_cv_data", "generate_tailor_prose", "translate_jd_if_needed", "chunk_jd_with_llm_repair",
+    "chunk_resume_with_llm_repair",
     "TailorProseResult",
 ]
+
+# Every LLM call in this module that reads resume/JD text truncated it with
+# its own ad-hoc, separately-too-tight character limit (6000 for base CV
+# structuring and resume chunking, 3500/2500 for the prose call's grounding
+# snippets). Hit live: a dense but ordinary 2-page resume (6,593 chars) got
+# silently cut off mid-"SELECTED PROJECTS" at the 6000-char structuring
+# limit - BEFORE a real project (EmoTract) and the entire "ADDITIONAL
+# INFORMATION" section (Languages, Work Authorisation), both of which simply
+# never existed as far as the model could tell. No error, no warning - the
+# tailored CV just quietly came out missing real content. One shared, generous
+# ceiling used everywhere resume/JD text is truncated, instead of N
+# independently-wrong numbers. ~16k chars covers a dense 3-4 page resume with
+# real margin; input-token cost at this size is negligible against a Groq-
+# class model's context window, and every one of these calls is cached
+# (per resume version, or per JD content hash), so it's a one-time cost, not
+# a per-request one.
+_RESUME_TEXT_MAX_CHARS = 16000
+_JD_TEXT_MAX_CHARS = 12000
 
 
 # ── JD language detection/translation ───────────────────────────────
@@ -154,7 +176,7 @@ async def chunk_jd_with_llm_repair(
     """
     try:
         raw = await ai_provider.generate_text(
-            f"JOB DESCRIPTION TEXT:\n{jd_text_clean[:6000]}",
+            f"JOB DESCRIPTION TEXT:\n{jd_text_clean[:_JD_TEXT_MAX_CHARS]}",
             JD_CHUNK_SYSTEM_PROMPT, max_tokens=3000, tier="heavy",
             response_format={"type": "json_object"},
             reasoning_effort=settings.groq_reasoning_effort,
@@ -180,15 +202,70 @@ async def chunk_jd_with_llm_repair(
     return chunked, False
 
 
+async def chunk_resume_with_llm_repair(
+    resume_text: str, regex_chunks: list["Chunk"],
+) -> tuple[list["Chunk"], bool]:
+    """Resume-chunking counterpart to chunk_jd_with_llm_repair — same
+    LLM-PRIMARY contract: every resume is chunked by the LLM
+    (RESUME_CHUNK_SYSTEM_PROMPT, validated by validate_llm_resume_chunks),
+    regex_chunks is purely the fallback for a provider outage, malformed
+    JSON, or a validation failure. Never raises.
+
+    Unlike JD chunking (recomputed on every /tailor request), this only runs
+    once per resume version — _resolve_resume_version in routes.py persists
+    the result to resume_versions.chunks, so the LLM cost here is one-time
+    per uploaded resume, not per job application tailored against it.
+
+    degraded=True only when the fallback was used AND resume_chunking_is_
+    pathological still flags the fallback's own output as a likely collapse —
+    mirrors chunk_jd_with_llm_repair's degraded semantics exactly.
+    """
+    try:
+        raw = await ai_provider.generate_text(
+            f"RESUME TEXT:\n{resume_text[:_RESUME_TEXT_MAX_CHARS]}",
+            RESUME_CHUNK_SYSTEM_PROMPT, max_tokens=3000, tier="heavy",
+            response_format={"type": "json_object"},
+            reasoning_effort=settings.groq_reasoning_effort,
+        )
+    except ai_provider.AIGenerationError as exc:
+        logger.warning("Resume LLM chunking: all AI providers exhausted (%r) — using regex fallback", exc)
+        return regex_chunks, resume_chunking_is_pathological(regex_chunks, resume_text)
+
+    try:
+        start = raw.find("{")
+        end = raw.rfind("}") + 1
+        parsed = json.loads(raw[start:end])
+    except Exception as exc:
+        logger.warning("Resume LLM chunking: malformed JSON (%r) — using regex fallback", exc)
+        return regex_chunks, resume_chunking_is_pathological(regex_chunks, resume_text)
+
+    chunked = validate_llm_resume_chunks(parsed.get("chunks") or [], resume_text)
+    if chunked is None:
+        logger.warning("Resume LLM chunking: output failed verbatim/coverage validation — using regex fallback")
+        return regex_chunks, resume_chunking_is_pathological(regex_chunks, resume_text)
+
+    logger.info("Resume LLM chunking succeeded: %d chunks (regex fallback would have been %d)", len(chunked), len(regex_chunks))
+    return chunked, False
+
+
 # ── Base CV structuring (JD-agnostic, cached per resume version) ───
 
 async def generate_base_cv_data(resume_text: str) -> dict[str, Any]:
     """Pure structural parsing, no JD/tailoring context — called at most once
     per resume_version_id and persisted to resume_versions.base_cv_data."""
+    if len(resume_text) > _RESUME_TEXT_MAX_CHARS:
+        # Silent truncation is exactly what produced the EmoTract/Additional-
+        # Information bug (see _RESUME_TEXT_MAX_CHARS's comment) - this is
+        # still a truncation (an even longer resume could still exceed 16k),
+        # but now it's a logged, investigable event instead of an invisible one.
+        logger.warning(
+            "Base CV structuring: resume_text is %d chars, truncating to %d — content past that point will be invisible to the model",
+            len(resume_text), _RESUME_TEXT_MAX_CHARS,
+        )
     prompt = f"""Parse this resume into the required JSON format.
 
 RESUME TEXT:
-{resume_text[:6000]}"""
+{resume_text[:_RESUME_TEXT_MAX_CHARS]}"""
 
     # response_format=json_object structurally constrains the output to valid
     # JSON — a "return ONLY JSON" prompt instruction alone was observed NOT
@@ -223,28 +300,84 @@ RESUME TEXT:
     # CvDataSchema and falls back per-field so one malformed field (e.g.
     # "skills" returned as a string) doesn't take down the whole result.
     cv_data = validate_cv_data(parsed)
-    _strip_redundant_language_relocation_bullets(cv_data)
+    _strip_redundant_section_duplicates(cv_data)
     return cv_data
 
 
 # A mixed source section (commonly "Additional Information") getting captured
-# BOTH into the dedicated languages/relocation fields AND, under its original
-# heading, into other_sections — same content rendered twice under two
-# section titles. STRUCT_SYSTEM_PROMPT rule 9 now tells the model not to do
-# this; this is the defensive backend net for when it does anyway. Only drops
-# bullets that are themselves a restatement ("Languages ...", "Relocation
-# ..."), not the whole section, so genuinely distinct leftover content (e.g.
-# hobbies mixed into the same block) survives.
-_REDUNDANT_BULLET_RE = re.compile(r"^\s*(languages?|relocation)\b", re.I)
+# BOTH into the dedicated languages/relocation/work_authorization fields AND,
+# under its original heading, into other_sections — same content rendered
+# twice under two section titles. STRUCT_SYSTEM_PROMPT rule 9 now tells the
+# model not to do this; this is the defensive backend net for when it does
+# anyway. Only drops bullets that are themselves a restatement ("Languages
+# ...", "Relocation ...", "Work Authorisation ..."), not the whole section, so
+# genuinely distinct leftover content (e.g. hobbies mixed into the same
+# block) survives.
+_REDUNDANT_BULLET_RE = re.compile(r"^\s*(languages?|relocation|work\s*authori[sz]ation)\b", re.I)
+
+# The same double-extraction failure mode, but for an ENTIRE other_sections
+# entry whose HEADING duplicates a dedicated top-level section — hit live on
+# a real tailoring: an other_sections entry headed like "Selected Projects"
+# (holding a single squashed "<name> - <tech stack>" line with no real
+# bullets) rendered as a second, near-empty "Selected Projects" block
+# alongside the real `projects` array, with "Publications" sandwiched between
+# the two. STRUCT_SYSTEM_PROMPT rule 8 says a heading this specific belongs
+# ONLY in its dedicated field, so a TRUE duplicate (dedicated field already
+# populated) is dropped outright. But "duplicate" was the wrong assumption
+# for languages/relocation/work_authorization specifically: those are simple
+# scalar/list fields the model can get WRONG in the other direction - writing
+# the content ONLY into other_sections and never populating the dedicated
+# field at all (not a double-extraction, just a mis-extraction). Dropping
+# unconditionally would silently delete the only copy - hit exactly this
+# live, immediately after the first version of this function shipped (Work
+# Authorisation vanished from a tailored CV; Languages/Relocation survived
+# only because they happened to land in their dedicated fields correctly
+# that time). So for those three specifically: migrate the content INTO the
+# empty dedicated field instead of discarding it, and only drop the
+# other_sections entry once something now owns that content. The array-
+# shaped dedicated sections (projects/publications/experience/education/
+# skills) stay drop-only - reconstructing a Project{name,tech,bullets} or
+# Publication{title,venue,year} from a flat bullet string is too lossy/
+# error-prone to attempt automatically.
+_RESERVED_SECTION_HEADING_RE = re.compile(
+    r"^\s*((selected\s+|personal\s+|side\s+|featured\s+)?projects?|publications?|"
+    r"experience|education|skills|technical\s+skills)\s*:?\s*$",
+    re.I,
+)
+_SIMPLE_FIELD_HEADING_RE = re.compile(r"^\s*(languages?|relocation|work\s*authori[sz]ation)\s*:?\s*$", re.I)
 
 
-def _strip_redundant_language_relocation_bullets(cv_data: dict[str, Any]) -> None:
+def _migrate_simple_field_if_empty(cv_data: dict[str, Any], heading: str, bullets: list[str]) -> bool:
+    """Returns True if this other_sections entry's content was moved into its
+    dedicated field (or the field already had it) - either way the caller
+    should drop the other_sections entry. Returns False if the heading isn't
+    one of these three fields at all, leaving the entry for the caller to
+    decide on by other means."""
+    m = _SIMPLE_FIELD_HEADING_RE.match(heading)
+    if not m or not bullets:
+        return False
+    key = "relocation" if heading.lower().startswith("reloc") else (
+        "work_authorization" if heading.lower().startswith("work") else "languages"
+    )
+    if not cv_data.get(key):
+        cv_data[key] = list(bullets) if key == "languages" else " ".join(bullets)
+    return True
+
+
+def _strip_redundant_section_duplicates(cv_data: dict[str, Any]) -> None:
     sections = cv_data.get("other_sections") or []
-    cv_data["other_sections"] = [
-        {**s, "bullets": kept}
-        for s in sections
-        if (kept := [b for b in (s.get("bullets") or []) if not _REDUNDANT_BULLET_RE.match(b)])
-    ]
+    kept_sections = []
+    for s in sections:
+        heading = (s.get("heading") or "").strip()
+        bullets = s.get("bullets") or []
+        if _migrate_simple_field_if_empty(cv_data, heading, bullets):
+            continue
+        if _RESERVED_SECTION_HEADING_RE.match(heading):
+            continue
+        kept_bullets = [b for b in bullets if not _REDUNDANT_BULLET_RE.match(b)]
+        if kept_bullets:
+            kept_sections.append({**s, "bullets": kept_bullets})
+    cv_data["other_sections"] = kept_sections
 
 
 # ── Tailoring prose (JD-specific, cached per resume+job+prompt+model) ──
@@ -395,10 +528,10 @@ REWRITE CANDIDATES (only patch these — echo the bracketed id, not the text):
 {rewrites_block}
 
 JOB DESCRIPTION:
-{job_description[:2500]}
+{job_description[:_JD_TEXT_MAX_CHARS]}
 
 RESUME (for extracting target_role/target_company and grounding prose only):
-{resume_text[:3500]}"""
+{resume_text[:_RESUME_TEXT_MAX_CHARS]}"""
 
     try:
         # response_format=json_object + reasoning_effort=low — see
@@ -449,8 +582,17 @@ RESUME (for extracting target_role/target_company and grounding prose only):
         if not improved or original is None:
             continue
         result = validate_bullet_patch(bullet_id, improved, resume_text, extra_grounded_keywords_cf=grounded_keywords_cf)
-        if not result.ok:
-            validation_flags.append(f"{bullet_id}: {'; '.join(result.violations)}")
+        # Complementary to the check above: catches wording LIFTED FROM THE JD
+        # itself (ordinary words, not tech keywords, so the check above can't
+        # see it) rather than the candidate's own experience — e.g. a bullet
+        # about React frontend work ending "...demonstrating proficiency
+        # across experimentation, architecture, and delivery", copied
+        # near-verbatim from an unrelated JD requirement that has no resume
+        # evidence at all. See validate_no_jd_phrase_copying's docstring.
+        phrase_copy_result = validate_no_jd_phrase_copying(bullet_id, improved, job_description, original)
+        if not result.ok or not phrase_copy_result.ok:
+            violations = result.violations + phrase_copy_result.violations
+            validation_flags.append(f"{bullet_id}: {'; '.join(violations)}")
             continue
         bullet_rewrites.append({"original": original, "improved": improved})
 
@@ -469,7 +611,13 @@ RESUME (for extracting target_role/target_company and grounding prose only):
     tailored_summary = parsed.get("tailored_summary", "")
     if tailored_summary:
         summary_check = validate_summary(tailored_summary, resume_text, extra_grounded_keywords_cf=grounded_keywords_cf)
-        if not summary_check.ok:
+        # Same complementary phrase-copy check as bullet_patches above — the
+        # prompt already tells the model not to paraphrase JD sentence
+        # fragments into the summary, but that's prompt-level only until this
+        # verifies it.
+        summary_phrase_copy_check = validate_no_jd_phrase_copying("tailored_summary", tailored_summary, job_description, resume_text)
+        if not summary_check.ok or not summary_phrase_copy_check.ok:
+            combined_violations = summary_check.violations + summary_phrase_copy_check.violations
             # A weak-match JD often has the model try to acknowledge a gap
             # in-line ("...though it lacks direct computer vision
             # experience"), mentioning ONE missing keyword in an otherwise
@@ -477,14 +625,16 @@ RESUME (for extracting target_role/target_company and grounding prose only):
             # for that (the old behavior) meant a real, correctly-tailored
             # summary was discarded wholesale, leaving the resume's stock
             # original untouched. Try a surgical repair first.
-            repaired, repaired_ok = repair_summary(tailored_summary, resume_text, extra_grounded_keywords_cf=grounded_keywords_cf)
+            repaired, repaired_ok = repair_summary(
+                tailored_summary, resume_text, extra_grounded_keywords_cf=grounded_keywords_cf, jd_text=job_description,
+            )
             if repaired_ok:
                 validation_flags.append(
-                    f"tailored_summary: dropped ungrounded sentence(s) ({'; '.join(summary_check.violations)}), kept the rest"
+                    f"tailored_summary: dropped ungrounded/copied sentence(s) ({'; '.join(combined_violations)}), kept the rest"
                 )
                 tailored_summary = repaired
             else:
-                validation_flags.append(f"tailored_summary: {'; '.join(summary_check.violations)}")
+                validation_flags.append(f"tailored_summary: {'; '.join(combined_violations)}")
                 tailored_summary = ""
 
     # implied_skills_to_add is NOT trusted from the LLM as-is — measured live,
