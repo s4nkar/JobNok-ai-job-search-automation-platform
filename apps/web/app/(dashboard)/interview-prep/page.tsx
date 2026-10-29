@@ -8,7 +8,10 @@ import { Button } from '@jobnok/ui'
 import { Textarea } from '@jobnok/ui'
 import { Label } from '@jobnok/ui'
 import { useToast } from '@jobnok/ui'
-import { MessageSquare, Loader2, RefreshCw, ChevronDown, ChevronUp, Info, Compass, X } from 'lucide-react'
+import {
+  MessageSquare, Loader2, RefreshCw, ChevronDown, ChevronUp, Compass, X,
+  SlidersHorizontal,
+} from 'lucide-react'
 import { apiFetch, apiGet } from '@/lib/api'
 import { queryKeys } from '@/lib/queryKeys'
 import { cn } from '@jobnok/ui'
@@ -43,6 +46,7 @@ function InterviewPrepInner() {
   const trackerRole = searchParams.get('role')
 
   const [lead, setLead] = useState<StartupHuntSavedOpportunity | null>(null)
+  const [trackerApp, setTrackerApp] = useState<{ company: string; role: string } | null>(null)
   const [jd, setJd] = useState('')
   const [loading, setLoading] = useState(false)
   const [questions, setQuestions] = useState<InterviewQuestion[]>([])
@@ -50,6 +54,15 @@ function InterviewPrepInner() {
   const [regeneratingIdx, setRegeneratingIdx] = useState<number | null>(null)
   const [error, setError] = useState<string | null>(null)
   const { toast } = useToast()
+
+  // Mobile/tablet-only: the input card starts collapsed so generated
+  // questions are reachable without scrolling past the whole 18-row JD
+  // textarea first — same pattern as cover-letter/resume-tailor's sidebar.
+  // Ignored at lg+ (always expanded there).
+  const [inputsOpen, setInputsOpen] = useState(false)
+  const inputsSummary = jd.trim()
+    ? jd.trim().slice(0, 50) + (jd.trim().length > 50 ? '…' : '')
+    : 'No job description yet'
 
   const { data: opportunities } = useQuery({
     queryKey: queryKeys.startupHuntOpportunities,
@@ -72,6 +85,7 @@ function InterviewPrepInner() {
       .then((r) => r.ok ? r.json() : null)
       .then((found: JobSearchApplication | null) => {
         if (found) {
+          setTrackerApp({ company: found.company, role: found.role })
           setJd(found.job_description
             || `${found.role} at ${found.company}\n\n[Paste or add the full job description below this line for best results]`)
         }
@@ -80,6 +94,7 @@ function InterviewPrepInner() {
 
   useEffect(() => {
     if (opportunityId || jobSearchApplicationId || !trackerCompany || !trackerRole) return
+    setTrackerApp({ company: trackerCompany, role: trackerRole })
     setJd(`${trackerRole} at ${trackerCompany}\n\n[Paste or add the full job description below this line for best results]`)
   }, [opportunityId, jobSearchApplicationId, trackerCompany, trackerRole])
 
@@ -149,7 +164,7 @@ function InterviewPrepInner() {
   return (
     <div className="animate-fade-in">
       <div className="flex items-center gap-4 mb-6">
-        <div className="page-header-icon bg-indigo-100">
+        <div className="hidden sm:flex page-header-icon bg-indigo-100">
           <MessageSquare className="h-5 w-5 text-indigo-600" />
         </div>
         <div>
@@ -168,37 +183,73 @@ function InterviewPrepInner() {
         </div>
       )}
 
-      <div className="flex items-center gap-2.5 bg-indigo-50 border border-indigo-100 text-indigo-700 rounded-xl px-4 py-3 mb-6 text-sm">
-        <Info className="h-4 w-4 flex-shrink-0 text-indigo-500" />
-        <span><strong>{config.rateLimits.interviewPrepPerDay} preps/day</strong> on the free tier.</span>
-      </div>
+      {trackerApp && (
+        <div className="flex items-center gap-2.5 bg-indigo-50 border border-indigo-100 text-indigo-800 rounded-xl px-4 py-3 mb-4 text-sm">
+          <Compass className="h-4 w-4 flex-shrink-0 text-indigo-500" />
+          <span>Pre-filled from your tracker: <strong>{trackerApp.company} — {trackerApp.role}</strong>. Add the full JD below for best results.</span>
+          <button onClick={() => setTrackerApp(null)} className="ml-auto text-indigo-400 hover:text-indigo-700">
+            <X className="h-4 w-4" />
+          </button>
+        </div>
+      )}
 
-      <div className="grid grid-cols-2 gap-6 items-start">
-        <div className="space-y-4 sticky top-6">
-          <div className="bg-white rounded-2xl border border-slate-100 shadow-card p-5">
-            <Label className="text-sm font-semibold text-slate-700 mb-3 block">Job Description</Label>
-            <Textarea
-              value={jd}
-              onChange={(e) => setJd(e.target.value)}
-              rows={18}
-              placeholder="Paste the full job description here…"
-              className="text-sm rounded-xl border-slate-200 resize-none"
-            />
-          </div>
-
-          <Button
-            className="w-full h-11 gradient-brand text-white border-0 shadow-brand-sm hover:opacity-90 transition-opacity rounded-xl font-semibold"
-            onClick={generateQuestions}
-            disabled={!jd.trim() || loading}
+      {/* lg:, not md: — see resume-tailor/recent-job-search's identical
+          sidebar comment: at md a fixed sidebar leaves the results column
+          too narrow for its own sm: breakpoints, which key off full
+          viewport width, not the column's actual space. */}
+      <div className="grid grid-cols-1 lg:grid-cols-[380px_1fr] gap-5 items-start">
+        {/* Left — inputs, one unified sticky card, matching resume-tailor/
+            cover-letter's sidebar instead of the old plain 2-col grid. */}
+        <div className="bg-white rounded-2xl border border-slate-100 shadow-sm lg:sticky lg:top-6 lg:max-h-[calc(100vh-8.5rem)] lg:flex lg:flex-col overflow-hidden">
+          {/* Mobile/tablet-only collapsible header */}
+          <button
+            type="button"
+            onClick={() => setInputsOpen(v => !v)}
+            className="w-full lg:hidden flex items-center justify-between gap-3 px-5 py-3.5"
           >
-            {loading
-              ? <><Loader2 className="h-4 w-4 mr-2 animate-spin" /> Generating…</>
-              : <><MessageSquare className="h-4 w-4 mr-2" /> Generate 10 Questions</>
-            }
-          </Button>
+            <span className="flex items-center gap-2 text-xs font-semibold text-slate-500 uppercase tracking-wider flex-shrink-0">
+              <SlidersHorizontal className="h-3.5 w-3.5 text-slate-400" />
+              Job Description
+            </span>
+            <span className="flex items-center gap-1.5 text-xs text-slate-500 font-normal normal-case min-w-0">
+              <span className="truncate">{inputsSummary}</span>
+              {inputsOpen ? <ChevronUp className="h-3.5 w-3.5 flex-shrink-0" /> : <ChevronDown className="h-3.5 w-3.5 flex-shrink-0" />}
+            </span>
+          </button>
+
+          <div className={cn(
+            inputsOpen ? 'block' : 'hidden',
+            'lg:block lg:flex-1 lg:min-h-0 lg:overflow-y-auto scrollbar-thin p-5 lg:pt-5 space-y-4',
+            inputsOpen && 'border-t border-slate-100 lg:border-t-0',
+          )}>
+            <div>
+              <Label className="text-sm font-semibold text-slate-700 mb-3 block hidden lg:block">Job Description</Label>
+              <Textarea
+                value={jd}
+                onChange={(e) => setJd(e.target.value)}
+                rows={18}
+                placeholder="Paste the full job description here…"
+                className="text-sm rounded-xl border-slate-200 resize-none"
+              />
+            </div>
+
+            <Button
+              className="w-full h-11 gradient-brand text-white border-0 shadow-brand-sm hover:opacity-90 transition-opacity rounded-xl font-semibold"
+              onClick={generateQuestions}
+              disabled={!jd.trim() || loading}
+            >
+              {loading
+                ? <><Loader2 className="h-4 w-4 mr-2 animate-spin" /> Generating…</>
+                : <><MessageSquare className="h-4 w-4 mr-2" /> Generate 10 Questions</>
+              }
+            </Button>
+            <p className="text-center text-[11px] text-slate-400">
+              Up to {config.rateLimits.interviewPrepPerDay} preps/day on the free tier
+            </p>
+          </div>
         </div>
 
-        <div>
+        <div className="min-w-0">
           {error && (
             <div className="bg-red-50 border border-red-100 text-red-700 rounded-xl px-4 py-3 text-sm mb-4">{error}</div>
           )}
