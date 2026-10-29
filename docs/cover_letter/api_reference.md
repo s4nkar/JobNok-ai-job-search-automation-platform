@@ -1,0 +1,75 @@
+# Cover Letter: API Reference
+
+**Base URL**: `/api/ai`
+**Authentication**: Bearer JWT (Clerk) in `Authorization` header, resolved to `user_id` on every request.
+
+---
+
+## 1. Generate a Cover Letter (Streamed)
+
+### `POST /api/ai/cover-letter`
+
+Streams a tailored cover letter as plain text chunks — **not** real Server-Sent Events (no `data:`-prefixed frames), just raw text over a chunked response. The frontend reads it via `response.body.getReader()`.
+
+#### Request (`application/json`)
+| Field | Type | Required | Max Length | Description |
+| :--- | :--- | :--- | :--- | :--- |
+| `company` | string | Yes | 200 | Company name. May originate from a scraped Startup Hunt opportunity, not just user typing. |
+| `role` | string | Yes | 200 | Role/position title. |
+| `selling_points` | string | Yes (min 20) | 3,000 | The candidate's pitch — pre-fillable from `profiles.key_selling_points`. |
+| `resume_text` | string | No | 8,000 | Optional resume excerpt for extra grounding context. |
+
+```json
+{
+  "company": "Google",
+  "role": "AI Engineer",
+  "selling_points": "End-to-end AI engineering — you build complete systems, not just models...",
+  "resume_text": null
+}
+```
+
+#### Response (`200 OK`, `text/plain`, streamed)
+Raw text chunks, concatenated client-side into the full letter. On a mid-stream failure (provider exhausted, network error), a bracketed notice is appended instead of a silent cutoff:
+```
+[Generation interrupted - the AI service is temporarily unavailable. Please try again in a moment.]
+```
+The response status is still `200` in this case — ASGI commits to the status line before the body iterator is first awaited, so a failure partway through streaming can't be turned into a proper error code. The frontend treats the bracketed notice as user-visible text in the editable textarea (deletable like anything else).
+
+#### Error Responses
+- `422 Unprocessable Entity`: a field fails validation (missing, too short, too long).
+- `429 Too Many Requests`: daily quota (`rate_limit_cover_letter_per_day`, default 5) or burst window exceeded.
+
+---
+
+## 2. Export the Letter as PDF
+
+### `POST /api/ai/cover-letter/pdf`
+
+Renders exactly the text the client sends as a one-page PDF. No AI call, no content changes (no auto-inserted salutation or signature) — pure typography.
+
+#### Request (`application/json`)
+| Field | Type | Required | Max Length | Description |
+| :--- | :--- | :--- | :--- | :--- |
+| `content` | string | Yes | 5,000 | The letter text currently shown in the frontend's editable textarea. |
+
+```json
+{ "content": "When Google announced its new AI-engineered search initiative..." }
+```
+
+#### Response (`200 OK`, `application/pdf`)
+Raw PDF bytes with `Content-Disposition: attachment; filename="cover-letter.pdf"`. The frontend fetches this as a blob and builds its own download link with a company/role-based filename rather than relying on the server-side header's generic name.
+
+#### Error Responses
+- `422 Unprocessable Entity`: `content` missing, empty, or over 5,000 characters.
+- `429 Too Many Requests`: daily quota (`rate_limit_cover_letter_pdf_per_day`, default 20, separate from the generation quota) or burst window exceeded.
+
+---
+
+## 3. Related Endpoints (Owned by Other Modules)
+
+Cover Letter's "reuse your selling points" feature reads/writes through the Profile module, not its own:
+
+- `GET /api/profile` — includes `key_selling_points` in the response; the Cover Letter page fetches this to pre-fill `selling_points` on load.
+- `PUT /api/profile` — the Profile page's "Default Selling Points" field writes here (`key_selling_points`, max 3,000 chars, enforced in `profile/service.py` since that module has no Pydantic request schema).
+
+See `docs/cover_letter/data_flow_and_schema.md` §1.1 for the full field contract.

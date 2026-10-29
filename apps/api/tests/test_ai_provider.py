@@ -1,7 +1,10 @@
 """Unit tests for app.ai.llm.provider's chain dispatch — specifically the
-429 backoff-and-retry behavior. httpx.AsyncClient.post is monkeypatched
+429 backoff-and-retry behavior, plus stream_text's reasoning_effort/
+finish_reason handling. httpx.AsyncClient.post/.stream are monkeypatched
 directly (no network access); asyncio.sleep is monkeypatched to a no-op so
 the retry test doesn't actually wait."""
+
+import json
 
 import httpx
 
@@ -96,6 +99,143 @@ async def test_run_chain_falls_through_to_next_provider_if_retry_also_rate_limit
     assert content == "from openrouter"
     assert used_provider == "openrouter"
     assert responses == []
+
+
+# ── stream_text / _openai_compat_stream ─────────────────────────────────
+# Covers two things added this session that had zero coverage on the
+# streaming path specifically (the non-streaming path already had the
+# reasoning_effort fix; this path never had it at all until a real cover
+# letter streamed fine up to "...initiatives in a" and silently stopped —
+# see generation hit-live notes in cover_letter/routes.py):
+#   1. reasoning_effort is included in the request body only for a
+#      gpt-oss-class model (sending it to any other model is a 400 per
+#      Groq's API).
+#   2. finish_reason == "length" is detected and logged as a warning (not
+#      raised — content has already been yielded by that point, same
+#      "don't switch mid-stream" reasoning as everywhere else in this file).
+
+class _FakeStreamResponse:
+    def __init__(self, status_code: int, lines: list[str]):
+        self.status_code = status_code
+        self._lines = lines
+
+    async def aiter_lines(self):
+        for line in self._lines:
+            yield line
+
+    async def aread(self) -> bytes:
+        return b"error body"
+
+
+class _FakeStreamCM:
+    def __init__(self, resp: _FakeStreamResponse):
+        self._resp = resp
+
+    async def __aenter__(self):
+        return self._resp
+
+    async def __aexit__(self, *exc):
+        return False
+
+
+def _sse_lines(*deltas_and_finish: tuple[str | None, str | None]) -> list[str]:
+    """Builds fake 'data: {...}' SSE lines from (content_delta, finish_reason)
+    pairs, terminated with the real API's 'data: [DONE]' sentinel."""
+    lines = []
+    for content, finish_reason in deltas_and_finish:
+        delta = {"content": content} if content is not None else {}
+        payload = {"choices": [{"delta": delta, "finish_reason": finish_reason}]}
+        lines.append(f"data: {json.dumps(payload)}")
+    lines.append("data: [DONE]")
+    return lines
+
+
+async def test_stream_text_includes_reasoning_effort_for_gpt_oss_model(monkeypatch):
+    _patch_settings(monkeypatch)
+    _patch_cache_bypass(monkeypatch)
+    monkeypatch.setattr(settings, "groq_model", "openai/gpt-oss-120b")
+
+    captured: dict = {}
+
+    def fake_stream(self, method, url, headers=None, json=None):
+        captured["body"] = json
+        return _FakeStreamCM(_FakeStreamResponse(200, _sse_lines(("Hello", None), (None, "stop"))))
+
+    monkeypatch.setattr(httpx.AsyncClient, "stream", fake_stream)
+
+    chunks = [c async for c in provider.stream_text("prompt", "system", reasoning_effort="low")]
+
+    assert "".join(chunks) == "Hello"
+    assert captured["body"]["reasoning_effort"] == "low"
+
+
+async def test_stream_text_omits_reasoning_effort_for_non_gpt_oss_model(monkeypatch):
+    _patch_settings(monkeypatch)
+    _patch_cache_bypass(monkeypatch)
+    monkeypatch.setattr(settings, "groq_model", "llama-3.3-70b-versatile")
+
+    captured: dict = {}
+
+    def fake_stream(self, method, url, headers=None, json=None):
+        captured["body"] = json
+        return _FakeStreamCM(_FakeStreamResponse(200, _sse_lines(("Hello", None), (None, "stop"))))
+
+    monkeypatch.setattr(httpx.AsyncClient, "stream", fake_stream)
+
+    chunks = [c async for c in provider.stream_text("prompt", "system", reasoning_effort="low")]
+
+    assert "".join(chunks) == "Hello"
+    assert "reasoning_effort" not in captured["body"]
+
+
+async def test_stream_text_omits_reasoning_effort_when_not_passed(monkeypatch):
+    _patch_settings(monkeypatch)
+    _patch_cache_bypass(monkeypatch)
+    monkeypatch.setattr(settings, "groq_model", "openai/gpt-oss-120b")
+
+    captured: dict = {}
+
+    def fake_stream(self, method, url, headers=None, json=None):
+        captured["body"] = json
+        return _FakeStreamCM(_FakeStreamResponse(200, _sse_lines(("Hi", "stop"))))
+
+    monkeypatch.setattr(httpx.AsyncClient, "stream", fake_stream)
+
+    _ = [c async for c in provider.stream_text("prompt", "system")]
+
+    assert "reasoning_effort" not in captured["body"]
+
+
+async def test_stream_text_logs_warning_on_length_truncation(monkeypatch, caplog):
+    _patch_settings(monkeypatch)
+    _patch_cache_bypass(monkeypatch)
+
+    def fake_stream(self, method, url, headers=None, json=None):
+        return _FakeStreamCM(_FakeStreamResponse(200, _sse_lines(("Cut off mid", "length"))))
+
+    monkeypatch.setattr(httpx.AsyncClient, "stream", fake_stream)
+
+    with caplog.at_level("WARNING"):
+        chunks = [c async for c in provider.stream_text("prompt", "system")]
+
+    assert "".join(chunks) == "Cut off mid"
+    assert any("length" in rec.message and "truncat" in rec.message for rec in caplog.records)
+
+
+async def test_stream_text_no_warning_on_normal_completion(monkeypatch, caplog):
+    _patch_settings(monkeypatch)
+    _patch_cache_bypass(monkeypatch)
+
+    def fake_stream(self, method, url, headers=None, json=None):
+        return _FakeStreamCM(_FakeStreamResponse(200, _sse_lines(("All done", "stop"))))
+
+    monkeypatch.setattr(httpx.AsyncClient, "stream", fake_stream)
+
+    with caplog.at_level("WARNING"):
+        chunks = [c async for c in provider.stream_text("prompt", "system")]
+
+    assert "".join(chunks) == "All done"
+    assert not any("truncat" in rec.message for rec in caplog.records)
 
 
 async def test_run_chain_raises_after_all_providers_exhausted_on_429(monkeypatch):

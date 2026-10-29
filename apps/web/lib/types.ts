@@ -508,6 +508,7 @@ export interface UserProfile {
   work_authorization: string | null
   cv_photo_url: string | null
   cv_email: string | null
+  key_selling_points: string | null
 }
 
 // ── Startup Scout ────────────────────────────────────────────────────────────

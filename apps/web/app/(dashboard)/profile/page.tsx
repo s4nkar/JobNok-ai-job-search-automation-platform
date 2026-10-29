@@ -6,6 +6,7 @@ import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { User, Camera, Save, Loader2, CheckCircle, KeyRound } from 'lucide-react'
 import { Button } from '@jobnok/ui'
 import { Input } from '@jobnok/ui'
+import { Textarea } from '@jobnok/ui'
 import { Label } from '@jobnok/ui'
 import { useToast } from '@jobnok/ui'
 import { apiFetch, apiGet } from '@/lib/api'
@@ -111,6 +112,7 @@ export default function ProfilePage() {
         github_url: profile.github_url,
         website_url: profile.website_url,
         work_authorization: profile.work_authorization,
+        key_selling_points: profile.key_selling_points,
       }
       const res = await apiFetch('/api/profile', {
         method: 'PUT',
@@ -233,6 +235,23 @@ export default function ProfilePage() {
           </div>
 
           <MyResumes />
+
+          {/* Reusable default for the Cover Letter tool — pre-fills the
+              "key selling points" field there so it doesn't need retyping
+              per application; still freely editable per-letter without
+              touching this saved default. */}
+          <div className="bg-white rounded-2xl border border-slate-100 shadow-card p-5">
+            <p className="text-xs font-bold text-slate-500 uppercase tracking-widest mb-1">Default Selling Points</p>
+            <p className="text-xs text-slate-400 mb-4">Pre-fills the Cover Letter tool — edit per application anytime without changing this default.</p>
+            <Textarea
+              value={profile?.key_selling_points || ''}
+              onChange={e => handleField('key_selling_points', e.target.value)}
+              rows={4}
+              maxLength={3000}
+              placeholder="5 years building React apps, led a team of 4 engineers, shipped 3 major product launches..."
+              className="rounded-xl border-slate-200 resize-none"
+            />
+          </div>
 
           {/* Address */}
           <div className="bg-white rounded-2xl border border-slate-100 shadow-card p-5">

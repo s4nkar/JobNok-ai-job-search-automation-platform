@@ -20,7 +20,17 @@ _ALLOWED_FIELDS = {
     "address_street", "address_city", "address_postal_code", "address_country",
     "date_of_birth", "nationality",
     "linkedin_url", "github_url", "website_url", "work_authorization",
+    "key_selling_points",
 }
+
+# This module has no Pydantic request schema (update_profile takes a raw
+# dict, see routes.py) and no other field here has a length guard either —
+# matching max cap the cover-letter tool itself enforces on the field this
+# feeds into (apps/web/app/(dashboard)/cover-letter/page.tsx's Zod schema,
+# apps/api/app/modules/cover_letter/schemas.py), since without one here a
+# saved default longer than that would just get silently rejected every time
+# the cover-letter form tries to submit it.
+_KEY_SELLING_POINTS_MAX_LEN = 3000
 
 
 async def get_profile(db: AsyncSession, user_id: str) -> dict:
@@ -34,6 +44,9 @@ async def update_profile(db: AsyncSession, user_id: str, body: dict) -> dict:
     updates = {k: v for k, v in body.items() if k in _ALLOWED_FIELDS}
     if not updates:
         raise HTTPException(status_code=422, detail="No valid fields provided")
+    ksp = updates.get("key_selling_points")
+    if isinstance(ksp, str) and len(ksp) > _KEY_SELLING_POINTS_MAX_LEN:
+        raise HTTPException(status_code=422, detail=f"key_selling_points must be under {_KEY_SELLING_POINTS_MAX_LEN} characters")
     row = (await db.execute(select(Profile).where(Profile.id == user_id))).scalar_one_or_none()
     if row is None:
         raise HTTPException(status_code=404, detail="Profile not found")
