@@ -122,6 +122,13 @@ class Settings(BaseSettings):
     # justify a different number.
     rate_limit_cover_letter_pdf_per_day: int = 20
     rate_limit_interview_per_day: int = 10
+    # Regenerating one question's answer is its own AI call but much
+    # cheaper/smaller than a full 10-question generation - shares the same
+    # "split by cost profile" reasoning as resume_tailor's AI/PDF split
+    # above, not because this one has a different cost TYPE, just a much
+    # higher plausible call volume per generation (several regenerates per
+    # generated set) that shouldn't eat into the main per-day budget.
+    rate_limit_interview_regenerate_per_day: int = 30
     rate_limit_salary_per_day: int = 5
     rate_limit_job_search_per_day: int = 10
     rate_limit_job_search_applications_per_day: int = 200

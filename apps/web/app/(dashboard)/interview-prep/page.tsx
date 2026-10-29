@@ -10,18 +10,23 @@ import { Label } from '@jobnok/ui'
 import { useToast } from '@jobnok/ui'
 import {
   MessageSquare, Loader2, RefreshCw, ChevronDown, ChevronUp, Compass, X,
-  SlidersHorizontal,
+  SlidersHorizontal, Target, Code2, Network,
 } from 'lucide-react'
 import { apiFetch, apiGet } from '@/lib/api'
 import { queryKeys } from '@/lib/queryKeys'
 import { cn } from '@jobnok/ui'
-import { StartupHuntSavedOpportunity, JobSearchApplication } from '@/lib/types'
+import {
+  StartupHuntSavedOpportunity, JobSearchApplication,
+  InterviewPrepResult, InterviewQuestion, InterviewRoleAssessment, TechnicalPrepQuestion,
+} from '@/lib/types'
 
-interface InterviewQuestion {
-  question: string
-  framework: string
-  answer_framework: string
-  tips: string[]
+const JD_MAX_CHARS = 12000
+
+const SENIORITY_LABEL: Record<InterviewRoleAssessment['seniority'], string> = {
+  junior: 'Junior',
+  mid: 'Mid-level',
+  senior: 'Senior',
+  unclear: 'Seniority unclear',
 }
 
 function buildJdFromOpportunity(lead: StartupHuntSavedOpportunity): string {
@@ -49,11 +54,21 @@ function InterviewPrepInner() {
   const [trackerApp, setTrackerApp] = useState<{ company: string; role: string } | null>(null)
   const [jd, setJd] = useState('')
   const [loading, setLoading] = useState(false)
+  const [roleAssessment, setRoleAssessment] = useState<InterviewRoleAssessment | null>(null)
   const [questions, setQuestions] = useState<InterviewQuestion[]>([])
+  const [dsaQuestions, setDsaQuestions] = useState<TechnicalPrepQuestion[]>([])
+  const [systemDesignQuestions, setSystemDesignQuestions] = useState<TechnicalPrepQuestion[]>([])
   const [expandedIdx, setExpandedIdx] = useState<number | null>(null)
   const [regeneratingIdx, setRegeneratingIdx] = useState<number | null>(null)
   const [error, setError] = useState<string | null>(null)
   const { toast } = useToast()
+
+  // Real company/role from an already-known Startup Hunt lead or tracked
+  // application, sent alongside the JD so the backend can use trusted data
+  // instead of guessing a company name out of free text (reduces
+  // hallucination risk for the role_assessment.company_context field).
+  const knownCompany = lead?.company_name ?? trackerApp?.company ?? undefined
+  const knownRole = lead?.role_title ?? trackerApp?.role ?? undefined
 
   // Mobile/tablet-only: the input card starts collapsed so generated
   // questions are reachable without scrolling past the whole 18-row JD
@@ -101,22 +116,29 @@ function InterviewPrepInner() {
   async function generateQuestions() {
     if (!jd.trim()) return
     setLoading(true)
+    setRoleAssessment(null)
     setQuestions([])
+    setDsaQuestions([])
+    setSystemDesignQuestions([])
     setError(null)
 
     try {
       const res = await apiFetch('/api/ai/interview', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ job_description: jd }),
+        body: JSON.stringify({ job_description: jd, company: knownCompany, role: knownRole }),
       })
       const json = await res.json()
 
       if (!res.ok) {
         setError(json.detail || 'Generation failed.')
       } else {
-        const qs: InterviewQuestion[] = json.questions || []
+        const result = json as InterviewPrepResult
+        const qs = result.questions || []
+        setRoleAssessment(result.role_assessment ?? null)
         setQuestions(qs)
+        setDsaQuestions(result.dsa_questions || [])
+        setSystemDesignQuestions(result.system_design_questions || [])
         setExpandedIdx(0)
 
         if (opportunityId && qs.length) {
@@ -223,11 +245,17 @@ function InterviewPrepInner() {
             inputsOpen && 'border-t border-slate-100 lg:border-t-0',
           )}>
             <div>
-              <Label className="text-sm font-semibold text-slate-700 mb-3 block hidden lg:block">Job Description</Label>
+              <div className="flex items-center justify-between gap-2 mb-3 hidden lg:flex">
+                <Label className="text-sm font-semibold text-slate-700">Job Description</Label>
+                <span className={`text-xs ${jd.length > JD_MAX_CHARS ? 'text-destructive' : 'text-slate-400'}`}>
+                  {jd.length}/{JD_MAX_CHARS}
+                </span>
+              </div>
               <Textarea
                 value={jd}
                 onChange={(e) => setJd(e.target.value)}
                 rows={18}
+                maxLength={JD_MAX_CHARS}
                 placeholder="Paste the full job description here…"
                 className="text-sm rounded-xl border-slate-200 resize-none"
               />
@@ -273,6 +301,40 @@ function InterviewPrepInner() {
                 <p className="font-semibold text-slate-700">Generating questions…</p>
                 <p className="text-sm text-slate-400">Analysing the job description</p>
               </div>
+            </div>
+          )}
+
+          {roleAssessment && (
+            <div className="bg-white rounded-2xl border border-slate-100 shadow-card p-5 mb-4">
+              <div className="flex items-center gap-2 mb-3">
+                <Target className="h-4 w-4 text-indigo-500" />
+                <p className="text-sm font-semibold text-slate-700">Role Assessment</p>
+              </div>
+              <div className="flex flex-wrap items-center gap-1.5 mb-3">
+                <span className="inline-flex items-center px-2.5 py-1 rounded-lg text-xs font-semibold bg-indigo-50 text-indigo-700 border border-indigo-100">
+                  {SENIORITY_LABEL[roleAssessment.seniority]}
+                </span>
+                {roleAssessment.role_family && (
+                  <span className="inline-flex items-center px-2.5 py-1 rounded-lg text-xs font-semibold bg-slate-50 text-slate-600 border border-slate-200">
+                    {roleAssessment.role_family}
+                  </span>
+                )}
+              </div>
+              {roleAssessment.likely_rounds.length > 0 && (
+                <div className="mb-3">
+                  <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest mb-1.5">Likely Interview Rounds</p>
+                  <div className="flex flex-wrap gap-1.5">
+                    {roleAssessment.likely_rounds.map((round, i) => (
+                      <span key={i} className="inline-flex items-center px-2 py-1 rounded-lg text-xs font-medium bg-slate-50 text-slate-600 border border-slate-200">
+                        {i + 1}. {round}
+                      </span>
+                    ))}
+                  </div>
+                </div>
+              )}
+              {roleAssessment.company_context && (
+                <p className="text-xs text-slate-500 leading-relaxed">{roleAssessment.company_context}</p>
+              )}
             </div>
           )}
 
@@ -341,6 +403,46 @@ function InterviewPrepInner() {
                   )}
                 </div>
               ))}
+            </div>
+          )}
+
+          {dsaQuestions.length > 0 && (
+            <div className="mt-5">
+              <div className="flex items-center gap-2 mb-2.5">
+                <Code2 className="h-4 w-4 text-indigo-500" />
+                <p className="text-sm font-semibold text-slate-700">DSA Prep</p>
+              </div>
+              <div className="space-y-2.5">
+                {dsaQuestions.map((q, i) => (
+                  <div key={i} className="bg-white rounded-2xl border border-slate-100 shadow-card p-5">
+                    <p className="text-sm font-semibold text-slate-800 leading-snug mb-3">{q.question}</p>
+                    <div className="bg-slate-50 rounded-xl p-4">
+                      <p className="text-[10px] font-bold text-slate-500 uppercase tracking-widest mb-2">Approach</p>
+                      <p className="text-sm text-slate-700 whitespace-pre-wrap leading-relaxed">{q.approach}</p>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {systemDesignQuestions.length > 0 && (
+            <div className="mt-5">
+              <div className="flex items-center gap-2 mb-2.5">
+                <Network className="h-4 w-4 text-indigo-500" />
+                <p className="text-sm font-semibold text-slate-700">System Design Prep</p>
+              </div>
+              <div className="space-y-2.5">
+                {systemDesignQuestions.map((q, i) => (
+                  <div key={i} className="bg-white rounded-2xl border border-slate-100 shadow-card p-5">
+                    <p className="text-sm font-semibold text-slate-800 leading-snug mb-3">{q.question}</p>
+                    <div className="bg-slate-50 rounded-xl p-4">
+                      <p className="text-[10px] font-bold text-slate-500 uppercase tracking-widest mb-2">Approach</p>
+                      <p className="text-sm text-slate-700 whitespace-pre-wrap leading-relaxed">{q.approach}</p>
+                    </div>
+                  </div>
+                ))}
+              </div>
             </div>
           )}
         </div>
