@@ -12,14 +12,18 @@
 apps/api/app/modules/cover_letter/
 ├── __init__.py
 ├── routes.py              # Both endpoints: POST /cover-letter (stream), POST /cover-letter/pdf
-├── schemas.py              # CoverLetterRequest, CoverLetterPdfRequest
+├── sessions_routes.py      # Saved-session CRUD: save, list, get, rename (My Docs)
+├── models.py                # CoverLetterSession (cover_letter_sessions table)
+├── repository.py            # CoverLetterSessionRepository
+├── service.py               # ownership checks, display-label fallback, list_sessions_for_docs_page
+├── schemas.py              # CoverLetterRequest, CoverLetterPdfRequest, CoverLetterSaveRequest, session schemas
 ├── text.py                 # Pure helpers: strip_dashes, split_paragraphs — zero WeasyPrint/AI imports
 ├── rendering.py             # PDF export: Jinja + WeasyPrint (reuses resume_tailor's stack)
 └── templates/
     └── cover_letter.html    # Single simple one-page letter layout, no auto-inserted content
 ```
 
-No `models.py` — this module has no dedicated database table. See `data_flow_and_schema.md` for what it touches instead (`profiles.key_selling_points`, Redis rate-limit keys).
+See `data_flow_and_schema.md` §1.1 for the `cover_letter_sessions` table and §1.2 for `profiles.key_selling_points`/Redis keys this module also touches.
 
 ---
 
@@ -47,6 +51,23 @@ async def cover_letter_pdf(request: Request, body: CoverLetterPdfRequest, db: As
 1. **Daily quota** (`rate_limit_cover_letter_pdf_per_day`, separate from the generation quota — see §3 rationale) then **burst window**.
 2. `rendering.render_pdf(body.content)` — renders exactly the text the client sent, no AI call, no auto-inserted salutation or signature. `text.split_paragraphs` splits on blank lines (falling back to single-newline splitting for a hand-edited textarea with no blank-line separation), then `WeasyHTML(string=html).write_pdf()` runs off the event loop via `asyncio.to_thread`.
 3. Returns raw PDF bytes with a `Content-Disposition: attachment` header; the frontend controls the actual filename client-side (fetches as a blob, builds its own `<a download>`), since the server-side header's filename isn't easily overridden per-request from the frontend's existing download pattern.
+
+### 2.3 Save (`sessions_routes.py::save_cover_letter_session`)
+
+```python
+@router.post("/cover-letter/save", response_model=CoverLetterSessionDetail)
+async def save_cover_letter_session(request: Request, body: CoverLetterSaveRequest, db: AsyncSession = Depends(get_db)):
+```
+
+Explicit action, not auto-triggered by generation. Verifies ownership of `opportunity_id`/`job_search_application_id` (if provided) via `service.verify_opportunity_ownership`/`verify_application_ownership` before trusting either as `source_opportunity_id`/`source_application_id` - same "never trust a client-supplied id" pattern resume_tailor's `/tailor` POST uses. Burst-limited only (no daily quota - not AI-costed).
+
+### 2.4 List / Get / Rename (`sessions_routes.py`)
+
+- `GET /cover-letter/sessions` - every saved letter for "My Docs", most recent first, via `service.list_sessions_for_docs_page`. Burst-limited.
+- `GET /cover-letter/sessions/{id}` - full row, used to reopen a saved letter in the generator page (pre-fills the form + output).
+- `PATCH /cover-letter/sessions/{id}/title` - rename, identical shape to resume_tailor's `PATCH /tailor/{id}/title`.
+
+`service._session_display_label` is simpler than resume_tailor's equivalent: `company`/`role` are always literal form fields on a saved session (never AI-guessed), so it's just `session.title or f"{session.role} at {session.company}"` - no opportunity/application fallback lookup, no `is_ai_matched` ambiguity.
 
 ---
 

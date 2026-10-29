@@ -7,11 +7,33 @@
 
 ## 1. Database Schema
 
-**There is no dedicated table for this module.** A generated letter is never persisted server-side — it exists only in the browser's editable textarea until the user copies it, downloads it as a PDF, or (if the session was opened from a Startup Hunt lead) it gets opportunistically saved as a `startup_hunt_opportunities` artifact via that module's own `/artifacts` endpoint (frontend-triggered, not something this module writes to directly).
+A generated letter is never persisted automatically — it exists only in the browser's editable textarea until the user explicitly clicks Save (writing a `cover_letter_sessions` row), downloads it as a PDF, copies it, or (if the session was opened from a Startup Hunt lead) it gets opportunistically saved as a `startup_hunt_opportunities` artifact via that module's own `/artifacts` endpoint (frontend-triggered, not something this module writes to directly).
 
-This is a deliberate scope boundary, not an oversight: a cover letter is typically single-use per application, lower-stakes to lose than a resume, and adding a history view would be a real feature (new table, routes, UI — mirroring resume_tailor's "My Docs") rather than a hardening fix. See `docs/cover_letter/architecture_hld.md` §4.1.
+### 1.1 `cover_letter_sessions`
 
-### 1.1 `profiles.key_selling_points` (shared with the Profile module)
+One row per explicit Save - not auto-saved on every generation, since free-text generations have no deterministic dedup key the way resume_tailor's resume+JD hash pair does. Mirrors `tailoring_sessions`' `source_opportunity_id`/`source_application_id` linkage pattern (same ON DELETE SET NULL reasoning) so "My Docs" can group a resume and a cover letter saved for the same job.
+
+```sql
+CREATE TABLE cover_letter_sessions (
+    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    user_id UUID NOT NULL REFERENCES profiles(id) ON DELETE CASCADE,
+    company TEXT NOT NULL CHECK (char_length(company) <= 200),
+    role TEXT NOT NULL CHECK (char_length(role) <= 200),
+    selling_points TEXT NOT NULL CHECK (char_length(selling_points) <= 3000),
+    resume_text TEXT,
+    content TEXT NOT NULL CHECK (char_length(content) <= 5000),
+    title TEXT CHECK (title IS NULL OR char_length(title) <= 200),
+    source_opportunity_id UUID REFERENCES startup_hunt_opportunities(id) ON DELETE SET NULL,
+    source_application_id UUID REFERENCES job_search_applications(id) ON DELETE SET NULL
+);
+```
+
+- No `ai_status`/`ai_provider`/`ai_error` columns - only a successfully-generated, user-chosen-to-keep letter ever becomes a row, so there's nothing to track on the row itself.
+- No unique constraint - matches `tailoring_sessions`; every Save creates a new row rather than upserting.
+- `title` - user-renameable via `PATCH /api/ai/cover-letter/sessions/{id}/title`, same UX as resume_tailor's My Docs (rename only - no delete, no re-edit-and-resave).
+
+### 1.2 `profiles.key_selling_points` (shared with the Profile module)
 
 The one piece of durable state this module reads (never writes directly):
 

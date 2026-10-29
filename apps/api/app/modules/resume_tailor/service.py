@@ -211,6 +211,8 @@ async def list_sessions_for_docs_page(db: AsyncSession, user_id: str) -> list[Se
             created_at=s.created_at.isoformat(),
             is_draft=s.draft_cv_data is not None,
             preview_html=preview_html,
+            source_opportunity_id=str(s.source_opportunity_id) if s.source_opportunity_id else None,
+            source_application_id=str(s.source_application_id) if s.source_application_id else None,
         ))
     return summaries
 

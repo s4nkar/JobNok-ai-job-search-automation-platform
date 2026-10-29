@@ -6,7 +6,7 @@ fix closed."""
 import pytest
 from pydantic import ValidationError
 
-from app.modules.cover_letter.schemas import CoverLetterPdfRequest, CoverLetterRequest
+from app.modules.cover_letter.schemas import CoverLetterPdfRequest, CoverLetterRequest, CoverLetterSaveRequest
 
 
 def _valid_request_kwargs(**overrides):
@@ -81,3 +81,38 @@ def test_cover_letter_pdf_request_enforces_max_length():
     with pytest.raises(ValidationError):
         CoverLetterPdfRequest(content="x" * 5001)
     CoverLetterPdfRequest(content="x" * 5000)
+
+
+def _valid_save_request_kwargs(**overrides):
+    base = _valid_request_kwargs()
+    base["content"] = "Dear Hiring Manager, I am writing to apply for this role."
+    base.update(overrides)
+    return base
+
+
+def test_cover_letter_save_request_accepts_valid_input():
+    req = CoverLetterSaveRequest(**_valid_save_request_kwargs())
+    assert req.content.startswith("Dear")
+    assert req.opportunity_id is None
+    assert req.job_search_application_id is None
+
+
+def test_cover_letter_save_request_accepts_optional_linkage_ids():
+    req = CoverLetterSaveRequest(**_valid_save_request_kwargs(opportunity_id="opp-1"))
+    assert req.opportunity_id == "opp-1"
+
+
+def test_cover_letter_save_request_rejects_empty_content():
+    with pytest.raises(ValidationError):
+        CoverLetterSaveRequest(**_valid_save_request_kwargs(content=""))
+
+
+def test_cover_letter_save_request_enforces_content_max_length():
+    with pytest.raises(ValidationError):
+        CoverLetterSaveRequest(**_valid_save_request_kwargs(content="x" * 5001))
+    CoverLetterSaveRequest(**_valid_save_request_kwargs(content="x" * 5000))
+
+
+def test_cover_letter_save_request_rejects_too_short_selling_points():
+    with pytest.raises(ValidationError):
+        CoverLetterSaveRequest(**_valid_save_request_kwargs(selling_points="Too short."))

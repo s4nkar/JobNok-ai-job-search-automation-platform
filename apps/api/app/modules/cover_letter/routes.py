@@ -4,6 +4,10 @@ Streams the response as plain text chunks (not actual Server-Sent Events,
 no "data:"-prefixed frames, just raw text over a chunked response; the
 frontend reads it via response.body.getReader()). Rate limited per user via
 Upstash Redis: a daily quota plus a short burst window.
+
+Saved-session CRUD ("My Docs", explicit Save only - see sessions_routes.py
+for why generation itself stays stateless) lives in sessions_routes.py,
+included into this module's router above.
 """
 
 import logging
@@ -20,11 +24,19 @@ from app.ai.llm import provider as ai_provider
 from app.shared.utils import _rl_error
 from app.modules.cover_letter import rendering
 from app.modules.cover_letter.schemas import CoverLetterPdfRequest, CoverLetterRequest
+from app.modules.cover_letter.sessions_routes import router as sessions_router
 from app.modules.cover_letter.text import strip_dashes
 from app.modules.usage.service import record_event as record_tool_usage
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
+
+# Included here, before /cover-letter/pdf below - same FastAPI/Starlette
+# registration-order reasoning resume_tailor/routes.py documents (not
+# actually at risk of a path collision today since sessions_routes.py's
+# paths don't overlap /cover-letter or /cover-letter/pdf, but kept first for
+# consistency with that established pattern).
+router.include_router(sessions_router)
 
 
 @router.post("/cover-letter")

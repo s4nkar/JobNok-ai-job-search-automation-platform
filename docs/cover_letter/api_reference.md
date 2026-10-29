@@ -65,11 +65,55 @@ Raw PDF bytes with `Content-Disposition: attachment; filename="cover-letter.pdf"
 
 ---
 
-## 3. Related Endpoints (Owned by Other Modules)
+## 3. Save / List / Get / Rename a Saved Letter
+
+### `POST /api/ai/cover-letter/save`
+
+Explicit save - not triggered automatically by generation. Creates a new `cover_letter_sessions` row every time (no upsert/dedup).
+
+#### Request (`application/json`)
+| Field | Type | Required | Max Length | Description |
+| :--- | :--- | :--- | :--- | :--- |
+| `company` | string | Yes | 200 | |
+| `role` | string | Yes | 200 | |
+| `selling_points` | string | Yes (min 20) | 3,000 | |
+| `resume_text` | string | No | 8,000 | |
+| `content` | string | Yes | 5,000 | The letter text to save, as currently shown/edited. |
+| `opportunity_id` | string | No | - | A Startup Hunt opportunity to link this save to; ownership is re-verified server-side, silently dropped if it doesn't belong to the caller. |
+| `job_search_application_id` | string | No | - | Same, for a tracked job application. |
+
+#### Response (`200 OK`) - `CoverLetterSessionDetail`
+```json
+{
+  "id": "...", "title": null, "company": "Google", "role": "AI Engineer",
+  "selling_points": "...", "resume_text": null, "content": "...",
+  "created_at": "...", "source_opportunity_id": null, "source_application_id": null
+}
+```
+
+### `GET /api/ai/cover-letter/sessions`
+
+Lists every saved letter for "My Docs", most recent first. Response: `{ "sessions": CoverLetterSessionSummary[] }`, each with `id, title, display_label, created_at, source_opportunity_id, source_application_id`.
+
+### `GET /api/ai/cover-letter/sessions/{id}`
+
+Fetches one saved letter in full (`CoverLetterSessionDetail`, same shape as the Save response) - used to reopen a saved letter in the generator page via `?session_id=`.
+
+### `PATCH /api/ai/cover-letter/sessions/{id}/title`
+
+Body: `{ "title": "..." }` (max 200 chars). Response: `{ "title": "..." }`.
+
+#### Error Responses (all four endpoints)
+- `404 Not Found`: session doesn't exist or isn't owned by the caller.
+- `429 Too Many Requests`: burst window exceeded (no daily quota - these aren't AI-costed).
+
+---
+
+## 4. Related Endpoints (Owned by Other Modules)
 
 Cover Letter's "reuse your selling points" feature reads/writes through the Profile module, not its own:
 
 - `GET /api/profile` — includes `key_selling_points` in the response; the Cover Letter page fetches this to pre-fill `selling_points` on load.
 - `PUT /api/profile` — the Profile page's "Default Selling Points" field writes here (`key_selling_points`, max 3,000 chars, enforced in `profile/service.py` since that module has no Pydantic request schema).
 
-See `docs/cover_letter/data_flow_and_schema.md` §1.1 for the full field contract.
+See `docs/cover_letter/data_flow_and_schema.md` §1.2 for the full field contract.

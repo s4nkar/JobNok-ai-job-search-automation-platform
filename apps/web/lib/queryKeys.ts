@@ -25,4 +25,6 @@ export const queryKeys = {
   jobSearchApplications: ['job-search', 'applications'] as const,
   // "My Docs" — every resume the user has generated (resume_tailor sessions).
   tailoringSessions: ['tailoring-sessions'] as const,
+  // "My Docs" — every cover letter the user explicitly saved.
+  coverLetterSessions: ['cover-letter-sessions'] as const,
 }

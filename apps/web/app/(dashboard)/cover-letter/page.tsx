@@ -16,11 +16,11 @@ import { useToast } from '@jobnok/ui'
 import { cn } from '@jobnok/ui'
 import {
   PenLine, Loader2, Copy, Check, Compass, X,
-  SlidersHorizontal, ChevronDown, ChevronUp, Download,
+  SlidersHorizontal, ChevronDown, ChevronUp, Download, Save,
 } from 'lucide-react'
 import { apiFetch, apiGet } from '@/lib/api'
 import { queryKeys } from '@/lib/queryKeys'
-import { StartupHuntSavedOpportunity, UserProfile } from '@/lib/types'
+import { CoverLetterSessionDetail, StartupHuntSavedOpportunity, UserProfile } from '@/lib/types'
 
 // Bounds mirror the backend's Pydantic schema (apps/api/app/modules/
 // cover_letter/schemas.py::CoverLetterRequest) — kept in sync by hand, same
@@ -38,8 +38,10 @@ type FormData = z.infer<typeof schema>
 function CoverLetterInner() {
   const searchParams = useSearchParams()
   const opportunityId = searchParams.get('opportunity_id')
+  const jobSearchApplicationId = searchParams.get('job_search_application_id')
   const trackerCompany = searchParams.get('company')
   const trackerRole = searchParams.get('role')
+  const sessionId = searchParams.get('session_id')
 
   const [lead, setLead] = useState<StartupHuntSavedOpportunity | null>(null)
   const [trackerApp, setTrackerApp] = useState<{ company: string; role: string } | null>(null)
@@ -47,6 +49,8 @@ function CoverLetterInner() {
   const [output, setOutput] = useState('')
   const [copied, setCopied] = useState(false)
   const [downloading, setDownloading] = useState(false)
+  const [saving, setSaving] = useState(false)
+  const [saved, setSaved] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const { toast } = useToast()
 
@@ -95,6 +99,25 @@ function CoverLetterInner() {
     }
   }, [opportunityId, trackerCompany, trackerRole, setValue])
 
+  // Reopening a previously-saved letter from My Docs — pre-fills the form
+  // and output exactly as if freshly generated, so the user can keep
+  // editing, re-download, or re-save it as a new row.
+  useEffect(() => {
+    if (!sessionId) return
+    apiGet<CoverLetterSessionDetail>(`/api/ai/cover-letter/sessions/${sessionId}`)
+      .then((session) => {
+        setValue('company', session.company)
+        setValue('role', session.role)
+        setValue('selling_points', session.selling_points)
+        if (session.resume_text) setValue('resume_text', session.resume_text)
+        setOutput(session.content)
+        setSaved(true)
+      })
+      .catch(() => {
+        toast({ title: 'Could not load saved letter', variant: 'destructive' })
+      })
+  }, [sessionId, setValue, toast])
+
   // Pre-fill selling_points from the saved profile default exactly once —
   // a ref guard, not a dependency check, so a background refetch of the
   // profile query (react-query refetches on window focus etc.) never
@@ -110,6 +133,7 @@ function CoverLetterInner() {
   async function onSubmit(data: FormData) {
     setLoading(true)
     setOutput('')
+    setSaved(false)
     setError(null)
 
     try {
@@ -197,6 +221,40 @@ function CoverLetterInner() {
       toast({ title: 'Network error', description: 'Please try again.', variant: 'destructive' })
     } finally {
       setDownloading(false)
+    }
+  }
+
+  // Explicit save, not auto-saved on every generation — there's no
+  // deterministic dedup key the way resume+JD hash gives resume_tailor, so
+  // every click creates a new "My Docs" row rather than silently
+  // overwriting a previous save.
+  async function saveSession() {
+    setSaving(true)
+    try {
+      const res = await apiFetch('/api/ai/cover-letter/save', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          company: companyValue,
+          role: roleValue,
+          selling_points: sellingPointsValue,
+          resume_text: resumeTextValue || undefined,
+          content: output,
+          opportunity_id: opportunityId || undefined,
+          job_search_application_id: jobSearchApplicationId || undefined,
+        }),
+      })
+      if (!res.ok) {
+        const json = await res.json().catch(() => null)
+        toast({ title: 'Could not save', description: json?.detail, variant: 'destructive' })
+        return
+      }
+      setSaved(true)
+      toast({ title: 'Saved to My Docs' })
+    } catch {
+      toast({ title: 'Network error', description: 'Please try again.', variant: 'destructive' })
+    } finally {
+      setSaving(false)
     }
   }
 
@@ -357,6 +415,17 @@ function CoverLetterInner() {
                 {output && (
                   <div className="flex items-center gap-2">
                     <button
+                      onClick={saveSession}
+                      disabled={saving || saved}
+                      className={cn(
+                        'flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold transition-all disabled:opacity-60',
+                        saved ? 'bg-emerald-500 text-white' : 'bg-indigo-50 text-indigo-600 hover:bg-indigo-100',
+                      )}
+                    >
+                      {saving ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : saved ? <Check className="h-3.5 w-3.5" /> : <Save className="h-3.5 w-3.5" />}
+                      {saving ? 'Saving…' : saved ? 'Saved' : 'Save'}
+                    </button>
+                    <button
                       onClick={download}
                       disabled={downloading}
                       className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold transition-all bg-indigo-50 text-indigo-600 hover:bg-indigo-100 disabled:opacity-60"
@@ -378,7 +447,7 @@ function CoverLetterInner() {
               </div>
               <Textarea
                 value={output}
-                onChange={(e) => setOutput(e.target.value)}
+                onChange={(e) => { setOutput(e.target.value); setSaved(false) }}
                 rows={20}
                 className="text-sm leading-relaxed font-sans rounded-xl border-slate-200 resize-none"
                 placeholder={loading ? 'Generating…' : ''}

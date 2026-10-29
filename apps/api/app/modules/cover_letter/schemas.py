@@ -25,3 +25,49 @@ class CoverLetterPdfRequest(BaseModel):
     # generation prompt asks for (even a heavily hand-expanded letter is
     # very unlikely to exceed this).
     content: str = Field(..., min_length=1, max_length=5000)
+
+
+# ── Saved sessions ("My Docs") ────────────────────────────────────
+# Explicit save only (not auto-saved on every generation) - see
+# sessions_routes.py for why. Bounds mirror CoverLetterRequest/
+# CoverLetterPdfRequest above, since a save always carries the same fields
+# that produced the letter plus the letter itself.
+
+class CoverLetterSaveRequest(BaseModel):
+    company: str = Field(..., min_length=1, max_length=200)
+    role: str = Field(..., min_length=1, max_length=200)
+    selling_points: str = Field(..., min_length=20, max_length=3000)
+    resume_text: str | None = Field(None, max_length=8000)
+    content: str = Field(..., min_length=1, max_length=5000)
+    opportunity_id: str | None = None
+    job_search_application_id: str | None = None
+
+
+class CoverLetterSessionSummary(BaseModel):
+    id: str
+    title: str | None
+    display_label: str
+    created_at: str
+    source_opportunity_id: str | None = None
+    source_application_id: str | None = None
+
+
+class CoverLetterSessionListResponse(BaseModel):
+    sessions: list[CoverLetterSessionSummary]
+
+
+class CoverLetterSessionDetail(BaseModel):
+    id: str
+    title: str | None
+    company: str
+    role: str
+    selling_points: str
+    resume_text: str | None
+    content: str
+    created_at: str
+    source_opportunity_id: str | None = None
+    source_application_id: str | None = None
+
+
+class CoverLetterTitleUpdateRequest(BaseModel):
+    title: str = Field(..., max_length=200)

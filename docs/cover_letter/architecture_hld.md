@@ -83,8 +83,8 @@ flowchart TD
 
 ## 4. Key Architectural Patterns & Guarantees
 
-### 4.1 No Persistence, By Design
-There is no `cover_letters` table and no session concept. A generated letter lives only in the browser until the user copies, downloads, or (if triggered from a Startup Hunt lead) it gets opportunistically saved as an artifact on that lead. This is a deliberate scope boundary, not an oversight — see `docs/cover_letter/data_flow_and_schema.md` for the reasoning and what it would take to add history.
+### 4.1 Explicit-Save Persistence, Not Auto-Save
+A generated letter lives only in the browser until the user copies, downloads, explicitly clicks Save (`cover_letter_sessions` row), or (if triggered from a Startup Hunt lead) it gets opportunistically saved as an artifact on that lead. Deliberately not auto-saved on every generation — unlike resume_tailor's resume+JD hash, a cover letter has no deterministic dedup key, so auto-saving would clutter "My Docs" with every regeneration attempt. See `docs/cover_letter/data_flow_and_schema.md` §1.1 for the table and `architecture_lld.md` §2.3/§2.4 for the save/list/rename endpoints.
 
 ### 4.2 Streaming Error Handling Without a Wire-Protocol Redesign
 `StreamingResponse` commits to HTTP 200 the moment the body iterator starts, before any exception from inside it can be turned into a proper 4xx/5xx. Rather than redesign the protocol, a failure mid-generation (provider exhaustion, network error) is caught and a clearly-bracketed notice is appended to the stream itself — visible in the editable textarea, and trivially deletable by the user, instead of a silent cutoff with no explanation.

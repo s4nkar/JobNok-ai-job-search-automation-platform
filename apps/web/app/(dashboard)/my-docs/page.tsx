@@ -3,20 +3,21 @@
 import { useState } from 'react'
 import { useRouter } from 'next/navigation'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
-import { Loader2, Pencil, Sparkles, FolderOpen, FileText } from 'lucide-react'
+import { Loader2, Pencil, Sparkles, FolderOpen, FileText, PenLine, Briefcase } from 'lucide-react'
 import { Button, useToast, cn, formatDate } from '@jobnok/ui'
 import { ScaledResumeThumb } from '@/components/shared/ScaledResumeThumb'
 import { apiFetch, apiGet } from '@/lib/api'
 import { queryKeys } from '@/lib/queryKeys'
-import { SessionSummary } from '@/lib/types'
+import { CoverLetterSessionSummary, SessionSummary } from '@/lib/types'
 
 // A generic row shape the grid renders from, kept separate from
-// SessionSummary's resume-specific fields - once cover letters get their own
-// persistence, mapping a second source into this same shape (kind:
-// 'cover_letter') is additive, not a rewrite of this page's markup.
+// SessionSummary/CoverLetterSessionSummary's own fields. sourceOpportunityId/
+// sourceApplicationId power the grouping below - two rows (one of each kind)
+// sharing either id get bundled into a JobGroupCard instead of appearing as
+// two unrelated cards.
 interface DocRow {
   id: string
-  kind: 'resume'
+  kind: 'resume' | 'cover_letter'
   label: string
   isAiMatched: boolean
   meta: string
@@ -25,9 +26,11 @@ interface DocRow {
   isDraft: boolean
   previewHtml: string | null
   openHref: string
+  sourceOpportunityId: string | null
+  sourceApplicationId: string | null
 }
 
-function toDocRow(s: SessionSummary): DocRow {
+function toResumeDocRow(s: SessionSummary): DocRow {
   return {
     id: s.id,
     kind: 'resume',
@@ -39,7 +42,32 @@ function toDocRow(s: SessionSummary): DocRow {
     isDraft: s.is_draft,
     previewHtml: s.preview_html,
     openHref: `/resume-tailor/editor?session_id=${s.id}`,
+    sourceOpportunityId: s.source_opportunity_id,
+    sourceApplicationId: s.source_application_id,
   }
+}
+
+function toCoverLetterDocRow(s: CoverLetterSessionSummary): DocRow {
+  return {
+    id: s.id,
+    kind: 'cover_letter',
+    label: s.display_label,
+    isAiMatched: false,
+    meta: 'Cover Letter',
+    matchScore: null,
+    createdAt: s.created_at,
+    isDraft: false,
+    previewHtml: null,
+    openHref: `/cover-letter?session_id=${s.id}`,
+    sourceOpportunityId: s.source_opportunity_id,
+    sourceApplicationId: s.source_application_id,
+  }
+}
+
+function groupKeyFor(row: DocRow): string | null {
+  if (row.sourceOpportunityId) return `opp:${row.sourceOpportunityId}`
+  if (row.sourceApplicationId) return `app:${row.sourceApplicationId}`
+  return null
 }
 
 const PREVIEW_PEEK_HEIGHT = 160
@@ -50,7 +78,7 @@ function scoreColor(score: number): string {
   return 'text-red-600 bg-red-50 border-red-100'
 }
 
-function DocCard({ row, onRename }: { row: DocRow; onRename: (id: string, newLabel: string) => void }) {
+function DocCard({ row, onRename }: { row: DocRow; onRename: (row: DocRow, newLabel: string) => void }) {
   const router = useRouter()
   const [editing, setEditing] = useState(false)
   const [draft, setDraft] = useState(row.label)
@@ -58,7 +86,7 @@ function DocCard({ row, onRename }: { row: DocRow; onRename: (id: string, newLab
   function save(value: string) {
     setEditing(false)
     const trimmed = value.trim()
-    if (trimmed && trimmed !== row.label) onRename(row.id, trimmed)
+    if (trimmed && trimmed !== row.label) onRename(row, trimmed)
   }
 
   return (
@@ -66,7 +94,7 @@ function DocCard({ row, onRename }: { row: DocRow; onRename: (id: string, newLab
       <button
         onClick={() => router.push(row.openHref)}
         className="w-full text-left block"
-        title="Open in editor"
+        title={row.kind === 'resume' ? 'Open in editor' : 'Open in Cover Letter Generator'}
       >
         {row.previewHtml ? (
           <ScaledResumeThumb
@@ -75,13 +103,21 @@ function DocCard({ row, onRename }: { row: DocRow; onRename: (id: string, newLab
             cropHeight={PREVIEW_PEEK_HEIGHT}
             className="border-b border-slate-100 bg-slate-50"
           />
-        ) : (
+        ) : row.kind === 'resume' ? (
           <div
             className="w-full border-b border-slate-100 bg-slate-50 flex flex-col items-center justify-center gap-1"
             style={{ height: PREVIEW_PEEK_HEIGHT }}
           >
             <FileText className="h-5 w-5 text-slate-300" />
             <span className="text-[11px] text-slate-400">Open to generate a preview</span>
+          </div>
+        ) : (
+          <div
+            className="w-full border-b border-slate-100 bg-slate-50 flex flex-col items-center justify-center gap-1"
+            style={{ height: PREVIEW_PEEK_HEIGHT }}
+          >
+            <PenLine className="h-5 w-5 text-slate-300" />
+            <span className="text-[11px] text-slate-400">Cover letter</span>
           </div>
         )}
       </button>
@@ -137,31 +173,106 @@ function DocCard({ row, onRename }: { row: DocRow; onRename: (id: string, newLab
   )
 }
 
+// Two or more docs (a resume and/or cover letter) saved for the same tracked
+// job - wrapped together so they read as "one application's documents"
+// instead of two unrelated cards scattered across the grid. Every other row
+// (no shared linkage, or an unmatched single row) renders as a plain
+// standalone DocCard, unchanged from before this feature existed.
+function JobGroupCard({ rows, onRename }: { rows: DocRow[]; onRename: (row: DocRow, newLabel: string) => void }) {
+  const headerLabel = rows.find(r => r.kind === 'resume')?.label ?? rows[0].label
+  return (
+    <div className="rounded-xl border border-indigo-100 bg-indigo-50/40 p-2 space-y-2">
+      <div className="flex items-center gap-1.5 px-1 pt-0.5">
+        <Briefcase className="h-3.5 w-3.5 text-indigo-400 shrink-0" />
+        <span className="text-xs font-semibold text-indigo-700 truncate">{headerLabel}</span>
+      </div>
+      <div className="space-y-2">
+        {rows.map(row => <DocCard key={row.id} row={row} onRename={onRename} />)}
+      </div>
+    </div>
+  )
+}
+
+type GridItem = { type: 'single'; row: DocRow } | { type: 'group'; rows: DocRow[] }
+
+function buildGridItems(allRows: DocRow[]): GridItem[] {
+  const buckets = new Map<string, DocRow[]>()
+  for (const row of allRows) {
+    const key = groupKeyFor(row)
+    if (!key) continue
+    const bucket = buckets.get(key) ?? []
+    bucket.push(row)
+    buckets.set(key, bucket)
+  }
+
+  const groupedIds = new Set<string>()
+  const items: GridItem[] = []
+  for (const bucket of buckets.values()) {
+    if (bucket.length < 2) continue
+    bucket.sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime())
+    bucket.forEach(r => groupedIds.add(r.id))
+    items.push({ type: 'group', rows: bucket })
+  }
+  for (const row of allRows) {
+    if (!groupedIds.has(row.id)) items.push({ type: 'single', row })
+  }
+
+  const timestampOf = (item: GridItem) =>
+    item.type === 'single'
+      ? new Date(item.row.createdAt).getTime()
+      : Math.max(...item.rows.map(r => new Date(r.createdAt).getTime()))
+  items.sort((a, b) => timestampOf(b) - timestampOf(a))
+  return items
+}
+
 export default function MyDocsPage() {
   const router = useRouter()
   const queryClient = useQueryClient()
   const { toast } = useToast()
 
-  const { data, isLoading, isError } = useQuery({
+  const resumeQuery = useQuery({
     queryKey: queryKeys.tailoringSessions,
     queryFn: () => apiGet<{ sessions: SessionSummary[] }>('/api/ai/tailor/sessions'),
   })
-  const rows = (data?.sessions ?? []).map(toDocRow)
+  const coverLetterQuery = useQuery({
+    queryKey: queryKeys.coverLetterSessions,
+    queryFn: () => apiGet<{ sessions: CoverLetterSessionSummary[] }>('/api/ai/cover-letter/sessions'),
+  })
 
-  async function handleRename(id: string, newTitle: string) {
+  const isLoading = resumeQuery.isLoading || coverLetterQuery.isLoading
+  const isError = resumeQuery.isError || coverLetterQuery.isError
+
+  const allRows = [
+    ...(resumeQuery.data?.sessions ?? []).map(toResumeDocRow),
+    ...(coverLetterQuery.data?.sessions ?? []).map(toCoverLetterDocRow),
+  ]
+  const gridItems = buildGridItems(allRows)
+
+  async function handleRename(row: DocRow, newTitle: string) {
+    const isResume = row.kind === 'resume'
+    const endpoint = isResume ? `/api/ai/tailor/${row.id}/title` : `/api/ai/cover-letter/sessions/${row.id}/title`
     try {
-      const res = await apiFetch(`/api/ai/tailor/${id}/title`, {
+      const res = await apiFetch(endpoint, {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ title: newTitle }),
       })
       if (!res.ok) throw new Error()
-      queryClient.setQueryData<{ sessions: SessionSummary[] } | undefined>(queryKeys.tailoringSessions, (prev) => {
-        if (!prev) return prev
-        return {
-          sessions: prev.sessions.map(s => s.id === id ? { ...s, title: newTitle, display_label: newTitle, is_ai_matched: false } : s),
-        }
-      })
+      if (isResume) {
+        queryClient.setQueryData<{ sessions: SessionSummary[] } | undefined>(queryKeys.tailoringSessions, (prev) => {
+          if (!prev) return prev
+          return {
+            sessions: prev.sessions.map(s => s.id === row.id ? { ...s, title: newTitle, display_label: newTitle, is_ai_matched: false } : s),
+          }
+        })
+      } else {
+        queryClient.setQueryData<{ sessions: CoverLetterSessionSummary[] } | undefined>(queryKeys.coverLetterSessions, (prev) => {
+          if (!prev) return prev
+          return {
+            sessions: prev.sessions.map(s => s.id === row.id ? { ...s, title: newTitle, display_label: newTitle } : s),
+          }
+        })
+      }
     } catch {
       toast({ title: 'Could not rename', variant: 'destructive' })
     }
@@ -176,13 +287,13 @@ export default function MyDocsPage() {
         <div className="min-w-0 flex-1">
           <div className="flex items-center gap-2 flex-wrap">
             <h1 className="text-2xl font-bold text-slate-900 tracking-tight">My Docs</h1>
-            {!isLoading && rows.length > 0 && (
+            {!isLoading && allRows.length > 0 && (
               <span className="text-xs font-semibold bg-slate-100 text-slate-600 rounded-full px-2.5 py-1 shrink-0">
-                {rows.length} {rows.length === 1 ? 'document' : 'documents'}
+                {allRows.length} {allRows.length === 1 ? 'document' : 'documents'}
               </span>
             )}
           </div>
-          <p className="text-slate-500 text-sm mt-0.5">Every resume you&apos;ve generated, most recent first</p>
+          <p className="text-slate-500 text-sm mt-0.5">Every resume and cover letter you&apos;ve saved, most recent first</p>
         </div>
       </div>
 
@@ -196,13 +307,13 @@ export default function MyDocsPage() {
           <p className="font-medium text-slate-600">Could not load your documents</p>
           <p className="text-sm text-slate-400 mt-1">Please refresh the page to try again</p>
         </div>
-      ) : rows.length === 0 ? (
+      ) : allRows.length === 0 ? (
         <div className="flex flex-col items-center justify-center h-56 bg-white rounded-2xl border border-slate-100 shadow-sm px-4 text-center">
           <div className="w-14 h-14 rounded-2xl bg-slate-100 flex items-center justify-center mb-4">
             <FolderOpen className="h-7 w-7 text-slate-300" />
           </div>
           <p className="font-medium text-slate-600">No documents yet</p>
-          <p className="text-sm text-slate-400 mt-1">Tailor a resume to see it show up here</p>
+          <p className="text-sm text-slate-400 mt-1">Tailor a resume or save a cover letter to see it show up here</p>
           <Button
             onClick={() => router.push('/resume-tailor')}
             className="mt-4 gradient-brand text-white border-0 shadow-sm hover:opacity-90 transition-opacity rounded-xl h-9 text-sm px-5"
@@ -212,9 +323,10 @@ export default function MyDocsPage() {
         </div>
       ) : (
         <div className="grid grid-cols-2 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 gap-4">
-          {rows.map((row) => (
-            <DocCard key={row.id} row={row} onRename={handleRename} />
-          ))}
+          {gridItems.map((item) => item.type === 'single'
+            ? <DocCard key={item.row.id} row={item.row} onRename={handleRename} />
+            : <JobGroupCard key={item.rows.map(r => r.id).join(',')} rows={item.rows} onRename={handleRename} />
+          )}
         </div>
       )}
     </div>
