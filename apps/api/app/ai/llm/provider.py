@@ -203,6 +203,7 @@ async def _openai_compat_generate(
 async def _openai_compat_stream(
     prompt: str, system: str, max_tokens: int,
     base_url: str, api_key: str, model: str, label: str,
+    reasoning_effort: str | None = None,
 ) -> AsyncGenerator[str, None]:
     if not api_key:
         raise _ProviderUnavailable(f"{label}: API key not configured")
@@ -212,23 +213,35 @@ async def _openai_compat_stream(
         messages.append({"role": "system", "content": system})
     messages.append({"role": "user", "content": prompt})
 
+    body: dict = {
+        "model": model, "messages": messages,
+        "max_tokens": max_tokens, "temperature": 0.7, "stream": True,
+    }
+    if reasoning_effort and "gpt-oss" in model.lower():
+        # Same fix as _openai_compat_generate, previously missing on this
+        # streaming path entirely — a gpt-oss model spends max_tokens on
+        # hidden reasoning before ever writing visible content, and with no
+        # cap here that could silently eat most/all of the budget, cutting
+        # the user-visible letter off mid-sentence with no error (hit live:
+        # a cover letter streamed fine up to "...initiatives in a" and just
+        # stopped — the request succeeded, the model just ran out of budget).
+        body["reasoning_effort"] = reasoning_effort
+
     # No client-level timeout on streams — long-running by nature. We rely on the
     # server to terminate; connect timeout still applies.
     timeout = httpx.Timeout(connect=15.0, read=None, write=15.0, pool=15.0)
+    finish_reason: str | None = None
     async with httpx.AsyncClient(timeout=timeout) as client:
         try:
             async with client.stream(
                 "POST",
                 f"{base_url}/chat/completions",
                 headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
-                json={
-                    "model": model, "messages": messages,
-                    "max_tokens": max_tokens, "temperature": 0.7, "stream": True,
-                },
+                json=body,
             ) as resp:
                 if resp.status_code >= 400:
-                    body = await resp.aread()
-                    raise _ProviderError(f"{label} HTTP {resp.status_code}: {body[:200]!r}")
+                    body_bytes = await resp.aread()
+                    raise _ProviderError(f"{label} HTTP {resp.status_code}: {body_bytes[:200]!r}")
 
                 async for line in resp.aiter_lines():
                     if not line or not line.startswith("data: "):
@@ -238,14 +251,24 @@ async def _openai_compat_stream(
                         break
                     try:
                         chunk = json.loads(payload)
-                        delta = chunk["choices"][0]["delta"].get("content")
+                        choice = chunk["choices"][0]
+                        delta = choice["delta"].get("content")
                         if delta:
                             yield delta
+                        finish_reason = choice.get("finish_reason") or finish_reason
                     except (json.JSONDecodeError, KeyError, IndexError):
                         # Skip malformed SSE frames silently — stream continues.
                         continue
         except httpx.HTTPError as exc:
             raise _ProviderError(f"{label} network error: {exc!r}") from exc
+
+    if finish_reason == "length":
+        # Logged only, not raised - content has already been yielded to the
+        # caller at this point (same "don't switch mid-stream" reasoning as
+        # everywhere else in this file), so there's nothing to fall back to.
+        # This at least makes a truncated generation diagnosable after the
+        # fact instead of indistinguishable from a normal, complete stream.
+        logger.warning("%s stream ended via max_tokens truncation (finish_reason=length), model=%s", label, model)
 
 
 # ── Provider dispatch ────────────────────────────────────────────
@@ -280,16 +303,21 @@ async def _dispatch_generate(
     raise ValueError(f"Unknown AI provider: {provider!r}")
 
 
-def _dispatch_stream(provider: str, prompt: str, system: str, max_tokens: int, tier: str) -> AsyncGenerator[str, None]:
+def _dispatch_stream(
+    provider: str, prompt: str, system: str, max_tokens: int, tier: str,
+    reasoning_effort: str | None = None,
+) -> AsyncGenerator[str, None]:
     if provider == "groq":
         return _openai_compat_stream(
             prompt, system, max_tokens,
             settings.groq_base_url, settings.groq_api_key, _groq_model(tier), "groq",
+            reasoning_effort=reasoning_effort,
         )
     if provider == "openrouter":
         return _openai_compat_stream(
             prompt, system, max_tokens,
             settings.openrouter_base_url, settings.openrouter_api_key, settings.openrouter_model, "openrouter",
+            reasoning_effort=reasoning_effort,
         )
     raise ValueError(f"Unknown AI provider: {provider!r}")
 
@@ -385,7 +413,10 @@ async def generate_text_with_provider(
     return await _run_chain(prompt, system, max_tokens, tier, response_format, reasoning_effort)
 
 
-async def stream_text(prompt: str, system: str = "", max_tokens: int = 2048, tier: str = "heavy") -> AsyncGenerator[str, None]:
+async def stream_text(
+    prompt: str, system: str = "", max_tokens: int = 2048, tier: str = "heavy",
+    reasoning_effort: str | None = None,
+) -> AsyncGenerator[str, None]:
     chain = _provider_chain()
     last_error: Exception | None = None
 
@@ -394,7 +425,7 @@ async def stream_text(prompt: str, system: str = "", max_tokens: int = 2048, tie
             logger.info("ai_provider circuit open, skipping %s", provider)
             continue
         try:
-            gen = _dispatch_stream(provider, prompt, system, max_tokens, tier)
+            gen = _dispatch_stream(provider, prompt, system, max_tokens, tier, reasoning_effort)
             # Pull the first chunk eagerly so we can fall back on a clean failure
             # before any bytes reach the client.
             first_iter = gen.__aiter__()

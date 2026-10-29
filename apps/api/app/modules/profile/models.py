@@ -45,3 +45,9 @@ class Profile(Base):
     work_authorization: Mapped[str | None] = mapped_column(Text, nullable=True)
     cv_photo_url: Mapped[str | None] = mapped_column(Text, nullable=True)
     cv_email: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # Reusable default for the Cover Letter tool's "key selling points" field
+    # — set once here, pre-filled on every cover letter so the user doesn't
+    # retype their pitch per application; still freely editable per-letter
+    # without affecting this saved default (the cover-letter page only reads
+    # it, writing back here happens only through this profile page).
+    key_selling_points: Mapped[str | None] = mapped_column(Text, nullable=True)

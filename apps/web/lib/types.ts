@@ -169,6 +169,31 @@ export interface SessionSummary {
   // Only set for sessions that already have a saved draft — see the backend's
   // list_sessions_for_docs_page for why a never-opened session gets none.
   preview_html: string | null
+  // Lets My Docs group this resume with a cover letter saved for the same job.
+  source_opportunity_id: string | null
+  source_application_id: string | null
+}
+
+export interface CoverLetterSessionSummary {
+  id: string
+  title: string | null
+  display_label: string
+  created_at: string
+  source_opportunity_id: string | null
+  source_application_id: string | null
+}
+
+export interface CoverLetterSessionDetail {
+  id: string
+  title: string | null
+  company: string
+  role: string
+  selling_points: string
+  resume_text: string | null
+  content: string
+  created_at: string
+  source_opportunity_id: string | null
+  source_application_id: string | null
 }
 
 export type TemplateId =
@@ -508,6 +533,7 @@ export interface UserProfile {
   work_authorization: string | null
   cv_photo_url: string | null
   cv_email: string | null
+  key_selling_points: string | null
 }
 
 // ── Startup Scout ────────────────────────────────────────────────────────────

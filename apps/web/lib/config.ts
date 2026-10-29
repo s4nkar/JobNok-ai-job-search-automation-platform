@@ -12,6 +12,7 @@ export const config = {
     resumeTailorAiPerDay:  parseInt(process.env.NEXT_PUBLIC_RATE_LIMIT_RESUME_AI || '8', 10),
     resumeTailorPdfPerDay: parseInt(process.env.NEXT_PUBLIC_RATE_LIMIT_RESUME_PDF || '20', 10),
     coverLetterPerDay:     parseInt(process.env.NEXT_PUBLIC_RATE_LIMIT_COVER_LETTER || '5', 10),
+    coverLetterPdfPerDay:  parseInt(process.env.NEXT_PUBLIC_RATE_LIMIT_COVER_LETTER_PDF || '20', 10),
     interviewPrepPerDay:   parseInt(process.env.NEXT_PUBLIC_RATE_LIMIT_INTERVIEW || '10', 10),
     salaryResearchPerDay:  parseInt(process.env.NEXT_PUBLIC_RATE_LIMIT_SALARY || '5', 10),
     jobSearchPerDay:       parseInt(process.env.NEXT_PUBLIC_RATE_LIMIT_JOB_SEARCH || '10', 10),

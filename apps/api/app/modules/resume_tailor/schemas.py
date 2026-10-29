@@ -137,6 +137,11 @@ class SessionSummary(BaseModel):
     # service.py::list_sessions_for_docs_page for why a never-opened
     # session gets no preview rather than paying for one.
     preview_html: str | None = None
+    # Lets the frontend group this resume with a cover letter saved for the
+    # same job on the My Docs page - see cover_letter's own SessionSummary
+    # equivalent for the other half of that grouping.
+    source_opportunity_id: str | None = None
+    source_application_id: str | None = None
 
 
 class SessionListResponse(BaseModel):

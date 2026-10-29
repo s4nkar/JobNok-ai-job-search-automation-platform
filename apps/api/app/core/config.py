@@ -115,6 +115,12 @@ class Settings(BaseSettings):
     # session redesign rollout notes — this is the deferred cleanup step).
     rate_limit_resume_per_day: int = 5
     rate_limit_cover_letter_per_day: int = 5
+    # Same AI-call vs. PDF-render split as resume_tailor above (see that
+    # comment) — cover-letter PDF export has real WeasyPrint CPU cost but no
+    # LLM call, so it shouldn't share the AI generation quota. Matched to
+    # resume_tailor's PDF quota value for consistency; no usage data yet to
+    # justify a different number.
+    rate_limit_cover_letter_pdf_per_day: int = 20
     rate_limit_interview_per_day: int = 10
     rate_limit_salary_per_day: int = 5
     rate_limit_job_search_per_day: int = 10
