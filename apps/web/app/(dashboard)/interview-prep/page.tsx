@@ -326,11 +326,8 @@ function InterviewPrepInner() {
           )}
 
           {!questions.length && !loading && (
-            <div className="bg-white rounded-2xl border border-slate-100 shadow-card min-h-[400px] flex items-center justify-center p-8">
-              <div className="text-center space-y-2">
-                <div className="w-14 h-14 rounded-2xl bg-indigo-50 flex items-center justify-center mx-auto">
-                  <MessageSquare className="h-7 w-7 text-indigo-200" />
-                </div>
+            <div className="bg-white rounded-2xl border border-slate-100 shadow-sm min-h-[18rem] flex items-center justify-center p-6">
+              <div className="text-center space-y-1">
                 <p className="font-semibold text-slate-500">Questions will appear here</p>
                 <p className="text-sm text-slate-400">Paste a job description to generate interview questions</p>
               </div>

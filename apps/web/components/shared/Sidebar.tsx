@@ -10,7 +10,7 @@ import {
   FileText, Linkedin, FileSearch, PenLine, MessageSquare,
   Briefcase, Compass, DollarSign, Mail, Radar, LogOut,
   Settings, ChevronLeft, ChevronRight, Check, X, LayoutDashboard, Search,
-  FolderOpen,
+  FolderOpen, AlertTriangle,
 } from 'lucide-react'
 import { useToast } from '@jobnok/ui'
 import { apiGet } from '@/lib/api'
@@ -35,7 +35,7 @@ const navGroups = [
       { href: '/resume-tailor', label: 'Resume Tailor', icon: FileSearch },
       { href: '/cover-letter', label: 'Cover Letter', icon: PenLine },
       { href: '/interview-prep', label: 'Interview Prep', icon: MessageSquare },
-      { href: '/linkedin-fill', label: 'LinkedIn Auto-Fill', icon: Linkedin },
+      { href: '/linkedin-fill', label: 'LinkedIn Auto-Fill', icon: Linkedin, warning: 'Temporarily unavailable' },
       { href: '/templates', label: 'Smart Templates', icon: FileText },
     ],
   },
@@ -109,7 +109,7 @@ export function Sidebar() {
     ? userName.split(' ').map((n: string) => n[0]).join('').slice(0, 2).toUpperCase()
     : userEmail?.[0]?.toUpperCase() ?? '?'
 
-  function renderNavLink(item: { href: string; label: string; icon: typeof LayoutDashboard }) {
+  function renderNavLink(item: { href: string; label: string; icon: typeof LayoutDashboard; warning?: string }) {
     const Icon = item.icon
     const active = pathname === item.href || pathname.startsWith(item.href + '/')
     return (
@@ -135,10 +135,15 @@ export function Sidebar() {
           active ? 'text-primary' : 'text-muted-foreground'
         )} />
         <span className={cn(
-          'transition-all duration-200 whitespace-nowrap overflow-hidden',
+          'transition-all duration-200 whitespace-nowrap overflow-hidden flex items-center gap-1.5',
           iconOnly ? 'w-0 opacity-0' : 'flex-1 opacity-100'
         )}>
-          {item.label}
+          <span className="truncate">{item.label}</span>
+          {item.warning && !iconOnly && (
+            <span title={item.warning} className="flex-shrink-0">
+              <AlertTriangle className="h-3 w-3 text-amber-500" />
+            </span>
+          )}
         </span>
       </Link>
     )
