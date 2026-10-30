@@ -133,6 +133,10 @@ class Settings(BaseSettings):
     rate_limit_job_search_per_day: int = 10
     rate_limit_job_search_applications_per_day: int = 200
     rate_limit_startup_hunt_per_day: int = 8
+    # Not AI/scrape-costed - a generous ceiling against runaway template
+    # creation (storage abuse, not a billed external call), matching
+    # job_search_applications_per_day's "cheap but still bounded" profile.
+    rate_limit_templates_create_per_day: int = 50
     rate_limit_bulk_email_per_campaign: int = 500
     rate_limit_bulk_email_per_month: int = 3000
     # Short-window burst limit, separate from the daily quotas above - caps

@@ -3,6 +3,7 @@
 import re
 
 from fastapi import HTTPException
+from sqlalchemy import update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.shared.repository import UserScopedRepository
@@ -23,6 +24,20 @@ def extract_placeholders(content: str) -> list[str]:
 
 class TemplateRepository(UserScopedRepository[Template]):
     model = Template
+
+    async def increment_use_count(self, user_id: str, id_: str) -> Template | None:
+        """Atomic `SET use_count = use_count + 1` at the DB layer - avoids
+        the race a client-computed "current + 1" PUT had (two rapid copies,
+        or two browser tabs, could both read the same stale count and both
+        write the same incremented value, silently losing one)."""
+        stmt = (
+            self._scoped(update(self.model), user_id)
+            .where(self.model.id == id_)
+            .values(use_count=self.model.use_count + 1)
+            .returning(self.model)
+        )
+        result = await self.session.execute(stmt)
+        return result.scalar_one_or_none()
 
 
 async def list_templates(db: AsyncSession, user_id: str) -> list[dict]:
@@ -55,3 +70,10 @@ async def delete_template(db: AsyncSession, user_id: str, template_id: str) -> N
     ok = await TemplateRepository(db).delete(user_id, template_id)
     if not ok:
         raise HTTPException(status_code=404, detail="Not found")
+
+
+async def increment_use_count(db: AsyncSession, user_id: str, template_id: str) -> dict:
+    obj = await TemplateRepository(db).increment_use_count(user_id, template_id)
+    if obj is None:
+        raise HTTPException(status_code=404, detail="Not found")
+    return row_to_dict(obj)
