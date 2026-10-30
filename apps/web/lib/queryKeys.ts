@@ -27,4 +27,6 @@ export const queryKeys = {
   tailoringSessions: ['tailoring-sessions'] as const,
   // "My Docs" — every cover letter the user explicitly saved.
   coverLetterSessions: ['cover-letter-sessions'] as const,
+  // "My Docs" — every interview-prep kit the user explicitly saved.
+  interviewPrepSessions: ['interview-prep-sessions'] as const,
 }

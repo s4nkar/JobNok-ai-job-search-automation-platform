@@ -5,9 +5,17 @@ no "data:"-prefixed frames, just raw text over a chunked response; the
 frontend reads it via response.body.getReader()). Rate limited per user via
 Upstash Redis: a daily quota plus a short burst window.
 
-Saved-session CRUD ("My Docs", explicit Save only - see sessions_routes.py
-for why generation itself stays stateless) lives in sessions_routes.py,
-included into this module's router above.
+Generation auto-persists a CoverLetterSession (see service.py::resolve_session)
+rather than requiring an explicit Save click - a forgotten click previously
+meant a full regeneration (AI cost + user time) to recover lost content.
+Because this endpoint streams, the session's id can't travel in the JSON
+body the way resume_tailor/interview_prep return it - it's created/updated
+BEFORE streaming starts (so its id is already known) and handed back via an
+`X-Session-Id` response header instead, which the frontend reads immediately
+on receiving the response, before the body finishes streaming.
+
+Saved-session read/rename ("My Docs") lives in sessions_routes.py, included
+into this module's router below.
 """
 
 import logging
@@ -18,11 +26,13 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import settings
 from app.core.database import get_db
-from app.services.cache import check_burst_limit, check_rate_limit
+from app.services.cache import acquire_lock, check_burst_limit, check_rate_limit, delete_cached
 from app.core.security import get_current_user_id
 from app.ai.llm import provider as ai_provider
 from app.shared.utils import _rl_error
 from app.modules.cover_letter import rendering
+from app.modules.cover_letter import service as cover_letter_service
+from app.modules.cover_letter.repository import CoverLetterSessionRepository
 from app.modules.cover_letter.schemas import CoverLetterPdfRequest, CoverLetterRequest
 from app.modules.cover_letter.sessions_routes import router as sessions_router
 from app.modules.cover_letter.text import strip_dashes
@@ -30,6 +40,19 @@ from app.modules.usage.service import record_event as record_tool_usage
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
+
+# Single-flight guard against two concurrent identical requests (double-
+# click, a frontend retry loop, two tabs) each firing their own paid LLM
+# stream - and, pre-resolve_session, each independently resolving its own
+# upsert target, which without this could create two sessions for what was
+# meant to be one submission. Burst limiting alone doesn't prevent this: it
+# throttles RATE (N requests per window), not duplicate concurrent in-flight
+# work. Released explicitly in generate()'s `finally` the moment streaming
+# ends (success or interrupted), so a later LEGITIMATE request from the same
+# user is never blocked longer than this one's own actual duration - the TTL
+# below is only a safety ceiling for the (rare) case a process dies before
+# reaching that `finally`.
+_GENERATION_LOCK_TTL_SECONDS = 60
 
 # Included here, before /cover-letter/pdf below - same FastAPI/Starlette
 # registration-order reasoning resume_tailor/routes.py documents (not
@@ -59,7 +82,34 @@ async def generate_cover_letter(request: Request, body: CoverLetterRequest, db: 
         burst_ok = True
     if not burst_ok:
         raise HTTPException(status_code=429, detail="Generating too quickly - please wait a few seconds and try again.")
-    await record_tool_usage(db, user_id, "cover-letter")
+
+    lock_key = f"cover_letter_gen:{user_id}:lock"
+    try:
+        acquired = await acquire_lock(lock_key, _GENERATION_LOCK_TTL_SECONDS)
+    except Exception:
+        acquired = True  # fail open, same philosophy as every other limiter here
+    if not acquired:
+        raise HTTPException(
+            status_code=429, detail="A cover letter is already being generated - please wait for it to finish.",
+        )
+
+    try:
+        await record_tool_usage(db, user_id, "cover-letter")
+        session = await cover_letter_service.resolve_session(db, user_id, body)
+    except Exception:
+        # Failed before streaming ever started (e.g. a DB error resolving
+        # the session) - generate()'s own `finally` below never gets a
+        # chance to run in this case, so release the lock here instead of
+        # leaving it held for the full TTL on a request that isn't actually
+        # doing anything anymore.
+        try:
+            await delete_cached(lock_key)
+        except Exception:
+            pass
+        raise
+
+    session_id = str(session.id)
+    repo = CoverLetterSessionRepository(db)
 
     system = """You are a professional cover letter writer. Write compelling, personalized cover letters that:
 - Open with a strong, specific hook (not "I am writing to apply for...")
@@ -104,7 +154,7 @@ SELLING POINTS: {body.selling_points}{resume_section}"""
         # clearly-bracketed trailing message IN the stream - the frontend
         # dumps raw chunks straight into an editable textarea, so the user
         # can just delete this line, but at least sees something.
-        sent_chars = 0
+        full_text = ""
         try:
             # max_tokens bumped 600 -> 900: 250-350 words is already
             # 325-455 tokens at a rough 1.3 tokens/word, with little margin
@@ -120,14 +170,36 @@ SELLING POINTS: {body.selling_points}{resume_section}"""
             async for chunk in ai_provider.stream_text(
                 prompt, system, max_tokens=900, reasoning_effort=settings.groq_reasoning_effort,
             ):
-                sent_chars += len(chunk)
-                yield strip_dashes(chunk)
+                clean_chunk = strip_dashes(chunk)
+                full_text += clean_chunk
+                yield clean_chunk
         except Exception as exc:
-            logger.warning("Cover letter generation failed after %d chars streamed: %r", sent_chars, exc)
-            prefix = "\n\n" if sent_chars else ""
-            yield f"{prefix}[Generation interrupted - the AI service is temporarily unavailable. Please try again in a moment.]"
+            logger.warning("Cover letter generation failed after %d chars streamed: %r", len(full_text), exc)
+            prefix = "\n\n" if full_text else ""
+            notice = f"{prefix}[Generation interrupted - the AI service is temporarily unavailable. Please try again in a moment.]"
+            full_text += notice
+            yield notice
+        finally:
+            # Persist whatever was actually generated, even on a mid-stream
+            # failure (partial content is still worth keeping - the user can
+            # finish it by hand rather than losing everything and having to
+            # pay for a full regeneration). A totally empty result (failed
+            # before any content) leaves nothing worth keeping - delete the
+            # placeholder row instead of saving an empty "document".
+            try:
+                if full_text.strip():
+                    await repo.update(user_id, session_id, content=full_text[:5000])
+                else:
+                    await repo.delete(user_id, session_id)
+                await db.commit()
+            except Exception as exc:
+                logger.warning("Cover letter session %s: failed to persist final content (%r)", session_id, exc)
+            try:
+                await delete_cached(lock_key)
+            except Exception:
+                pass
 
-    return StreamingResponse(generate(), media_type="text/plain")
+    return StreamingResponse(generate(), media_type="text/plain", headers={"X-Session-Id": session_id})
 
 
 @router.post("/cover-letter/pdf")

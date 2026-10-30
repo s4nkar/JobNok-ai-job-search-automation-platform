@@ -16,7 +16,7 @@ import { useToast } from '@jobnok/ui'
 import { cn } from '@jobnok/ui'
 import {
   PenLine, Loader2, Copy, Check, Compass, X,
-  SlidersHorizontal, ChevronDown, ChevronUp, Download, Save,
+  SlidersHorizontal, ChevronDown, ChevronUp, Download,
 } from 'lucide-react'
 import { apiFetch, apiGet } from '@/lib/api'
 import { queryKeys } from '@/lib/queryKeys'
@@ -41,7 +41,7 @@ function CoverLetterInner() {
   const jobSearchApplicationId = searchParams.get('job_search_application_id')
   const trackerCompany = searchParams.get('company')
   const trackerRole = searchParams.get('role')
-  const sessionId = searchParams.get('session_id')
+  const reopenSessionId = searchParams.get('session_id')
 
   const [lead, setLead] = useState<StartupHuntSavedOpportunity | null>(null)
   const [trackerApp, setTrackerApp] = useState<{ company: string; role: string } | null>(null)
@@ -49,9 +49,14 @@ function CoverLetterInner() {
   const [output, setOutput] = useState('')
   const [copied, setCopied] = useState(false)
   const [downloading, setDownloading] = useState(false)
-  const [saving, setSaving] = useState(false)
-  const [saved, setSaved] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  // Generation auto-persists (see the backend's resolve_session) - this
+  // tracks which CoverLetterSession row the current page visit's
+  // generations are landing in, so a regenerate updates that same row
+  // instead of creating a new one. Server-assigned: set from the
+  // X-Session-Id response header after a generate call, or from a reopened
+  // session's own id, never chosen client-side.
+  const [sessionId, setSessionId] = useState<string | null>(null)
   const { toast } = useToast()
 
   // Reusable default from the profile page (Profile → "Default Selling
@@ -103,20 +108,20 @@ function CoverLetterInner() {
   // and output exactly as if freshly generated, so the user can keep
   // editing, re-download, or re-save it as a new row.
   useEffect(() => {
-    if (!sessionId) return
-    apiGet<CoverLetterSessionDetail>(`/api/ai/cover-letter/sessions/${sessionId}`)
+    if (!reopenSessionId) return
+    apiGet<CoverLetterSessionDetail>(`/api/ai/cover-letter/sessions/${reopenSessionId}`)
       .then((session) => {
         setValue('company', session.company)
         setValue('role', session.role)
         setValue('selling_points', session.selling_points)
         if (session.resume_text) setValue('resume_text', session.resume_text)
         setOutput(session.content)
-        setSaved(true)
+        setSessionId(session.id)
       })
       .catch(() => {
         toast({ title: 'Could not load saved letter', variant: 'destructive' })
       })
-  }, [sessionId, setValue, toast])
+  }, [reopenSessionId, setValue, toast])
 
   // Pre-fill selling_points from the saved profile default exactly once —
   // a ref guard, not a dependency check, so a background refetch of the
@@ -133,14 +138,18 @@ function CoverLetterInner() {
   async function onSubmit(data: FormData) {
     setLoading(true)
     setOutput('')
-    setSaved(false)
     setError(null)
 
     try {
       const res = await apiFetch('/api/ai/cover-letter', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(data),
+        body: JSON.stringify({
+          ...data,
+          opportunity_id: opportunityId || undefined,
+          job_search_application_id: jobSearchApplicationId || undefined,
+          session_id: sessionId || undefined,
+        }),
       })
 
       if (!res.ok) {
@@ -149,6 +158,14 @@ function CoverLetterInner() {
         setLoading(false)
         return
       }
+
+      // Auto-save: the backend creates/updates the CoverLetterSession
+      // BEFORE streaming starts and hands its id back via this header
+      // (can't use the JSON body - this response streams plain text).
+      // Kept for the rest of this visit so a regenerate updates the same
+      // row instead of creating a new one.
+      const newSessionId = res.headers.get('X-Session-Id')
+      if (newSessionId) setSessionId(newSessionId)
 
       if (!res.body) { setLoading(false); return }
       const reader = res.body.getReader()
@@ -221,40 +238,6 @@ function CoverLetterInner() {
       toast({ title: 'Network error', description: 'Please try again.', variant: 'destructive' })
     } finally {
       setDownloading(false)
-    }
-  }
-
-  // Explicit save, not auto-saved on every generation — there's no
-  // deterministic dedup key the way resume+JD hash gives resume_tailor, so
-  // every click creates a new "My Docs" row rather than silently
-  // overwriting a previous save.
-  async function saveSession() {
-    setSaving(true)
-    try {
-      const res = await apiFetch('/api/ai/cover-letter/save', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          company: companyValue,
-          role: roleValue,
-          selling_points: sellingPointsValue,
-          resume_text: resumeTextValue || undefined,
-          content: output,
-          opportunity_id: opportunityId || undefined,
-          job_search_application_id: jobSearchApplicationId || undefined,
-        }),
-      })
-      if (!res.ok) {
-        const json = await res.json().catch(() => null)
-        toast({ title: 'Could not save', description: json?.detail, variant: 'destructive' })
-        return
-      }
-      setSaved(true)
-      toast({ title: 'Saved to My Docs' })
-    } catch {
-      toast({ title: 'Network error', description: 'Please try again.', variant: 'destructive' })
-    } finally {
-      setSaving(false)
     }
   }
 
@@ -414,17 +397,11 @@ function CoverLetterInner() {
                 <p className="text-sm font-semibold text-slate-700">Cover Letter</p>
                 {output && (
                   <div className="flex items-center gap-2">
-                    <button
-                      onClick={saveSession}
-                      disabled={saving || saved}
-                      className={cn(
-                        'flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold transition-all disabled:opacity-60',
-                        saved ? 'bg-emerald-500 text-white' : 'bg-indigo-50 text-indigo-600 hover:bg-indigo-100',
-                      )}
-                    >
-                      {saving ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : saved ? <Check className="h-3.5 w-3.5" /> : <Save className="h-3.5 w-3.5" />}
-                      {saving ? 'Saving…' : saved ? 'Saved' : 'Save'}
-                    </button>
+                    {sessionId && (
+                      <span className="flex items-center gap-1 px-2.5 py-1.5 rounded-lg text-xs font-medium text-emerald-600 bg-emerald-50" title="Auto-saved to My Docs">
+                        <Check className="h-3.5 w-3.5" /> Saved
+                      </span>
+                    )}
                     <button
                       onClick={download}
                       disabled={downloading}
@@ -447,7 +424,7 @@ function CoverLetterInner() {
               </div>
               <Textarea
                 value={output}
-                onChange={(e) => { setOutput(e.target.value); setSaved(false) }}
+                onChange={(e) => setOutput(e.target.value)}
                 rows={20}
                 className="text-sm leading-relaxed font-sans rounded-xl border-slate-200 resize-none"
                 placeholder={loading ? 'Generating…' : ''}

@@ -300,6 +300,55 @@ export interface InterviewQuestion {
   tips: string[]
 }
 
+// A DSA-style or system-design prep item — "approach" is guidance on how to
+// tackle it efficiently in an interview setting, not a full worked solution.
+export interface TechnicalPrepQuestion {
+  question: string
+  approach: string
+}
+
+export interface InterviewRoleAssessment {
+  seniority: 'junior' | 'mid' | 'senior' | 'unclear'
+  role_family: string
+  likely_rounds: string[]
+  // Hedged, general reputation only (never a confidential process detail) —
+  // null when no specific hiring company could be identified.
+  company_context: string | null
+  dsa_likely: boolean
+  system_design_likely: boolean
+}
+
+export interface InterviewPrepResult {
+  role_assessment: InterviewRoleAssessment
+  questions: InterviewQuestion[]
+  // Only populated when role_assessment.dsa_likely / system_design_likely
+  // is true — empty arrays otherwise, not every role gets these.
+  dsa_questions: TechnicalPrepQuestion[]
+  system_design_questions: TechnicalPrepQuestion[]
+}
+
+export interface InterviewPrepSessionSummary {
+  id: string
+  title: string | null
+  display_label: string
+  question_count: number
+  created_at: string
+  source_opportunity_id: string | null
+  source_application_id: string | null
+}
+
+export interface InterviewPrepSessionDetail {
+  id: string
+  title: string | null
+  job_description: string
+  company: string | null
+  role: string | null
+  result: InterviewPrepResult
+  created_at: string
+  source_opportunity_id: string | null
+  source_application_id: string | null
+}
+
 export interface SalaryResearchResult {
   job_title: string
   location: string

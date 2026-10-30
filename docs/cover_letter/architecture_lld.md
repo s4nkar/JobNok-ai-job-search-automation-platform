@@ -11,12 +11,12 @@
 ```
 apps/api/app/modules/cover_letter/
 ├── __init__.py
-├── routes.py              # Both endpoints: POST /cover-letter (stream), POST /cover-letter/pdf
-├── sessions_routes.py      # Saved-session CRUD: save, list, get, rename (My Docs)
+├── routes.py              # POST /cover-letter (stream, auto-saves), POST /cover-letter/pdf
+├── sessions_routes.py      # Saved-session read-only CRUD: list, get, rename (My Docs) - no /save, see service.py::resolve_session
 ├── models.py                # CoverLetterSession (cover_letter_sessions table)
-├── repository.py            # CoverLetterSessionRepository
-├── service.py               # ownership checks, display-label fallback, list_sessions_for_docs_page
-├── schemas.py              # CoverLetterRequest, CoverLetterPdfRequest, CoverLetterSaveRequest, session schemas
+├── repository.py            # CoverLetterSessionRepository, incl. get_by_source (job-linked upsert lookup)
+├── service.py               # ownership checks, resolve_session (auto-save upsert), display-label fallback, list_sessions_for_docs_page
+├── schemas.py              # CoverLetterRequest (now carries opportunity_id/job_search_application_id/session_id), CoverLetterPdfRequest, session schemas
 ├── text.py                 # Pure helpers: strip_dashes, split_paragraphs — zero WeasyPrint/AI imports
 ├── rendering.py             # PDF export: Jinja + WeasyPrint (reuses resume_tailor's stack)
 └── templates/
@@ -37,9 +37,11 @@ async def generate_cover_letter(request: Request, body: CoverLetterRequest, db: 
 ```
 
 1. **Daily quota** (`rate_limit_cover_letter_per_day`) then **burst window** (`rate_limit_burst_limit`/`rate_limit_burst_window_seconds`, shared setting) — fails open on a Redis error.
-2. **Prompt construction**: system prompt carries the style rules (hook, 2-3 accomplishments, 3-4 paragraphs/250-350 words, no clichés, no dash-class characters, anti-fabrication, prompt-injection framing). User prompt is labeled fields (`COMPANY:`, `ROLE:`, `SELLING POINTS:`, optional `RESUME:`), not free-flowing sentences — the explicit labels make the data/instruction boundary more structurally obvious to the model than natural prose would.
-3. **Streamed generation**: `ai_provider.stream_text(prompt, system, max_tokens=900, reasoning_effort=settings.groq_reasoning_effort)`. Each chunk passes through `text.strip_dashes` before being yielded.
-4. **Mid-stream failure handling**: wrapped in `try/except Exception` — on failure, logs the character count already streamed and appends a bracketed notice (`[Generation interrupted...]`) to the response instead of silently truncating. `StreamingResponse` has already committed to HTTP 200 by the time any exception here could surface (ASGI sends `http.response.start` before the body iterator is first awaited), so this is the best available fix without a wire-protocol redesign — not a workaround for something otherwise fixable.
+2. **Session resolution** (`service.py::resolve_session`), BEFORE any AI call: creates or upserts a `CoverLetterSession` row with placeholder content, committed immediately. Resolution order - a job-linked existing session (one row per job, found via `source_opportunity_id`/`source_application_id`) takes priority over `session_id` (one row per ad-hoc browser visit); a new row is created only when neither applies. This id is returned via the `X-Session-Id` response header, set before `StreamingResponse` starts (the streamed body has no room for a JSON field).
+3. **Prompt construction**: system prompt carries the style rules (hook, 2-3 accomplishments, 3-4 paragraphs/250-350 words, no clichés, no dash-class characters, anti-fabrication, prompt-injection framing). User prompt is labeled fields (`COMPANY:`, `ROLE:`, `SELLING POINTS:`, optional `RESUME:`), not free-flowing sentences — the explicit labels make the data/instruction boundary more structurally obvious to the model than natural prose would.
+4. **Streamed generation**: `ai_provider.stream_text(prompt, system, max_tokens=900, reasoning_effort=settings.groq_reasoning_effort)`. Each chunk passes through `text.strip_dashes` before being yielded, and is accumulated into `full_text` for the persistence step below.
+5. **Mid-stream failure handling**: wrapped in `try/except Exception` — on failure, logs the character count already streamed and appends a bracketed notice (`[Generation interrupted...]`) to the response instead of silently truncating. `StreamingResponse` has already committed to HTTP 200 by the time any exception here could surface (ASGI sends `http.response.start` before the body iterator is first awaited), so this is the best available fix without a wire-protocol redesign — not a workaround for something otherwise fixable.
+6. **Final persistence** (`finally` block): whatever was generated (even a partial, interrupted result) is written back into the session row created in step 2 and committed. A totally empty result (failed before any content) deletes that placeholder row instead of leaving an empty "document" behind.
 
 ### 2.2 PDF Export (`routes.py::cover_letter_pdf`)
 
@@ -52,14 +54,13 @@ async def cover_letter_pdf(request: Request, body: CoverLetterPdfRequest, db: As
 2. `rendering.render_pdf(body.content)` — renders exactly the text the client sent, no AI call, no auto-inserted salutation or signature. `text.split_paragraphs` splits on blank lines (falling back to single-newline splitting for a hand-edited textarea with no blank-line separation), then `WeasyHTML(string=html).write_pdf()` runs off the event loop via `asyncio.to_thread`.
 3. Returns raw PDF bytes with a `Content-Disposition: attachment` header; the frontend controls the actual filename client-side (fetches as a blob, builds its own `<a download>`), since the server-side header's filename isn't easily overridden per-request from the frontend's existing download pattern.
 
-### 2.3 Save (`sessions_routes.py::save_cover_letter_session`)
+### 2.3 Auto-Save Resolution (`service.py::resolve_session`)
 
 ```python
-@router.post("/cover-letter/save", response_model=CoverLetterSessionDetail)
-async def save_cover_letter_session(request: Request, body: CoverLetterSaveRequest, db: AsyncSession = Depends(get_db)):
+async def resolve_session(db: AsyncSession, user_id: str, body: CoverLetterRequest) -> CoverLetterSession:
 ```
 
-Explicit action, not auto-triggered by generation. Verifies ownership of `opportunity_id`/`job_search_application_id` (if provided) via `service.verify_opportunity_ownership`/`verify_application_ownership` before trusting either as `source_opportunity_id`/`source_application_id` - same "never trust a client-supplied id" pattern resume_tailor's `/tailor` POST uses. Burst-limited only (no daily quota - not AI-costed).
+Called from `routes.py::generate_cover_letter` (see §2.1 step 2), not its own endpoint - there is no `POST /save`. Verifies ownership of `opportunity_id`/`job_search_application_id` (if provided) via `service.verify_opportunity_ownership`/`verify_application_ownership` before trusting either as `source_opportunity_id`/`source_application_id` - same "never trust a client-supplied id" pattern resume_tailor's `/tailor` POST uses. Lives in `service.py` rather than `routes.py` specifically so it stays importable/testable without routes.py's WeasyPrint-importing `rendering.py` in the chain.
 
 ### 2.4 List / Get / Rename (`sessions_routes.py`)
 

@@ -7,11 +7,11 @@
 
 ## 1. Database Schema
 
-A generated letter is never persisted automatically — it exists only in the browser's editable textarea until the user explicitly clicks Save (writing a `cover_letter_sessions` row), downloads it as a PDF, copies it, or (if the session was opened from a Startup Hunt lead) it gets opportunistically saved as a `startup_hunt_opportunities` artifact via that module's own `/artifacts` endpoint (frontend-triggered, not something this module writes to directly).
+Every successful generation auto-persists into a `cover_letter_sessions` row (see `service.py::resolve_session`) - the user can also download it as a PDF, copy it, or (if the session was opened from a Startup Hunt lead) it gets opportunistically saved as a `startup_hunt_opportunities` artifact via that module's own `/artifacts` endpoint (frontend-triggered, not something this module writes to directly).
 
 ### 1.1 `cover_letter_sessions`
 
-One row per explicit Save - not auto-saved on every generation, since free-text generations have no deterministic dedup key the way resume_tailor's resume+JD hash pair does. Mirrors `tailoring_sessions`' `source_opportunity_id`/`source_application_id` linkage pattern (same ON DELETE SET NULL reasoning) so "My Docs" can group a resume and a cover letter saved for the same job.
+Unlike resume_tailor's resume+JD hash, a cover letter has no deterministic content-based dedup key, so the row this generation lands in is resolved by identity instead: a job-linked generation (`source_opportunity_id`/`source_application_id` present) overwrites the one existing session already linked to that job - "only one saved letter per job" - while an ad-hoc generation upserts by a client-held `session_id` for the current browser visit only. Mirrors `tailoring_sessions`' `source_opportunity_id`/`source_application_id` linkage pattern (same ON DELETE SET NULL reasoning) so "My Docs" can group a resume and a cover letter saved for the same job.
 
 ```sql
 CREATE TABLE cover_letter_sessions (
@@ -29,8 +29,8 @@ CREATE TABLE cover_letter_sessions (
 );
 ```
 
-- No `ai_status`/`ai_provider`/`ai_error` columns - only a successfully-generated, user-chosen-to-keep letter ever becomes a row, so there's nothing to track on the row itself.
-- No unique constraint - matches `tailoring_sessions`; every Save creates a new row rather than upserting.
+- No `ai_status`/`ai_provider`/`ai_error` columns - only a successfully-generated letter ever becomes a row (a totally-failed generation deletes its own placeholder row instead), so there's nothing to track on the row itself.
+- No unique constraint - the upsert rule in §1 above is enforced in application code (`get_by_source`/`session_id` lookup), not a DB constraint.
 - `title` - user-renameable via `PATCH /api/ai/cover-letter/sessions/{id}/title`, same UX as resume_tailor's My Docs (rename only - no delete, no re-edit-and-resave).
 
 ### 1.2 `profiles.key_selling_points` (shared with the Profile module)
@@ -56,7 +56,10 @@ ALTER TABLE profiles ADD COLUMN key_selling_points TEXT;
 ### 2.2 Burst Limiting (shared window, both endpoints)
 - Keyed per `(user_id, tool)` using the shared `rate_limit_burst_limit`/`rate_limit_burst_window_seconds` settings — same sliding-window-log implementation (`app/services/cache.py::check_burst_limit`) every other tool in this codebase uses.
 
-### 2.3 AI Provider Circuit Breaker (shared, not cover-letter-specific)
+### 2.3 Single-Flight Lock (concurrency safety, not rate limiting)
+- `cover_letter_gen:{user_id}:lock`, TTL 60s (`app/services/cache.py::acquire_lock`) — rejects a second concurrent `/cover-letter` request from the same user with `429` rather than letting both proceed and either double-spend AI cost or create duplicate `cover_letter_sessions` rows. Released explicitly via `delete_cached` the moment this request's own work ends, not left to the full TTL. See `production_hardening_playbook.md` §1 for why burst limiting alone doesn't cover this.
+
+### 2.4 AI Provider Circuit Breaker (shared, not cover-letter-specific)
 - `_CIRCUIT_SCOPE = "ai_llm"` in `app/ai/llm/provider.py` — a single scope shared across *every* tool and *every* user. Cover Letter's generation calls participate in this exactly like every other `ai_provider.generate_text`/`stream_text` caller; there is no per-tool circuit breaker to configure here.
 
 ---
@@ -70,17 +73,20 @@ sequenceDiagram
     autonumber
     actor Client as Frontend (Editable Textarea)
     participant Router as API Router
+    participant DB as cover_letter_sessions
     participant Redis as Redis
     participant LLM as Groq -> Cerebras -> HF
 
-    Client->>Router: POST /api/ai/cover-letter (company, role, selling_points, resume_text?)
+    Client->>Router: POST /api/ai/cover-letter (company, role, selling_points, resume_text?, opportunity_id?/job_search_application_id?/session_id?)
     Router->>Redis: Check daily quota (cover_letter)
     Router->>Redis: Check burst window
+    Router->>DB: resolve_session - job-linked overwrite, else session_id continuation, else new row (placeholder content)
+    Router-->>Client: X-Session-Id header (sent before streaming starts)
     Router->>Router: Build prompt (labeled fields, injection-framed system prompt)
     Router->>LLM: stream_text(prompt, system, max_tokens=900, reasoning_effort)
     loop Each streamed chunk
         LLM-->>Router: content delta
-        Router->>Router: strip_dashes(chunk)
+        Router->>Router: strip_dashes(chunk), accumulate full_text
         Router-->>Client: yield sanitized chunk
     end
     alt Stream completes normally
@@ -90,6 +96,7 @@ sequenceDiagram
     else finish_reason == "length"
         Router->>Router: log warning (content already sent, not re-raised)
     end
+    Router->>DB: persist full_text into the resolved session (or delete the placeholder if empty)
 ```
 
 ### 3.2 PDF Export

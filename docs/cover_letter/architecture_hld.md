@@ -8,7 +8,7 @@
 
 ## 1. Executive Overview
 
-**Cover Letter** is a single-purpose streaming generation tool: given a company, role, the candidate's own selling points, and optionally resume text, it streams back a tailored cover letter in real time, then lets the user export it as a PDF. Unlike Resume Tailor, there is no deterministic matching/scoring layer and no persisted session — this is intentionally the simpler end of the tool spectrum, hardened to the same production bar without inheriting architecture it doesn't need.
+**Cover Letter** is a single-purpose streaming generation tool: given a company, role, the candidate's own selling points, and optionally resume text, it streams back a tailored cover letter in real time, auto-saves it, then lets the user export it as a PDF. Unlike Resume Tailor there is no deterministic matching/scoring layer — this is intentionally the simpler end of the tool spectrum, hardened to the same production bar without inheriting architecture it doesn't need.
 
 ### Key Architectural Objectives
 1. **Streamed, Editable Output**: the letter streams token-by-token into an editable textarea — the user can correct anything before copying, downloading, or saving it, so content correctness leans on user review plus deterministic guardrails rather than a heavy validation pipeline.
@@ -83,8 +83,8 @@ flowchart TD
 
 ## 4. Key Architectural Patterns & Guarantees
 
-### 4.1 Explicit-Save Persistence, Not Auto-Save
-A generated letter lives only in the browser until the user copies, downloads, explicitly clicks Save (`cover_letter_sessions` row), or (if triggered from a Startup Hunt lead) it gets opportunistically saved as an artifact on that lead. Deliberately not auto-saved on every generation — unlike resume_tailor's resume+JD hash, a cover letter has no deterministic dedup key, so auto-saving would clutter "My Docs" with every regeneration attempt. See `docs/cover_letter/data_flow_and_schema.md` §1.1 for the table and `architecture_lld.md` §2.3/§2.4 for the save/list/rename endpoints.
+### 4.1 Auto-Save, Upserted By Job Link or Browser Visit
+Every successful generation auto-persists into a `cover_letter_sessions` row — no explicit Save click. A forgotten click previously meant losing the letter and paying for a full AI regeneration to get it back; auto-save removes that failure mode entirely. Unlike resume_tailor's resume+JD hash, a cover letter has no deterministic content-based dedup key, so the upsert target is identity-based instead: a job-linked generation (Startup Hunt opportunity or tracked application) overwrites the one existing session already linked to that job — "only one saved letter per job," regardless of browser visit — while an ad-hoc generation (no job link) upserts by `session_id`, held client-side for the current visit only, so regenerating while tweaking wording updates one row instead of piling up a new one per click. See `docs/cover_letter/data_flow_and_schema.md` §1.1 for the table and `architecture_lld.md` §2.3 for the resolution logic.
 
 ### 4.2 Streaming Error Handling Without a Wire-Protocol Redesign
 `StreamingResponse` commits to HTTP 200 the moment the body iterator starts, before any exception from inside it can be turned into a proper 4xx/5xx. Rather than redesign the protocol, a failure mid-generation (provider exhaustion, network error) is caught and a clearly-bracketed notice is appended to the stream itself — visible in the editable textarea, and trivially deletable by the user, instead of a silent cutoff with no explanation.

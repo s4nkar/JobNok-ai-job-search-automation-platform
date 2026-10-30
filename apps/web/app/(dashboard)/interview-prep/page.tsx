@@ -8,17 +8,26 @@ import { Button } from '@jobnok/ui'
 import { Textarea } from '@jobnok/ui'
 import { Label } from '@jobnok/ui'
 import { useToast } from '@jobnok/ui'
-import { MessageSquare, Loader2, RefreshCw, ChevronDown, ChevronUp, Info, Compass, X } from 'lucide-react'
+import {
+  MessageSquare, Loader2, RefreshCw, ChevronDown, ChevronUp, Compass, X,
+  SlidersHorizontal, Target, Code2, Network, Check,
+} from 'lucide-react'
 import { apiFetch, apiGet } from '@/lib/api'
 import { queryKeys } from '@/lib/queryKeys'
 import { cn } from '@jobnok/ui'
-import { StartupHuntSavedOpportunity, JobSearchApplication } from '@/lib/types'
+import {
+  StartupHuntSavedOpportunity, JobSearchApplication,
+  InterviewPrepResult, InterviewPrepSessionDetail,
+  InterviewQuestion, InterviewRoleAssessment, TechnicalPrepQuestion,
+} from '@/lib/types'
 
-interface InterviewQuestion {
-  question: string
-  framework: string
-  answer_framework: string
-  tips: string[]
+const JD_MAX_CHARS = 12000
+
+const SENIORITY_LABEL: Record<InterviewRoleAssessment['seniority'], string> = {
+  junior: 'Junior',
+  mid: 'Mid-level',
+  senior: 'Senior',
+  unclear: 'Seniority unclear',
 }
 
 function buildJdFromOpportunity(lead: StartupHuntSavedOpportunity): string {
@@ -41,15 +50,41 @@ function InterviewPrepInner() {
   const jobSearchApplicationId = searchParams.get('job_search_application_id')
   const trackerCompany = searchParams.get('company')
   const trackerRole = searchParams.get('role')
+  const reopenSessionId = searchParams.get('session_id')
 
   const [lead, setLead] = useState<StartupHuntSavedOpportunity | null>(null)
+  const [trackerApp, setTrackerApp] = useState<{ company: string; role: string } | null>(null)
   const [jd, setJd] = useState('')
   const [loading, setLoading] = useState(false)
+  const [roleAssessment, setRoleAssessment] = useState<InterviewRoleAssessment | null>(null)
   const [questions, setQuestions] = useState<InterviewQuestion[]>([])
+  const [dsaQuestions, setDsaQuestions] = useState<TechnicalPrepQuestion[]>([])
+  const [systemDesignQuestions, setSystemDesignQuestions] = useState<TechnicalPrepQuestion[]>([])
   const [expandedIdx, setExpandedIdx] = useState<number | null>(null)
   const [regeneratingIdx, setRegeneratingIdx] = useState<number | null>(null)
   const [error, setError] = useState<string | null>(null)
+  // Generation auto-persists (see the backend's resolve_session) - tracks
+  // which InterviewPrepSession row this page visit's generations/
+  // regenerates are landing in. Server-assigned: set from the generate
+  // response's session_id field, or from a reopened session's own id.
+  const [sessionId, setSessionId] = useState<string | null>(null)
   const { toast } = useToast()
+
+  // Real company/role from an already-known Startup Hunt lead or tracked
+  // application, sent alongside the JD so the backend can use trusted data
+  // instead of guessing a company name out of free text (reduces
+  // hallucination risk for the role_assessment.company_context field).
+  const knownCompany = lead?.company_name ?? trackerApp?.company ?? undefined
+  const knownRole = lead?.role_title ?? trackerApp?.role ?? undefined
+
+  // Mobile/tablet-only: the input card starts collapsed so generated
+  // questions are reachable without scrolling past the whole 18-row JD
+  // textarea first — same pattern as cover-letter/resume-tailor's sidebar.
+  // Ignored at lg+ (always expanded there).
+  const [inputsOpen, setInputsOpen] = useState(false)
+  const inputsSummary = jd.trim()
+    ? jd.trim().slice(0, 50) + (jd.trim().length > 50 ? '…' : '')
+    : 'No job description yet'
 
   const { data: opportunities } = useQuery({
     queryKey: queryKeys.startupHuntOpportunities,
@@ -72,6 +107,7 @@ function InterviewPrepInner() {
       .then((r) => r.ok ? r.json() : null)
       .then((found: JobSearchApplication | null) => {
         if (found) {
+          setTrackerApp({ company: found.company, role: found.role })
           setJd(found.job_description
             || `${found.role} at ${found.company}\n\n[Paste or add the full job description below this line for best results]`)
         }
@@ -80,29 +116,70 @@ function InterviewPrepInner() {
 
   useEffect(() => {
     if (opportunityId || jobSearchApplicationId || !trackerCompany || !trackerRole) return
+    setTrackerApp({ company: trackerCompany, role: trackerRole })
     setJd(`${trackerRole} at ${trackerCompany}\n\n[Paste or add the full job description below this line for best results]`)
   }, [opportunityId, jobSearchApplicationId, trackerCompany, trackerRole])
+
+  // Reopening a previously-saved kit from My Docs — pre-fills the form and
+  // results exactly as if freshly generated, so the user can re-read it,
+  // regenerate an answer, or save it again as a new row.
+  useEffect(() => {
+    if (!reopenSessionId) return
+    apiGet<InterviewPrepSessionDetail>(`/api/ai/interview/sessions/${reopenSessionId}`)
+      .then((session) => {
+        setJd(session.job_description)
+        if (session.company && session.role) {
+          setTrackerApp({ company: session.company, role: session.role })
+        }
+        setRoleAssessment(session.result.role_assessment ?? null)
+        setQuestions(session.result.questions || [])
+        setDsaQuestions(session.result.dsa_questions || [])
+        setSystemDesignQuestions(session.result.system_design_questions || [])
+        setExpandedIdx(0)
+        setSessionId(session.id)
+      })
+      .catch(() => {
+        toast({ title: 'Could not load saved interview kit', variant: 'destructive' })
+      })
+  }, [reopenSessionId, toast])
 
   async function generateQuestions() {
     if (!jd.trim()) return
     setLoading(true)
+    setRoleAssessment(null)
     setQuestions([])
+    setDsaQuestions([])
+    setSystemDesignQuestions([])
     setError(null)
 
     try {
       const res = await apiFetch('/api/ai/interview', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ job_description: jd }),
+        body: JSON.stringify({
+          job_description: jd, company: knownCompany, role: knownRole,
+          opportunity_id: opportunityId || undefined,
+          job_search_application_id: jobSearchApplicationId || undefined,
+          session_id: sessionId || undefined,
+        }),
       })
       const json = await res.json()
 
       if (!res.ok) {
         setError(json.detail || 'Generation failed.')
       } else {
-        const qs: InterviewQuestion[] = json.questions || []
+        const result = json as InterviewPrepResult & { session_id: string }
+        const qs = result.questions || []
+        setRoleAssessment(result.role_assessment ?? null)
         setQuestions(qs)
+        setDsaQuestions(result.dsa_questions || [])
+        setSystemDesignQuestions(result.system_design_questions || [])
         setExpandedIdx(0)
+        // Auto-save: the backend created/updated an InterviewPrepSession
+        // for this generation and hands its id back here. Kept for the
+        // rest of this visit so a regenerate patches the same row instead
+        // of leaving it to drift out of sync.
+        setSessionId(result.session_id)
 
         if (opportunityId && qs.length) {
           await apiFetch(`/api/startup-hunt/opportunities/${opportunityId}/artifacts`, {
@@ -131,7 +208,10 @@ function InterviewPrepInner() {
       const res = await apiFetch('/api/ai/interview/regenerate', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ job_description: jd, question: questions[idx].question }),
+        body: JSON.stringify({
+          job_description: jd, question: questions[idx].question,
+          session_id: sessionId || undefined, question_index: idx,
+        }),
       })
       const json = await res.json()
       if (!res.ok) {
@@ -149,7 +229,7 @@ function InterviewPrepInner() {
   return (
     <div className="animate-fade-in">
       <div className="flex items-center gap-4 mb-6">
-        <div className="page-header-icon bg-indigo-100">
+        <div className="hidden sm:flex page-header-icon bg-indigo-100">
           <MessageSquare className="h-5 w-5 text-indigo-600" />
         </div>
         <div>
@@ -168,37 +248,79 @@ function InterviewPrepInner() {
         </div>
       )}
 
-      <div className="flex items-center gap-2.5 bg-indigo-50 border border-indigo-100 text-indigo-700 rounded-xl px-4 py-3 mb-6 text-sm">
-        <Info className="h-4 w-4 flex-shrink-0 text-indigo-500" />
-        <span><strong>{config.rateLimits.interviewPrepPerDay} preps/day</strong> on the free tier.</span>
-      </div>
+      {trackerApp && (
+        <div className="flex items-center gap-2.5 bg-indigo-50 border border-indigo-100 text-indigo-800 rounded-xl px-4 py-3 mb-4 text-sm">
+          <Compass className="h-4 w-4 flex-shrink-0 text-indigo-500" />
+          <span>Pre-filled from your tracker: <strong>{trackerApp.company} — {trackerApp.role}</strong>. Add the full JD below for best results.</span>
+          <button onClick={() => setTrackerApp(null)} className="ml-auto text-indigo-400 hover:text-indigo-700">
+            <X className="h-4 w-4" />
+          </button>
+        </div>
+      )}
 
-      <div className="grid grid-cols-2 gap-6 items-start">
-        <div className="space-y-4 sticky top-6">
-          <div className="bg-white rounded-2xl border border-slate-100 shadow-card p-5">
-            <Label className="text-sm font-semibold text-slate-700 mb-3 block">Job Description</Label>
-            <Textarea
-              value={jd}
-              onChange={(e) => setJd(e.target.value)}
-              rows={18}
-              placeholder="Paste the full job description here…"
-              className="text-sm rounded-xl border-slate-200 resize-none"
-            />
-          </div>
-
-          <Button
-            className="w-full h-11 gradient-brand text-white border-0 shadow-brand-sm hover:opacity-90 transition-opacity rounded-xl font-semibold"
-            onClick={generateQuestions}
-            disabled={!jd.trim() || loading}
+      {/* lg:, not md: — see resume-tailor/recent-job-search's identical
+          sidebar comment: at md a fixed sidebar leaves the results column
+          too narrow for its own sm: breakpoints, which key off full
+          viewport width, not the column's actual space. */}
+      <div className="grid grid-cols-1 lg:grid-cols-[380px_1fr] gap-5 items-start">
+        {/* Left — inputs, one unified sticky card, matching resume-tailor/
+            cover-letter's sidebar instead of the old plain 2-col grid. */}
+        <div className="bg-white rounded-2xl border border-slate-100 shadow-sm lg:sticky lg:top-6 lg:max-h-[calc(100vh-8.5rem)] lg:flex lg:flex-col overflow-hidden">
+          {/* Mobile/tablet-only collapsible header */}
+          <button
+            type="button"
+            onClick={() => setInputsOpen(v => !v)}
+            className="w-full lg:hidden flex items-center justify-between gap-3 px-5 py-3.5"
           >
-            {loading
-              ? <><Loader2 className="h-4 w-4 mr-2 animate-spin" /> Generating…</>
-              : <><MessageSquare className="h-4 w-4 mr-2" /> Generate 10 Questions</>
-            }
-          </Button>
+            <span className="flex items-center gap-2 text-xs font-semibold text-slate-500 uppercase tracking-wider flex-shrink-0">
+              <SlidersHorizontal className="h-3.5 w-3.5 text-slate-400" />
+              Job Description
+            </span>
+            <span className="flex items-center gap-1.5 text-xs text-slate-500 font-normal normal-case min-w-0">
+              <span className="truncate">{inputsSummary}</span>
+              {inputsOpen ? <ChevronUp className="h-3.5 w-3.5 flex-shrink-0" /> : <ChevronDown className="h-3.5 w-3.5 flex-shrink-0" />}
+            </span>
+          </button>
+
+          <div className={cn(
+            inputsOpen ? 'block' : 'hidden',
+            'lg:block lg:flex-1 lg:min-h-0 lg:overflow-y-auto scrollbar-thin p-5 lg:pt-5 space-y-4',
+            inputsOpen && 'border-t border-slate-100 lg:border-t-0',
+          )}>
+            <div>
+              <div className="flex items-center justify-between gap-2 mb-3 hidden lg:flex">
+                <Label className="text-sm font-semibold text-slate-700">Job Description</Label>
+                <span className={`text-xs ${jd.length > JD_MAX_CHARS ? 'text-destructive' : 'text-slate-400'}`}>
+                  {jd.length}/{JD_MAX_CHARS}
+                </span>
+              </div>
+              <Textarea
+                value={jd}
+                onChange={(e) => setJd(e.target.value)}
+                rows={18}
+                maxLength={JD_MAX_CHARS}
+                placeholder="Paste the full job description here…"
+                className="text-sm rounded-xl border-slate-200 resize-none"
+              />
+            </div>
+
+            <Button
+              className="w-full h-11 gradient-brand text-white border-0 shadow-brand-sm hover:opacity-90 transition-opacity rounded-xl font-semibold"
+              onClick={generateQuestions}
+              disabled={!jd.trim() || loading}
+            >
+              {loading
+                ? <><Loader2 className="h-4 w-4 mr-2 animate-spin" /> Generating…</>
+                : <><MessageSquare className="h-4 w-4 mr-2" /> Generate 10 Questions</>
+              }
+            </Button>
+            <p className="text-center text-[11px] text-slate-400">
+              Up to {config.rateLimits.interviewPrepPerDay} preps/day on the free tier
+            </p>
+          </div>
         </div>
 
-        <div>
+        <div className="min-w-0">
           {error && (
             <div className="bg-red-50 border border-red-100 text-red-700 rounded-xl px-4 py-3 text-sm mb-4">{error}</div>
           )}
@@ -222,6 +344,47 @@ function InterviewPrepInner() {
                 <p className="font-semibold text-slate-700">Generating questions…</p>
                 <p className="text-sm text-slate-400">Analysing the job description</p>
               </div>
+            </div>
+          )}
+
+          {roleAssessment && (
+            <div className="bg-white rounded-2xl border border-slate-100 shadow-card p-5 mb-4">
+              <div className="flex items-center justify-between gap-2 mb-3">
+                <div className="flex items-center gap-2">
+                  <Target className="h-4 w-4 text-indigo-500" />
+                  <p className="text-sm font-semibold text-slate-700">Role Assessment</p>
+                </div>
+                {sessionId && (
+                  <span className="flex items-center gap-1 px-2.5 py-1 rounded-lg text-xs font-medium text-emerald-600 bg-emerald-50" title="Auto-saved to My Docs">
+                    <Check className="h-3.5 w-3.5" /> Saved
+                  </span>
+                )}
+              </div>
+              <div className="flex flex-wrap items-center gap-1.5 mb-3">
+                <span className="inline-flex items-center px-2.5 py-1 rounded-lg text-xs font-semibold bg-indigo-50 text-indigo-700 border border-indigo-100">
+                  {SENIORITY_LABEL[roleAssessment.seniority]}
+                </span>
+                {roleAssessment.role_family && (
+                  <span className="inline-flex items-center px-2.5 py-1 rounded-lg text-xs font-semibold bg-slate-50 text-slate-600 border border-slate-200">
+                    {roleAssessment.role_family}
+                  </span>
+                )}
+              </div>
+              {roleAssessment.likely_rounds.length > 0 && (
+                <div className="mb-3">
+                  <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest mb-1.5">Likely Interview Rounds</p>
+                  <div className="flex flex-wrap gap-1.5">
+                    {roleAssessment.likely_rounds.map((round, i) => (
+                      <span key={i} className="inline-flex items-center px-2 py-1 rounded-lg text-xs font-medium bg-slate-50 text-slate-600 border border-slate-200">
+                        {i + 1}. {round}
+                      </span>
+                    ))}
+                  </div>
+                </div>
+              )}
+              {roleAssessment.company_context && (
+                <p className="text-xs text-slate-500 leading-relaxed">{roleAssessment.company_context}</p>
+              )}
             </div>
           )}
 
@@ -290,6 +453,46 @@ function InterviewPrepInner() {
                   )}
                 </div>
               ))}
+            </div>
+          )}
+
+          {dsaQuestions.length > 0 && (
+            <div className="mt-5">
+              <div className="flex items-center gap-2 mb-2.5">
+                <Code2 className="h-4 w-4 text-indigo-500" />
+                <p className="text-sm font-semibold text-slate-700">DSA Prep</p>
+              </div>
+              <div className="space-y-2.5">
+                {dsaQuestions.map((q, i) => (
+                  <div key={i} className="bg-white rounded-2xl border border-slate-100 shadow-card p-5">
+                    <p className="text-sm font-semibold text-slate-800 leading-snug mb-3">{q.question}</p>
+                    <div className="bg-slate-50 rounded-xl p-4">
+                      <p className="text-[10px] font-bold text-slate-500 uppercase tracking-widest mb-2">Approach</p>
+                      <p className="text-sm text-slate-700 whitespace-pre-wrap leading-relaxed">{q.approach}</p>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {systemDesignQuestions.length > 0 && (
+            <div className="mt-5">
+              <div className="flex items-center gap-2 mb-2.5">
+                <Network className="h-4 w-4 text-indigo-500" />
+                <p className="text-sm font-semibold text-slate-700">System Design Prep</p>
+              </div>
+              <div className="space-y-2.5">
+                {systemDesignQuestions.map((q, i) => (
+                  <div key={i} className="bg-white rounded-2xl border border-slate-100 shadow-card p-5">
+                    <p className="text-sm font-semibold text-slate-800 leading-snug mb-3">{q.question}</p>
+                    <div className="bg-slate-50 rounded-xl p-4">
+                      <p className="text-[10px] font-bold text-slate-500 uppercase tracking-widest mb-2">Approach</p>
+                      <p className="text-sm text-slate-700 whitespace-pre-wrap leading-relaxed">{q.approach}</p>
+                    </div>
+                  </div>
+                ))}
+              </div>
             </div>
           )}
         </div>
