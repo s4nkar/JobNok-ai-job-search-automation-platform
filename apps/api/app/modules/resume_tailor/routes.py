@@ -42,7 +42,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.config import settings
 from app.core.database import get_db
 from app.core.security import get_current_user_id
-from app.services.cache import check_rate_limit, check_burst_limit
+from app.services.cache import acquire_lock, check_rate_limit, check_burst_limit
 from app.shared.utils import _rl_error
 from app.modules.usage.service import record_event as record_tool_usage
 from app.modules.resume_tailor import cache as resume_cache
@@ -102,6 +102,21 @@ _MAX_PDF_BYTES = 5 * 1024 * 1024  # 5 MB
 # signals) — well past any legitimate posting, bounds worst-case prompt size
 # and DB row size. Mirrored by a DB CHECK constraint on tailoring_sessions.job_text.
 _MAX_JD_LENGTH = 20_000
+# Short-lived, NOT explicitly released - unlike cover_letter/interview_prep's
+# own generation locks, this one guards a much longer, multi-branch function
+# (translate/chunk/embed/match/prose, with its own early-return cache-hit and
+# single-flight-follower paths) where wrapping the whole body in try/finally
+# would be real control-flow surgery for a narrower bug. The EXISTING
+# resume+JD hash-based lock below only dedupes IDENTICAL content; two
+# concurrent /tailor submissions for the SAME tracked job with even slightly
+# different text (two tabs, a quick edit-and-resubmit) sail past that lock
+# with no mutual exclusion at all, and could otherwise both reach the "only
+# one session per job" overwrite logic near the end of this function at the
+# same time. A short fixed TTL that just expires on its own is exactly the
+# "thundering herd," not "hard mutual exclusion," use case acquire_lock's own
+# docstring describes - it covers the realistic double-click/two-tab overlap
+# window without needing an explicit release.
+_JOB_LOCK_TTL_SECONDS = 15
 
 
 def _empty_array() -> np.ndarray:
@@ -315,6 +330,37 @@ async def tailor_resume(
     allowed, _ = await check_rate_limit(user_id, "resume_tailor_ai", settings.rate_limit_resume_ai_per_day)
     if not allowed:
         raise _rl_error("Resume Tailor", settings.rate_limit_resume_ai_per_day)
+    # Daily quota alone only caps total volume, not arrival rate - this
+    # endpoint was missing the burst-window check every other endpoint in
+    # this module (draft/title/pdf/etc. below) already has, and that
+    # cover_letter/interview_prep also both have on their own generate
+    # endpoints. Same fail-open-on-Redis-error philosophy as those.
+    try:
+        burst_ok = await check_burst_limit(
+            user_id, "resume_tailor_ai", settings.rate_limit_burst_limit, settings.rate_limit_burst_window_seconds,
+        )
+    except Exception:
+        burst_ok = True
+    if not burst_ok:
+        raise HTTPException(status_code=429, detail="Generating too quickly - please wait a few seconds and try again.")
+
+    # See _JOB_LOCK_TTL_SECONDS's comment. Keyed on the raw, not-yet-
+    # ownership-verified id - safe either way since this is a concurrency
+    # guard, not a security boundary (a bogus id just locks a key nothing
+    # else will ever contend for; real ownership is still re-checked before
+    # the id is trusted as a source_opportunity_id/source_application_id
+    # further down).
+    if opportunity_id or job_search_application_id:
+        job_lock_key = f"tailor_job:{user_id}:{opportunity_id or job_search_application_id}:lock"
+        try:
+            job_lock_acquired = await acquire_lock(job_lock_key, _JOB_LOCK_TTL_SECONDS)
+        except Exception:
+            job_lock_acquired = True
+        if not job_lock_acquired:
+            raise HTTPException(
+                status_code=429, detail="A resume is already being tailored for this job - please wait a moment and try again.",
+            )
+
     await record_tool_usage(db, user_id, "resume-tailor")
 
     # Two ways in: an ad-hoc one-off upload (resume), or a permanent saved

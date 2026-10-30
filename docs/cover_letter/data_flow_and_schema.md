@@ -56,7 +56,10 @@ ALTER TABLE profiles ADD COLUMN key_selling_points TEXT;
 ### 2.2 Burst Limiting (shared window, both endpoints)
 - Keyed per `(user_id, tool)` using the shared `rate_limit_burst_limit`/`rate_limit_burst_window_seconds` settings — same sliding-window-log implementation (`app/services/cache.py::check_burst_limit`) every other tool in this codebase uses.
 
-### 2.3 AI Provider Circuit Breaker (shared, not cover-letter-specific)
+### 2.3 Single-Flight Lock (concurrency safety, not rate limiting)
+- `cover_letter_gen:{user_id}:lock`, TTL 60s (`app/services/cache.py::acquire_lock`) — rejects a second concurrent `/cover-letter` request from the same user with `429` rather than letting both proceed and either double-spend AI cost or create duplicate `cover_letter_sessions` rows. Released explicitly via `delete_cached` the moment this request's own work ends, not left to the full TTL. See `production_hardening_playbook.md` §1 for why burst limiting alone doesn't cover this.
+
+### 2.4 AI Provider Circuit Breaker (shared, not cover-letter-specific)
 - `_CIRCUIT_SCOPE = "ai_llm"` in `app/ai/llm/provider.py` — a single scope shared across *every* tool and *every* user. Cover Letter's generation calls participate in this exactly like every other `ai_provider.generate_text`/`stream_text` caller; there is no per-tool circuit breaker to configure here.
 
 ---

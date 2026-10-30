@@ -26,7 +26,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import settings
 from app.core.database import get_db
-from app.services.cache import check_burst_limit, check_rate_limit
+from app.services.cache import acquire_lock, check_burst_limit, check_rate_limit, delete_cached
 from app.core.security import get_current_user_id
 from app.ai.llm import provider as ai_provider
 from app.shared.utils import _rl_error
@@ -40,6 +40,19 @@ from app.modules.usage.service import record_event as record_tool_usage
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
+
+# Single-flight guard against two concurrent identical requests (double-
+# click, a frontend retry loop, two tabs) each firing their own paid LLM
+# stream - and, pre-resolve_session, each independently resolving its own
+# upsert target, which without this could create two sessions for what was
+# meant to be one submission. Burst limiting alone doesn't prevent this: it
+# throttles RATE (N requests per window), not duplicate concurrent in-flight
+# work. Released explicitly in generate()'s `finally` the moment streaming
+# ends (success or interrupted), so a later LEGITIMATE request from the same
+# user is never blocked longer than this one's own actual duration - the TTL
+# below is only a safety ceiling for the (rare) case a process dies before
+# reaching that `finally`.
+_GENERATION_LOCK_TTL_SECONDS = 60
 
 # Included here, before /cover-letter/pdf below - same FastAPI/Starlette
 # registration-order reasoning resume_tailor/routes.py documents (not
@@ -69,9 +82,32 @@ async def generate_cover_letter(request: Request, body: CoverLetterRequest, db: 
         burst_ok = True
     if not burst_ok:
         raise HTTPException(status_code=429, detail="Generating too quickly - please wait a few seconds and try again.")
-    await record_tool_usage(db, user_id, "cover-letter")
 
-    session = await cover_letter_service.resolve_session(db, user_id, body)
+    lock_key = f"cover_letter_gen:{user_id}:lock"
+    try:
+        acquired = await acquire_lock(lock_key, _GENERATION_LOCK_TTL_SECONDS)
+    except Exception:
+        acquired = True  # fail open, same philosophy as every other limiter here
+    if not acquired:
+        raise HTTPException(
+            status_code=429, detail="A cover letter is already being generated - please wait for it to finish.",
+        )
+
+    try:
+        await record_tool_usage(db, user_id, "cover-letter")
+        session = await cover_letter_service.resolve_session(db, user_id, body)
+    except Exception:
+        # Failed before streaming ever started (e.g. a DB error resolving
+        # the session) - generate()'s own `finally` below never gets a
+        # chance to run in this case, so release the lock here instead of
+        # leaving it held for the full TTL on a request that isn't actually
+        # doing anything anymore.
+        try:
+            await delete_cached(lock_key)
+        except Exception:
+            pass
+        raise
+
     session_id = str(session.id)
     repo = CoverLetterSessionRepository(db)
 
@@ -158,6 +194,10 @@ SELLING POINTS: {body.selling_points}{resume_section}"""
                 await db.commit()
             except Exception as exc:
                 logger.warning("Cover letter session %s: failed to persist final content (%r)", session_id, exc)
+            try:
+                await delete_cached(lock_key)
+            except Exception:
+                pass
 
     return StreamingResponse(generate(), media_type="text/plain", headers={"X-Session-Id": session_id})
 
