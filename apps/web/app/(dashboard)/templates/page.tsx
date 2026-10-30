@@ -21,22 +21,31 @@ import { useToast } from '@jobnok/ui'
 import { Plus, Copy, Check, Trash2, FileText, Loader2, AlertCircle } from 'lucide-react'
 
 const LINKEDIN_CHAR_LIMIT = 300
+// Mirrors the backend's Pydantic bounds (apps/api/app/modules/templates/
+// schemas.py) — kept in sync by hand, same pattern CLAUDE.md documents for
+// every other tool's Zod/Pydantic pair.
+const NAME_MAX_LENGTH = 100
+const CONTENT_MAX_LENGTH = 5000
 
 const templateSchema = z.object({
-  name: z.string().min(2, 'Name must be at least 2 characters'),
+  name: z.string().min(2, 'Name must be at least 2 characters').max(NAME_MAX_LENGTH, `Keep it under ${NAME_MAX_LENGTH} characters`),
   category: z.enum(TEMPLATE_CATEGORIES as [TemplateCategory, ...TemplateCategory[]]),
-  content: z.string().min(10, 'Template must be at least 10 characters'),
+  content: z.string().min(10, 'Template must be at least 10 characters').max(CONTENT_MAX_LENGTH, `Keep it under ${CONTENT_MAX_LENGTH} characters`),
 })
 type TemplateFormData = z.infer<typeof templateSchema>
 
+// Previously keyed on category names ('LinkedIn', 'Email', 'Follow-up',
+// 'Thank You') that don't match any value TEMPLATE_CATEGORIES actually
+// contains (apps/web/lib/types.ts) — every real category silently fell
+// back to the 'Custom' style below, since none of these keys ever matched.
+// The two "cold DM" categories share one recognizable outreach color;
+// everything else is a neutral category label with no status meaning.
 const categoryColors: Record<string, string> = {
-  // LinkedIn keeps its real brand blue — a recognizable third-party mark,
-  // not an arbitrary category color. Everything else is a neutral category
-  // label with no status meaning, so it stays on one shared treatment.
-  'LinkedIn': 'bg-blue-50 text-blue-700 border-blue-100',
-  'Email': 'bg-slate-50 text-slate-600 border-slate-200',
-  'Follow-up': 'bg-slate-50 text-slate-600 border-slate-200',
-  'Thank You': 'bg-slate-50 text-slate-600 border-slate-200',
+  'Cold DM - Recruiter': 'bg-blue-50 text-blue-700 border-blue-100',
+  'Cold DM - Hiring Manager': 'bg-blue-50 text-blue-700 border-blue-100',
+  'Follow-Up': 'bg-slate-50 text-slate-600 border-slate-200',
+  'Referral Ask': 'bg-slate-50 text-slate-600 border-slate-200',
+  'Email Outreach': 'bg-slate-50 text-slate-600 border-slate-200',
   'Custom': 'bg-slate-50 text-slate-600 border-slate-200',
 }
 
@@ -91,11 +100,11 @@ export default function TemplatesPage() {
     setCopied(true)
     toast({ title: 'Copied!', description: 'Message copied to clipboard.' })
     if (selected && !selected.is_prebuilt) {
-      await apiFetch(`/api/templates/${selected.id}`, {
-        method: 'PUT',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ use_count: (selected.use_count || 0) + 1 }),
-      })
+      // Atomic server-side increment (POST /{id}/use), not a client-
+      // computed "current + 1" PUT - that previously let two rapid
+      // copies (or two tabs) both read the same stale count and both
+      // write the same incremented value, silently losing one.
+      await apiFetch(`/api/templates/${selected.id}/use`, { method: 'POST' })
     }
     setTimeout(() => setCopied(false), 3000)
   }
@@ -143,7 +152,7 @@ export default function TemplatesPage() {
       {/* Page Header */}
       <div className="flex items-start justify-between mb-8">
         <div className="flex items-center gap-4">
-          <div className="page-header-icon bg-indigo-100">
+          <div className="hidden sm:flex page-header-icon bg-indigo-100">
             <FileText className="h-5 w-5 text-indigo-600" />
           </div>
           <div>
@@ -162,9 +171,12 @@ export default function TemplatesPage() {
         </Button>
       </div>
 
-      <div className="grid grid-cols-3 gap-6">
-        {/* Template List */}
-        <div className="col-span-1 space-y-3">
+      <div className="grid grid-cols-1 lg:grid-cols-3 gap-5 items-start">
+        {/* Template List — locked in place while scrolling the editor/fill
+            panel at lg+, same pattern as recent-job-search's filter
+            sidebar, so switching templates doesn't need scrolling back up
+            first. */}
+        <div className="lg:col-span-1 lg:sticky lg:top-6 lg:max-h-[calc(100vh-8.5rem)] lg:flex lg:flex-col space-y-3">
           <Select value={filterCategory} onValueChange={setFilterCategory}>
             <SelectTrigger className="h-9 text-sm rounded-xl border-slate-200">
               <SelectValue placeholder="All categories" />
@@ -175,7 +187,7 @@ export default function TemplatesPage() {
             </SelectContent>
           </Select>
 
-          <div className="space-y-1.5 max-h-[calc(100vh-280px)] overflow-y-auto pr-1 scrollbar-thin">
+          <div className="space-y-1.5 max-h-64 lg:max-h-none lg:flex-1 lg:min-h-0 overflow-y-auto pr-1 scrollbar-thin">
             {filtered.length === 0 && (
               <div className="text-center py-10 text-slate-400 text-sm">
                 <div className="w-10 h-10 rounded-xl bg-slate-100 flex items-center justify-center mx-auto mb-3">
@@ -191,19 +203,16 @@ export default function TemplatesPage() {
                 className={cn(
                   'w-full text-left p-3.5 rounded-xl border text-sm transition-all duration-150',
                   selected?.id === t.id
-                    ? 'bg-indigo-600 text-white border-indigo-600 shadow-brand-sm'
+                    ? 'bg-indigo-50 border-indigo-200 shadow-sm'
                     : 'bg-white border-slate-100 hover:border-slate-200 hover:shadow-sm shadow-sm'
                 )}
               >
-                <div className="font-semibold truncate text-[13px]">{t.name}</div>
-                <div className={cn('mt-1.5 flex items-center gap-1.5', selected?.id === t.id ? 'opacity-70' : '')}>
-                  {selected?.id !== t.id && <CategoryBadge category={t.category} />}
-                  {selected?.id === t.id && (
-                    <span className="text-xs text-indigo-200">{t.category}</span>
-                  )}
-                  {t.is_prebuilt && (
-                    <span className={cn('text-[10px]', selected?.id === t.id ? 'text-indigo-200' : 'text-slate-400')}>· Pre-built</span>
-                  )}
+                <div className={cn('font-semibold truncate text-[13px]', selected?.id === t.id ? 'text-indigo-900' : 'text-slate-800')}>
+                  {t.name}
+                </div>
+                <div className="mt-1.5 flex items-center gap-1.5">
+                  <CategoryBadge category={t.category} />
+                  {t.is_prebuilt && <span className="text-[10px] text-slate-400">· Pre-built</span>}
                 </div>
               </button>
             ))}
@@ -211,13 +220,10 @@ export default function TemplatesPage() {
         </div>
 
         {/* Template Editor / Fill */}
-        <div className="col-span-2">
+        <div className="lg:col-span-2 min-w-0">
           {!selected ? (
-            <div className="bg-white rounded-2xl border border-slate-100 shadow-sm min-h-[400px] flex items-center justify-center p-8">
-              <div className="text-center space-y-2">
-                <div className="w-14 h-14 rounded-2xl bg-indigo-50 flex items-center justify-center mx-auto">
-                  <FileText className="h-7 w-7 text-indigo-200" />
-                </div>
+            <div className="bg-white rounded-2xl border border-slate-100 shadow-sm min-h-[18rem] flex items-center justify-center p-6">
+              <div className="text-center space-y-1">
                 <p className="font-semibold text-slate-500">Select a template to get started</p>
                 <p className="text-sm text-slate-400">Or create a new one with the button above</p>
               </div>
@@ -252,7 +258,7 @@ export default function TemplatesPage() {
               {selected.placeholders.length > 0 && (
                 <div className="bg-white rounded-2xl border border-slate-100 shadow-sm p-5">
                   <p className="text-xs font-semibold text-slate-500 uppercase tracking-widest mb-4">Fill in placeholders</p>
-                  <div className="grid grid-cols-2 gap-3">
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                     {selected.placeholders.map((ph) => (
                       <div key={ph} className="space-y-1.5">
                         <Label className="text-xs font-medium text-slate-600">{ph.replace(/_/g, ' ')}</Label>
@@ -314,10 +320,10 @@ export default function TemplatesPage() {
             <DialogTitle className="text-lg font-bold">Create Template</DialogTitle>
           </DialogHeader>
           <form onSubmit={handleSubmit(onSaveTemplate)} className="space-y-4">
-            <div className="grid grid-cols-2 gap-4">
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
               <div className="space-y-1.5">
                 <Label>Template name</Label>
-                <Input placeholder="e.g. Cold DM — Software Engineer" {...register('name')} />
+                <Input placeholder="e.g. Cold DM — Software Engineer" maxLength={NAME_MAX_LENGTH} {...register('name')} />
                 {errors.name && <p className="text-xs text-destructive">{errors.name.message}</p>}
               </div>
               <div className="space-y-1.5">
@@ -339,12 +345,15 @@ export default function TemplatesPage() {
               <Textarea
                 {...register('content')}
                 rows={10}
+                maxLength={CONTENT_MAX_LENGTH}
                 placeholder={`Hi {{name}},\n\nI came across your profile at {{company}}...`}
                 className="font-mono text-sm resize-none"
               />
               <div className="flex justify-between items-center">
                 {errors.content && <p className="text-xs text-destructive">{errors.content.message}</p>}
-                <p className="text-xs text-slate-400 ml-auto">{watchContent.length} chars</p>
+                <p className={cn('text-xs ml-auto', watchContent.length > CONTENT_MAX_LENGTH ? 'text-destructive' : 'text-slate-400')}>
+                  {watchContent.length}/{CONTENT_MAX_LENGTH} chars
+                </p>
               </div>
             </div>
 
