@@ -18,6 +18,9 @@ Streams a tailored cover letter as plain text chunks — **not** real Server-Sen
 | `role` | string | Yes | 200 | Role/position title. |
 | `selling_points` | string | Yes (min 20) | 3,000 | The candidate's pitch — pre-fillable from `profiles.key_selling_points`. |
 | `resume_text` | string | No | 8,000 | Optional resume excerpt for extra grounding context. |
+| `opportunity_id` | string | No | - | A Startup Hunt opportunity to auto-save this generation against (see §3). Ownership is re-verified server-side. |
+| `job_search_application_id` | string | No | - | Same, for a tracked job application. |
+| `session_id` | string | No | - | An ad-hoc session (no job link) from earlier in this same browser visit, to update in place instead of creating a new one — see §3. |
 
 ```json
 {
@@ -34,6 +37,8 @@ Raw text chunks, concatenated client-side into the full letter. On a mid-stream 
 [Generation interrupted - the AI service is temporarily unavailable. Please try again in a moment.]
 ```
 The response status is still `200` in this case — ASGI commits to the status line before the body iterator is first awaited, so a failure partway through streaming can't be turned into a proper error code. The frontend treats the bracketed notice as user-visible text in the editable textarea (deletable like anything else).
+
+An `X-Session-Id` response header carries the id of the `CoverLetterSession` row this generation was auto-saved into (see §3) — set before streaming starts, since the streamed body has no room for a JSON field. The frontend reads it immediately and holds it for the rest of the visit.
 
 #### Error Responses
 - `422 Unprocessable Entity`: a field fails validation (missing, too short, too long).
@@ -65,24 +70,20 @@ Raw PDF bytes with `Content-Disposition: attachment; filename="cover-letter.pdf"
 
 ---
 
-## 3. Save / List / Get / Rename a Saved Letter
+## 3. Saved Letters (My Docs) — Auto-Save, List, Get, Rename
 
-### `POST /api/ai/cover-letter/save`
+There is no `POST /save` — persistence is folded into `POST /api/ai/cover-letter` itself (see §1's `X-Session-Id` header). A generation auto-saves into a `cover_letter_sessions` row rather than requiring an explicit click: this avoids losing a generated letter (and paying for a full AI regeneration) just because the user forgot to click Save.
 
-Explicit save - not triggered automatically by generation. Creates a new `cover_letter_sessions` row every time (no upsert/dedup).
+**Upsert rule — "only one saved letter per job":** when `opportunity_id`/`job_search_application_id` is given, the backend looks up any existing session already linked to that job for this user and overwrites it in place instead of creating a duplicate, regardless of browser visit. With no job link, `session_id` (held client-side from a prior response's `X-Session-Id`) lets the frontend keep updating the same ad-hoc row across regenerations within one visit; a fresh page visit with no `session_id` starts a new row.
 
-#### Request (`application/json`)
-| Field | Type | Required | Max Length | Description |
-| :--- | :--- | :--- | :--- | :--- |
-| `company` | string | Yes | 200 | |
-| `role` | string | Yes | 200 | |
-| `selling_points` | string | Yes (min 20) | 3,000 | |
-| `resume_text` | string | No | 8,000 | |
-| `content` | string | Yes | 5,000 | The letter text to save, as currently shown/edited. |
-| `opportunity_id` | string | No | - | A Startup Hunt opportunity to link this save to; ownership is re-verified server-side, silently dropped if it doesn't belong to the caller. |
-| `job_search_application_id` | string | No | - | Same, for a tracked job application. |
+### `GET /api/ai/cover-letter/sessions`
 
-#### Response (`200 OK`) - `CoverLetterSessionDetail`
+Lists every saved letter for "My Docs", most recent first. Response: `{ "sessions": CoverLetterSessionSummary[] }`, each with `id, title, display_label, created_at, source_opportunity_id, source_application_id`.
+
+### `GET /api/ai/cover-letter/sessions/{id}`
+
+Fetches one saved letter in full (`CoverLetterSessionDetail`) - used to reopen a saved letter in the generator page via `?session_id=`, which also re-arms that id for the upsert rule above.
+
 ```json
 {
   "id": "...", "title": null, "company": "Google", "role": "AI Engineer",
@@ -91,19 +92,11 @@ Explicit save - not triggered automatically by generation. Creates a new `cover_
 }
 ```
 
-### `GET /api/ai/cover-letter/sessions`
-
-Lists every saved letter for "My Docs", most recent first. Response: `{ "sessions": CoverLetterSessionSummary[] }`, each with `id, title, display_label, created_at, source_opportunity_id, source_application_id`.
-
-### `GET /api/ai/cover-letter/sessions/{id}`
-
-Fetches one saved letter in full (`CoverLetterSessionDetail`, same shape as the Save response) - used to reopen a saved letter in the generator page via `?session_id=`.
-
 ### `PATCH /api/ai/cover-letter/sessions/{id}/title`
 
 Body: `{ "title": "..." }` (max 200 chars). Response: `{ "title": "..." }`.
 
-#### Error Responses (all four endpoints)
+#### Error Responses (all three endpoints)
 - `404 Not Found`: session doesn't exist or isn't owned by the caller.
 - `429 Too Many Requests`: burst window exceeded (no daily quota - these aren't AI-costed).
 

@@ -327,6 +327,28 @@ export interface InterviewPrepResult {
   system_design_questions: TechnicalPrepQuestion[]
 }
 
+export interface InterviewPrepSessionSummary {
+  id: string
+  title: string | null
+  display_label: string
+  question_count: number
+  created_at: string
+  source_opportunity_id: string | null
+  source_application_id: string | null
+}
+
+export interface InterviewPrepSessionDetail {
+  id: string
+  title: string | null
+  job_description: string
+  company: string | null
+  role: string | null
+  result: InterviewPrepResult
+  created_at: string
+  source_opportunity_id: string | null
+  source_application_id: string | null
+}
+
 export interface SalaryResearchResult {
   job_title: string
   location: string

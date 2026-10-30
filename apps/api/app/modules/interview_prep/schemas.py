@@ -24,11 +24,31 @@ class InterviewPrepRequest(BaseModel):
     # extraction over a possibly company-less recruiter post).
     company: str | None = Field(None, max_length=200)
     role: str | None = Field(None, max_length=200)
+    # Generation auto-persists (see service.py::resolve_session) rather
+    # than requiring an explicit Save click - a forgotten click previously
+    # meant a full regeneration (AI cost + user time) to recover lost
+    # content. When a tracked job is linked, the backend upserts into the
+    # single existing session for that job instead of creating a
+    # duplicate. With no job link, session_id lets the frontend continue
+    # updating the same ad-hoc row across regenerations within one browser
+    # visit instead of piling up a new row per click.
+    opportunity_id: str | None = None
+    job_search_application_id: str | None = None
+    session_id: str | None = None
 
 
 class InterviewRegenerateRequest(BaseModel):
     job_description: str = Field(..., min_length=20, max_length=_JD_MAX_CHARS)
     question: str = Field(..., min_length=1, max_length=_QUESTION_MAX_CHARS)
+    # When present, the regenerated answer is written back into that saved
+    # session's result.questions[question_index] - otherwise a saved kit
+    # would silently drift out of sync with what the user sees after a
+    # regenerate. Both optional: if either is missing (e.g. the question
+    # set was never saved, which shouldn't happen under auto-save but is
+    # not assumed), the regenerated answer is still returned, just not
+    # persisted anywhere.
+    session_id: str | None = None
+    question_index: int | None = Field(None, ge=0)
 
 
 # ── Response shape — validates generate_interview_questions' LLM output ──
@@ -107,3 +127,38 @@ def validate_interview_response(raw: dict[str, Any]) -> dict[str, Any]:
 
 def validate_regenerate_response(raw: dict[str, Any]) -> dict[str, Any]:
     return _validate_against_schema(raw, RegenerateAnswerSchema)
+
+
+# ── Saved sessions ("My Docs") ────────────────────────────────────
+# No create/save request here - persistence is folded into
+# InterviewPrepRequest/service.py::resolve_session (auto-save, see that
+# field's comment above). Only read/rename remain as their own endpoints.
+
+class InterviewPrepSessionSummary(BaseModel):
+    id: str
+    title: str | None
+    display_label: str
+    question_count: int
+    created_at: str
+    source_opportunity_id: str | None = None
+    source_application_id: str | None = None
+
+
+class InterviewPrepSessionListResponse(BaseModel):
+    sessions: list[InterviewPrepSessionSummary]
+
+
+class InterviewPrepSessionDetail(BaseModel):
+    id: str
+    title: str | None
+    job_description: str
+    company: str | None
+    role: str | None
+    result: dict[str, Any]
+    created_at: str
+    source_opportunity_id: str | None = None
+    source_application_id: str | None = None
+
+
+class InterviewPrepTitleUpdateRequest(BaseModel):
+    title: str = Field(..., max_length=200)

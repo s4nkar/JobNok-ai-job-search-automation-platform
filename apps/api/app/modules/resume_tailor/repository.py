@@ -60,6 +60,74 @@ class ResumeVersionRepository(UserScopedRepository[ResumeVersion]):
 class TailoringSessionRepository(UserScopedRepository[TailoringSession]):
     model = TailoringSession
 
+    async def get_by_source(
+        self, user_id: str, *, source_opportunity_id: str | None = None, source_application_id: str | None = None,
+    ) -> TailoringSession | None:
+        """The existing session already linked to this job, if any - the
+        upsert target for "only one saved resume per job" (see routes.py's
+        POST /tailor, which checks this ONLY after get_or_create_session's
+        hash-based cache-hit lookup misses - a resubmission of the exact
+        same resume+JD pair should still hit that fast path unchanged, this
+        is for when the content differs but the job link doesn't). Exactly
+        one of the two ids should be given; if both are None this returns
+        None rather than matching every unlinked row."""
+        if not source_opportunity_id and not source_application_id:
+            return None
+        stmt = self._scoped(select(self.model), user_id)
+        if source_opportunity_id:
+            stmt = stmt.where(self.model.source_opportunity_id == source_opportunity_id)
+        else:
+            stmt = stmt.where(self.model.source_application_id == source_application_id)
+        stmt = stmt.order_by(self.model.created_at.desc()).limit(1)
+        return (await self.session.execute(stmt)).scalar_one_or_none()
+
+    async def overwrite_session(
+        self,
+        user_id: str,
+        id_: str,
+        resume_version_id: str,
+        *,
+        job_hash: str,
+        job_text: str,
+        job_text_clean: str,
+        job_chunks: list[dict],
+        job_embeddings: list[list[float]],
+        analysis: dict[str, Any],
+        prose: dict[str, Any] | None,
+        matcher_version: str,
+        prompt_version: str,
+        ai_status: str,
+        ai_provider: str | None,
+        ai_error: str | None,
+        saved_resume_id: str | None = None,
+    ) -> TailoringSession | None:
+        """Re-runs a session in place for a job that already has one
+        (the "only one per job" upsert target found via get_by_source) -
+        same content fields create_session sets, keeping the row's id,
+        title, and template_id untouched (user preferences, not analysis
+        content). draft_cv_data/draft_version are reset: an in-progress
+        editor draft was built on the OLD analysis/prose, and would be
+        silently stale/mismatched against the new one otherwise."""
+        return await self.update(
+            user_id, id_,
+            resume_version_id=resume_version_id,
+            job_hash=job_hash,
+            job_text=job_text,
+            job_text_clean=job_text_clean,
+            job_chunks=job_chunks,
+            job_embeddings=job_embeddings,
+            analysis=analysis,
+            prose=prose,
+            matcher_version=matcher_version,
+            prompt_version=prompt_version,
+            ai_status=ai_status,
+            ai_provider=ai_provider,
+            ai_error=ai_error,
+            saved_resume_id=saved_resume_id,
+            draft_cv_data=None,
+            draft_version=0,
+        )
+
     async def create_session(
         self,
         user_id: str,

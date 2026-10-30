@@ -13,7 +13,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.modules.cover_letter.models import CoverLetterSession
 from app.modules.cover_letter.repository import CoverLetterSessionRepository
-from app.modules.cover_letter.schemas import CoverLetterSessionSummary
+from app.modules.cover_letter.schemas import CoverLetterRequest, CoverLetterSessionSummary
 from app.modules.job_search.models import JobSearchApplication
 from app.modules.startup_hunt.models import StartupHuntOpportunity
 
@@ -41,6 +41,58 @@ async def verify_application_ownership(db: AsyncSession, user_id: str, applicati
         )
     ).scalar_one_or_none()
     return row is not None
+
+
+async def resolve_session(db: AsyncSession, user_id: str, body: CoverLetterRequest) -> CoverLetterSession:
+    """Creates or upserts the CoverLetterSession a generation belongs to,
+    with placeholder content, BEFORE any AI call - so its id is known up
+    front (routes.py hands it back via an X-Session-Id response header,
+    since the generation endpoint streams and can't return it in the JSON
+    body the way resume_tailor/interview_prep do).
+
+    Resolution order: a job-linked existing session (one row per job,
+    regardless of browser visit - "only one saved cover letter per job")
+    takes priority over session_id (one row per ad-hoc browser visit, used
+    only when there's no job to key off of). A new row is created only
+    when neither applies. Commits immediately so the row is durable even
+    if generation fails before the final content update.
+
+    Lives here (not routes.py) specifically so it stays importable/testable
+    without routes.py's WeasyPrint-importing rendering.py in the chain -
+    same isolation reasoning as this module's own text.py.
+    """
+    repo = CoverLetterSessionRepository(db)
+
+    source_opportunity_id = None
+    source_application_id = None
+    if body.opportunity_id and await verify_opportunity_ownership(db, user_id, body.opportunity_id):
+        source_opportunity_id = body.opportunity_id
+    elif body.job_search_application_id and await verify_application_ownership(db, user_id, body.job_search_application_id):
+        source_application_id = body.job_search_application_id
+
+    existing = None
+    if source_opportunity_id or source_application_id:
+        existing = await repo.get_by_source(
+            user_id, source_opportunity_id=source_opportunity_id, source_application_id=source_application_id,
+        )
+    elif body.session_id:
+        existing = await repo.get(user_id, body.session_id)
+
+    if existing is not None:
+        session = await repo.update(
+            user_id, str(existing.id),
+            company=body.company, role=body.role, selling_points=body.selling_points,
+            resume_text=body.resume_text, content="",
+        )
+    else:
+        session = await repo.create_session(
+            user_id,
+            company=body.company, role=body.role, selling_points=body.selling_points,
+            resume_text=body.resume_text, content="",
+            source_opportunity_id=source_opportunity_id, source_application_id=source_application_id,
+        )
+    await db.commit()
+    return session
 
 
 def _session_display_label(session: CoverLetterSession) -> str:

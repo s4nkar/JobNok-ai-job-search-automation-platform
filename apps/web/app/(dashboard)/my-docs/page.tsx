@@ -3,21 +3,21 @@
 import { useState } from 'react'
 import { useRouter } from 'next/navigation'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
-import { Loader2, Pencil, Sparkles, FolderOpen, FileText, PenLine, Briefcase } from 'lucide-react'
+import { Loader2, Pencil, Sparkles, FolderOpen, FileText, PenLine, Briefcase, MessageSquare } from 'lucide-react'
 import { Button, useToast, cn, formatDate } from '@jobnok/ui'
 import { ScaledResumeThumb } from '@/components/shared/ScaledResumeThumb'
 import { apiFetch, apiGet } from '@/lib/api'
 import { queryKeys } from '@/lib/queryKeys'
-import { CoverLetterSessionSummary, SessionSummary } from '@/lib/types'
+import { CoverLetterSessionSummary, InterviewPrepSessionSummary, SessionSummary } from '@/lib/types'
 
 // A generic row shape the grid renders from, kept separate from
-// SessionSummary/CoverLetterSessionSummary's own fields. sourceOpportunityId/
-// sourceApplicationId power the grouping below - two rows (one of each kind)
-// sharing either id get bundled into a JobGroupCard instead of appearing as
-// two unrelated cards.
+// SessionSummary/CoverLetterSessionSummary/InterviewPrepSessionSummary's own
+// fields. sourceOpportunityId/sourceApplicationId power the grouping below -
+// two or more rows sharing either id get bundled into a JobGroupCard instead
+// of appearing as unrelated cards.
 interface DocRow {
   id: string
-  kind: 'resume' | 'cover_letter'
+  kind: 'resume' | 'cover_letter' | 'interview_prep'
   label: string
   isAiMatched: boolean
   meta: string
@@ -59,6 +59,23 @@ function toCoverLetterDocRow(s: CoverLetterSessionSummary): DocRow {
     isDraft: false,
     previewHtml: null,
     openHref: `/cover-letter?session_id=${s.id}`,
+    sourceOpportunityId: s.source_opportunity_id,
+    sourceApplicationId: s.source_application_id,
+  }
+}
+
+function toInterviewPrepDocRow(s: InterviewPrepSessionSummary): DocRow {
+  return {
+    id: s.id,
+    kind: 'interview_prep',
+    label: s.display_label,
+    isAiMatched: false,
+    meta: `${s.question_count} questions`,
+    matchScore: null,
+    createdAt: s.created_at,
+    isDraft: false,
+    previewHtml: null,
+    openHref: `/interview-prep?session_id=${s.id}`,
     sourceOpportunityId: s.source_opportunity_id,
     sourceApplicationId: s.source_application_id,
   }
@@ -111,13 +128,21 @@ function DocCard({ row, onRename }: { row: DocRow; onRename: (row: DocRow, newLa
             <FileText className="h-5 w-5 text-slate-300" />
             <span className="text-[11px] text-slate-400">Open to generate a preview</span>
           </div>
-        ) : (
+        ) : row.kind === 'cover_letter' ? (
           <div
             className="w-full border-b border-slate-100 bg-slate-50 flex flex-col items-center justify-center gap-1"
             style={{ height: PREVIEW_PEEK_HEIGHT }}
           >
             <PenLine className="h-5 w-5 text-slate-300" />
             <span className="text-[11px] text-slate-400">Cover letter</span>
+          </div>
+        ) : (
+          <div
+            className="w-full border-b border-slate-100 bg-slate-50 flex flex-col items-center justify-center gap-1"
+            style={{ height: PREVIEW_PEEK_HEIGHT }}
+          >
+            <MessageSquare className="h-5 w-5 text-slate-300" />
+            <span className="text-[11px] text-slate-400">Interview kit</span>
           </div>
         )}
       </button>
@@ -238,35 +263,51 @@ export default function MyDocsPage() {
     queryKey: queryKeys.coverLetterSessions,
     queryFn: () => apiGet<{ sessions: CoverLetterSessionSummary[] }>('/api/ai/cover-letter/sessions'),
   })
+  const interviewPrepQuery = useQuery({
+    queryKey: queryKeys.interviewPrepSessions,
+    queryFn: () => apiGet<{ sessions: InterviewPrepSessionSummary[] }>('/api/ai/interview/sessions'),
+  })
 
-  const isLoading = resumeQuery.isLoading || coverLetterQuery.isLoading
-  const isError = resumeQuery.isError || coverLetterQuery.isError
+  const isLoading = resumeQuery.isLoading || coverLetterQuery.isLoading || interviewPrepQuery.isLoading
+  const isError = resumeQuery.isError || coverLetterQuery.isError || interviewPrepQuery.isError
 
   const allRows = [
     ...(resumeQuery.data?.sessions ?? []).map(toResumeDocRow),
     ...(coverLetterQuery.data?.sessions ?? []).map(toCoverLetterDocRow),
+    ...(interviewPrepQuery.data?.sessions ?? []).map(toInterviewPrepDocRow),
   ]
   const gridItems = buildGridItems(allRows)
 
+  const RENAME_ENDPOINT: Record<DocRow['kind'], (id: string) => string> = {
+    resume: (id) => `/api/ai/tailor/${id}/title`,
+    cover_letter: (id) => `/api/ai/cover-letter/sessions/${id}/title`,
+    interview_prep: (id) => `/api/ai/interview/sessions/${id}/title`,
+  }
+
   async function handleRename(row: DocRow, newTitle: string) {
-    const isResume = row.kind === 'resume'
-    const endpoint = isResume ? `/api/ai/tailor/${row.id}/title` : `/api/ai/cover-letter/sessions/${row.id}/title`
     try {
-      const res = await apiFetch(endpoint, {
+      const res = await apiFetch(RENAME_ENDPOINT[row.kind](row.id), {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ title: newTitle }),
       })
       if (!res.ok) throw new Error()
-      if (isResume) {
+      if (row.kind === 'resume') {
         queryClient.setQueryData<{ sessions: SessionSummary[] } | undefined>(queryKeys.tailoringSessions, (prev) => {
           if (!prev) return prev
           return {
             sessions: prev.sessions.map(s => s.id === row.id ? { ...s, title: newTitle, display_label: newTitle, is_ai_matched: false } : s),
           }
         })
-      } else {
+      } else if (row.kind === 'cover_letter') {
         queryClient.setQueryData<{ sessions: CoverLetterSessionSummary[] } | undefined>(queryKeys.coverLetterSessions, (prev) => {
+          if (!prev) return prev
+          return {
+            sessions: prev.sessions.map(s => s.id === row.id ? { ...s, title: newTitle, display_label: newTitle } : s),
+          }
+        })
+      } else {
+        queryClient.setQueryData<{ sessions: InterviewPrepSessionSummary[] } | undefined>(queryKeys.interviewPrepSessions, (prev) => {
           if (!prev) return prev
           return {
             sessions: prev.sessions.map(s => s.id === row.id ? { ...s, title: newTitle, display_label: newTitle } : s),
@@ -293,7 +334,7 @@ export default function MyDocsPage() {
               </span>
             )}
           </div>
-          <p className="text-slate-500 text-sm mt-0.5">Every resume and cover letter you&apos;ve saved, most recent first</p>
+          <p className="text-slate-500 text-sm mt-0.5">Every resume, cover letter, and interview kit you&apos;ve saved, most recent first</p>
         </div>
       </div>
 
@@ -313,7 +354,7 @@ export default function MyDocsPage() {
             <FolderOpen className="h-7 w-7 text-slate-300" />
           </div>
           <p className="font-medium text-slate-600">No documents yet</p>
-          <p className="text-sm text-slate-400 mt-1">Tailor a resume or save a cover letter to see it show up here</p>
+          <p className="text-sm text-slate-400 mt-1">Tailor a resume, save a cover letter, or save an interview kit to see it show up here</p>
           <Button
             onClick={() => router.push('/resume-tailor')}
             className="mt-4 gradient-brand text-white border-0 shadow-sm hover:opacity-90 transition-opacity rounded-xl h-9 text-sm px-5"

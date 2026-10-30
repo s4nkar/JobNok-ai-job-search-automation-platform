@@ -1,8 +1,10 @@
-"""Saved cover letters - explicit Save + My Docs listing + rename.
+"""Saved cover letters — My Docs listing, fetch-one, and rename.
 
-Included into cover_letter/routes.py's router (see the bottom of that file),
-so these still arrive under the existing /api/ai prefix main.py already
-registers - no changes needed there.
+Creation/upsert happens inside routes.py's generation handler itself (auto-
+save, see its _resolve_session comment) - there is no POST /save here
+anymore. Included into cover_letter/routes.py's router (see the bottom of
+that file), so these still arrive under the existing /api/ai prefix
+main.py already registers - no changes needed there.
 """
 
 from __future__ import annotations
@@ -17,7 +19,6 @@ from app.services.cache import check_burst_limit
 from app.modules.cover_letter import service as cover_letter_service
 from app.modules.cover_letter.repository import CoverLetterSessionRepository
 from app.modules.cover_letter.schemas import (
-    CoverLetterSaveRequest,
     CoverLetterSessionDetail,
     CoverLetterSessionListResponse,
     CoverLetterTitleUpdateRequest,
@@ -41,47 +42,10 @@ def _detail_response(session) -> CoverLetterSessionDetail:
     )
 
 
-# ── POST /cover-letter/save ────────────────────────────────────────
-# Literal path, registered before any /cover-letter/sessions/{id}-shaped
-# dynamic route below - same FastAPI/Starlette registration-order gotcha
-# resume_tailor/routes.py documents (a dynamic {id} route would otherwise
-# try to swallow a literal segment first).
-
-@router.post("/cover-letter/save", response_model=CoverLetterSessionDetail)
-async def save_cover_letter_session(request: Request, body: CoverLetterSaveRequest, db: AsyncSession = Depends(get_db)):
-    user_id = await get_current_user_id(request, db)
-    try:
-        burst_ok = await check_burst_limit(
-            user_id, "cover_letter_save", settings.rate_limit_burst_limit, settings.rate_limit_burst_window_seconds,
-        )
-    except Exception:
-        burst_ok = True
-    if not burst_ok:
-        raise HTTPException(status_code=429, detail="Too many requests, please wait a few seconds and try again.")
-
-    source_opportunity_id = None
-    if body.opportunity_id and await cover_letter_service.verify_opportunity_ownership(db, user_id, body.opportunity_id):
-        source_opportunity_id = body.opportunity_id
-    source_application_id = None
-    if body.job_search_application_id and await cover_letter_service.verify_application_ownership(
-        db, user_id, body.job_search_application_id
-    ):
-        source_application_id = body.job_search_application_id
-
-    session = await CoverLetterSessionRepository(db).create_session(
-        user_id,
-        company=body.company,
-        role=body.role,
-        selling_points=body.selling_points,
-        resume_text=body.resume_text,
-        content=body.content,
-        source_opportunity_id=source_opportunity_id,
-        source_application_id=source_application_id,
-    )
-    return _detail_response(session)
-
-
 # ── GET /cover-letter/sessions ─────────────────────────────────────
+# Literal path, registered before the /cover-letter/sessions/{id}-shaped
+# dynamic route below - same FastAPI/Starlette registration-order gotcha
+# resume_tailor/routes.py documents.
 
 @router.get("/cover-letter/sessions", response_model=CoverLetterSessionListResponse)
 async def list_cover_letter_sessions(request: Request, db: AsyncSession = Depends(get_db)):

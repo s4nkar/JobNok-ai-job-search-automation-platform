@@ -10,6 +10,16 @@ family, likely interview rounds, hedged company-reputation context) plus
 the 10-question behavioral/situational set, and — only when the detected
 role plausibly warrants them — a small set of DSA-style and system-design
 prep questions with an "approach" guide rather than a full solution.
+
+Generation auto-persists an InterviewPrepSession (see
+service.py::resolve_session) rather than requiring an explicit Save click -
+a forgotten click previously meant a full regeneration (AI cost + user
+time) to recover lost content. The response includes "session_id" so the
+frontend can keep referencing the same row across regenerate calls and a
+reopen from My Docs.
+
+Saved-session read/rename ("My Docs") lives in sessions_routes.py, included
+into this module's router below.
 """
 
 from __future__ import annotations
@@ -26,6 +36,7 @@ from app.core.security import get_current_user_id
 from app.services.cache import check_burst_limit, check_rate_limit
 from app.shared.utils import _rl_error
 from app.ai.llm import provider as ai_provider
+from app.modules.interview_prep import service as interview_prep_service
 from app.modules.interview_prep.prompts import INTERVIEW_SYSTEM_PROMPT, build_interview_prompt, build_regenerate_prompt
 from app.modules.interview_prep.schemas import (
     InterviewPrepRequest,
@@ -33,11 +44,14 @@ from app.modules.interview_prep.schemas import (
     validate_interview_response,
     validate_regenerate_response,
 )
+from app.modules.interview_prep.sessions_routes import router as sessions_router
 from app.modules.interview_prep.text import strip_dashes_deep
 from app.modules.usage.service import record_event as record_tool_usage
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
+
+router.include_router(sessions_router)
 
 # A regenerate call only needs enough JD context to stay on-topic for one
 # question's answer, not the full (up to 12,000-char) job description the
@@ -100,7 +114,10 @@ async def generate_interview_questions(
         raise HTTPException(status_code=500, detail="Failed to generate interview prep. Please try again.") from exc
 
     validated = validate_interview_response(parsed)
-    return strip_dashes_deep(validated)
+    sanitized = strip_dashes_deep(validated)
+
+    session = await interview_prep_service.resolve_session(db, user_id, body, sanitized)
+    return {**sanitized, "session_id": str(session.id)}
 
 
 @router.post("/interview/regenerate")
@@ -143,4 +160,9 @@ async def regenerate_interview_answer(
         raise HTTPException(status_code=500, detail="Failed to regenerate. Please try again.") from exc
 
     validated = validate_regenerate_response(parsed)
-    return strip_dashes_deep(validated)
+    sanitized = strip_dashes_deep(validated)
+
+    if body.session_id is not None and body.question_index is not None:
+        await interview_prep_service.apply_regenerated_answer(db, user_id, body.session_id, body.question_index, sanitized)
+
+    return sanitized

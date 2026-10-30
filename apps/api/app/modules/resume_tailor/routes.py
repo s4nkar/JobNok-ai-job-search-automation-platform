@@ -447,24 +447,54 @@ async def tailor_resume(
         if job_search_application_id and await resume_tailor_service.verify_application_ownership(db, user_id, job_search_application_id):
             source_application_id = job_search_application_id
 
-        session = await session_repo.create_session(
-            user_id, str(resume_version.id),
-            job_hash=job_hash,
-            job_text=job_description,
-            job_text_clean=jd_text_clean,
-            job_chunks=chunks_to_dicts(jd_chunks),
-            job_embeddings=resume_cache.serialize_embeddings(jd_embeddings) if jd_embeddings.size > 0 else [],
-            analysis=analysis.as_dict(),
-            prose=prose.as_dict() if prose.ai_status == "ok" else None,
-            matcher_version=generation.MATCHER_VERSION,
-            prompt_version=generation.PROSE_PROMPT_VERSION,
-            ai_status=prose.ai_status,
-            ai_provider=prose.ai_provider,
-            ai_error=prose.ai_error,
-            source_opportunity_id=source_opportunity_id,
-            source_application_id=source_application_id,
-            saved_resume_id=str(saved_resume_row.id) if saved_resume_row else None,
-        )
+        # "Only one saved resume per job": the hash-based lookup above
+        # already missed (different resume/JD content than last time), but
+        # if this submission is linked to a job that already has a
+        # session, overwrite that one in place rather than creating a
+        # second row for the same job - auto-save should accumulate one
+        # row per job, not one per generate click.
+        existing_for_job = None
+        if source_opportunity_id or source_application_id:
+            existing_for_job = await session_repo.get_by_source(
+                user_id, source_opportunity_id=source_opportunity_id, source_application_id=source_application_id,
+            )
+
+        if existing_for_job is not None:
+            session = await session_repo.overwrite_session(
+                user_id, str(existing_for_job.id), str(resume_version.id),
+                job_hash=job_hash,
+                job_text=job_description,
+                job_text_clean=jd_text_clean,
+                job_chunks=chunks_to_dicts(jd_chunks),
+                job_embeddings=resume_cache.serialize_embeddings(jd_embeddings) if jd_embeddings.size > 0 else [],
+                analysis=analysis.as_dict(),
+                prose=prose.as_dict() if prose.ai_status == "ok" else None,
+                matcher_version=generation.MATCHER_VERSION,
+                prompt_version=generation.PROSE_PROMPT_VERSION,
+                ai_status=prose.ai_status,
+                ai_provider=prose.ai_provider,
+                ai_error=prose.ai_error,
+                saved_resume_id=str(saved_resume_row.id) if saved_resume_row else None,
+            )
+        else:
+            session = await session_repo.create_session(
+                user_id, str(resume_version.id),
+                job_hash=job_hash,
+                job_text=job_description,
+                job_text_clean=jd_text_clean,
+                job_chunks=chunks_to_dicts(jd_chunks),
+                job_embeddings=resume_cache.serialize_embeddings(jd_embeddings) if jd_embeddings.size > 0 else [],
+                analysis=analysis.as_dict(),
+                prose=prose.as_dict() if prose.ai_status == "ok" else None,
+                matcher_version=generation.MATCHER_VERSION,
+                prompt_version=generation.PROSE_PROMPT_VERSION,
+                ai_status=prose.ai_status,
+                ai_provider=prose.ai_provider,
+                ai_error=prose.ai_error,
+                source_opportunity_id=source_opportunity_id,
+                source_application_id=source_application_id,
+                saved_resume_id=str(saved_resume_row.id) if saved_resume_row else None,
+            )
 
     return _session_response(session)
 

@@ -16,6 +16,17 @@ class CoverLetterRequest(BaseModel):
     role: str = Field(..., min_length=1, max_length=200)
     selling_points: str = Field(..., min_length=20, max_length=3000)
     resume_text: str | None = Field(None, max_length=8000)
+    # Generation auto-persists (see routes.py) rather than requiring an
+    # explicit Save click - a forgotten click previously meant a full
+    # regeneration (AI cost + user time) to recover lost content. When a
+    # tracked job is linked, the backend upserts into the single existing
+    # session for that job (ownership re-verified server-side) instead of
+    # creating a duplicate. With no job link, session_id lets the frontend
+    # continue updating the same ad-hoc row across regenerations within one
+    # browser visit instead of piling up a new row per click.
+    opportunity_id: str | None = None
+    job_search_application_id: str | None = None
+    session_id: str | None = None
 
 
 class CoverLetterPdfRequest(BaseModel):
@@ -28,20 +39,9 @@ class CoverLetterPdfRequest(BaseModel):
 
 
 # ── Saved sessions ("My Docs") ────────────────────────────────────
-# Explicit save only (not auto-saved on every generation) - see
-# sessions_routes.py for why. Bounds mirror CoverLetterRequest/
-# CoverLetterPdfRequest above, since a save always carries the same fields
-# that produced the letter plus the letter itself.
-
-class CoverLetterSaveRequest(BaseModel):
-    company: str = Field(..., min_length=1, max_length=200)
-    role: str = Field(..., min_length=1, max_length=200)
-    selling_points: str = Field(..., min_length=20, max_length=3000)
-    resume_text: str | None = Field(None, max_length=8000)
-    content: str = Field(..., min_length=1, max_length=5000)
-    opportunity_id: str | None = None
-    job_search_application_id: str | None = None
-
+# No save/create request here - persistence is folded into
+# CoverLetterRequest/routes.py's generation handler (auto-save, see its
+# comment above). Only read/rename remain as their own endpoints.
 
 class CoverLetterSessionSummary(BaseModel):
     id: str

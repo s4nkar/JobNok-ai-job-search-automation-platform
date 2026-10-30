@@ -10,14 +10,15 @@ import { Label } from '@jobnok/ui'
 import { useToast } from '@jobnok/ui'
 import {
   MessageSquare, Loader2, RefreshCw, ChevronDown, ChevronUp, Compass, X,
-  SlidersHorizontal, Target, Code2, Network,
+  SlidersHorizontal, Target, Code2, Network, Check,
 } from 'lucide-react'
 import { apiFetch, apiGet } from '@/lib/api'
 import { queryKeys } from '@/lib/queryKeys'
 import { cn } from '@jobnok/ui'
 import {
   StartupHuntSavedOpportunity, JobSearchApplication,
-  InterviewPrepResult, InterviewQuestion, InterviewRoleAssessment, TechnicalPrepQuestion,
+  InterviewPrepResult, InterviewPrepSessionDetail,
+  InterviewQuestion, InterviewRoleAssessment, TechnicalPrepQuestion,
 } from '@/lib/types'
 
 const JD_MAX_CHARS = 12000
@@ -49,6 +50,7 @@ function InterviewPrepInner() {
   const jobSearchApplicationId = searchParams.get('job_search_application_id')
   const trackerCompany = searchParams.get('company')
   const trackerRole = searchParams.get('role')
+  const reopenSessionId = searchParams.get('session_id')
 
   const [lead, setLead] = useState<StartupHuntSavedOpportunity | null>(null)
   const [trackerApp, setTrackerApp] = useState<{ company: string; role: string } | null>(null)
@@ -61,6 +63,11 @@ function InterviewPrepInner() {
   const [expandedIdx, setExpandedIdx] = useState<number | null>(null)
   const [regeneratingIdx, setRegeneratingIdx] = useState<number | null>(null)
   const [error, setError] = useState<string | null>(null)
+  // Generation auto-persists (see the backend's resolve_session) - tracks
+  // which InterviewPrepSession row this page visit's generations/
+  // regenerates are landing in. Server-assigned: set from the generate
+  // response's session_id field, or from a reopened session's own id.
+  const [sessionId, setSessionId] = useState<string | null>(null)
   const { toast } = useToast()
 
   // Real company/role from an already-known Startup Hunt lead or tracked
@@ -113,6 +120,29 @@ function InterviewPrepInner() {
     setJd(`${trackerRole} at ${trackerCompany}\n\n[Paste or add the full job description below this line for best results]`)
   }, [opportunityId, jobSearchApplicationId, trackerCompany, trackerRole])
 
+  // Reopening a previously-saved kit from My Docs — pre-fills the form and
+  // results exactly as if freshly generated, so the user can re-read it,
+  // regenerate an answer, or save it again as a new row.
+  useEffect(() => {
+    if (!reopenSessionId) return
+    apiGet<InterviewPrepSessionDetail>(`/api/ai/interview/sessions/${reopenSessionId}`)
+      .then((session) => {
+        setJd(session.job_description)
+        if (session.company && session.role) {
+          setTrackerApp({ company: session.company, role: session.role })
+        }
+        setRoleAssessment(session.result.role_assessment ?? null)
+        setQuestions(session.result.questions || [])
+        setDsaQuestions(session.result.dsa_questions || [])
+        setSystemDesignQuestions(session.result.system_design_questions || [])
+        setExpandedIdx(0)
+        setSessionId(session.id)
+      })
+      .catch(() => {
+        toast({ title: 'Could not load saved interview kit', variant: 'destructive' })
+      })
+  }, [reopenSessionId, toast])
+
   async function generateQuestions() {
     if (!jd.trim()) return
     setLoading(true)
@@ -126,20 +156,30 @@ function InterviewPrepInner() {
       const res = await apiFetch('/api/ai/interview', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ job_description: jd, company: knownCompany, role: knownRole }),
+        body: JSON.stringify({
+          job_description: jd, company: knownCompany, role: knownRole,
+          opportunity_id: opportunityId || undefined,
+          job_search_application_id: jobSearchApplicationId || undefined,
+          session_id: sessionId || undefined,
+        }),
       })
       const json = await res.json()
 
       if (!res.ok) {
         setError(json.detail || 'Generation failed.')
       } else {
-        const result = json as InterviewPrepResult
+        const result = json as InterviewPrepResult & { session_id: string }
         const qs = result.questions || []
         setRoleAssessment(result.role_assessment ?? null)
         setQuestions(qs)
         setDsaQuestions(result.dsa_questions || [])
         setSystemDesignQuestions(result.system_design_questions || [])
         setExpandedIdx(0)
+        // Auto-save: the backend created/updated an InterviewPrepSession
+        // for this generation and hands its id back here. Kept for the
+        // rest of this visit so a regenerate patches the same row instead
+        // of leaving it to drift out of sync.
+        setSessionId(result.session_id)
 
         if (opportunityId && qs.length) {
           await apiFetch(`/api/startup-hunt/opportunities/${opportunityId}/artifacts`, {
@@ -168,7 +208,10 @@ function InterviewPrepInner() {
       const res = await apiFetch('/api/ai/interview/regenerate', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ job_description: jd, question: questions[idx].question }),
+        body: JSON.stringify({
+          job_description: jd, question: questions[idx].question,
+          session_id: sessionId || undefined, question_index: idx,
+        }),
       })
       const json = await res.json()
       if (!res.ok) {
@@ -306,9 +349,16 @@ function InterviewPrepInner() {
 
           {roleAssessment && (
             <div className="bg-white rounded-2xl border border-slate-100 shadow-card p-5 mb-4">
-              <div className="flex items-center gap-2 mb-3">
-                <Target className="h-4 w-4 text-indigo-500" />
-                <p className="text-sm font-semibold text-slate-700">Role Assessment</p>
+              <div className="flex items-center justify-between gap-2 mb-3">
+                <div className="flex items-center gap-2">
+                  <Target className="h-4 w-4 text-indigo-500" />
+                  <p className="text-sm font-semibold text-slate-700">Role Assessment</p>
+                </div>
+                {sessionId && (
+                  <span className="flex items-center gap-1 px-2.5 py-1 rounded-lg text-xs font-medium text-emerald-600 bg-emerald-50" title="Auto-saved to My Docs">
+                    <Check className="h-3.5 w-3.5" /> Saved
+                  </span>
+                )}
               </div>
               <div className="flex flex-wrap items-center gap-1.5 mb-3">
                 <span className="inline-flex items-center px-2.5 py-1 rounded-lg text-xs font-semibold bg-indigo-50 text-indigo-700 border border-indigo-100">

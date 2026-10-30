@@ -16,6 +16,15 @@ def test_interview_prep_request_accepts_valid_input():
     req = InterviewPrepRequest(job_description="A" * 50)
     assert req.company is None
     assert req.role is None
+    assert req.opportunity_id is None
+    assert req.job_search_application_id is None
+    assert req.session_id is None
+
+
+def test_interview_prep_request_accepts_linkage_and_session_ids():
+    req = InterviewPrepRequest(job_description="A" * 50, opportunity_id="opp-1", session_id="sess-1")
+    assert req.opportunity_id == "opp-1"
+    assert req.session_id == "sess-1"
 
 
 def test_interview_prep_request_accepts_optional_company_and_role():
@@ -125,3 +134,16 @@ def test_validate_regenerate_response_falls_back_on_malformed_tips():
     result = validate_regenerate_response({"answer_framework": "Use STAR.", "tips": "not a list"})
     assert result["answer_framework"] == "Use STAR."
     assert result["tips"] == []
+
+
+def test_interview_regenerate_request_accepts_session_id_and_question_index():
+    req = InterviewRegenerateRequest(
+        job_description="A" * 50, question="Tell me about a time...", session_id="sess-1", question_index=2,
+    )
+    assert req.session_id == "sess-1"
+    assert req.question_index == 2
+
+
+def test_interview_regenerate_request_rejects_negative_question_index():
+    with pytest.raises(ValidationError):
+        InterviewRegenerateRequest(job_description="A" * 50, question="x", question_index=-1)
