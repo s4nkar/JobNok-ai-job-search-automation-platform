@@ -46,15 +46,18 @@ import { ScoutCompany, ScoutContact, ScoutCrawlStatus } from '@/lib/types'
 import { apiFetch, apiGet } from '@/lib/api'
 import { queryKeys } from '@/lib/queryKeys'
 
+// Bounds mirror the backend's Pydantic schema (apps/api/app/modules/
+// tracker/schemas.py) — kept in sync by hand, same pattern CLAUDE.md
+// documents for every other tool's Zod/Pydantic pair.
 const schema = z.object({
-  company: z.string().min(1, 'Required'),
-  role: z.string().min(1, 'Required'),
+  company: z.string().min(1, 'Required').max(200, 'Keep it under 200 characters'),
+  role: z.string().min(1, 'Required').max(200, 'Keep it under 200 characters'),
   applied_at: z.string().min(1, 'Required'),
   status: z.enum(APPLICATION_STATUSES as [ApplicationStatus, ...ApplicationStatus[]]),
   follow_up_date: z.string().optional(),
   salary_min: z.coerce.number().optional(),
   salary_max: z.coerce.number().optional(),
-  notes: z.string().optional(),
+  notes: z.string().max(3000, 'Keep it under 3,000 characters').optional(),
 })
 type FormData = z.infer<typeof schema>
 
@@ -761,7 +764,13 @@ function TrackerPageInner() {
                 className={cn('px-3 py-1 rounded-full text-xs font-semibold border transition-colors',
                   leadStatusFilter === s ? 'bg-indigo-600 text-white border-indigo-600 shadow-sm' : 'bg-white text-slate-600 border-slate-200 hover:border-slate-400')}
               >
-                {s === 'all' ? `All (${leads.length})` : `${STARTUP_STATUS_META[s].label} (${leadCounts[s]})`}
+                {/* leads.length - leadCounts.skipped, not leads.length -
+                    "All" here means "all shown under the All filter," and
+                    filteredLeads already excludes skipped leads when the
+                    filter is 'all' (reduces noise from a high-volume
+                    Startup Hunt feed) - the label must match what's
+                    actually in the table, not the raw total. */}
+                {s === 'all' ? `All (${leads.length - leadCounts.skipped})` : `${STARTUP_STATUS_META[s].label} (${leadCounts[s]})`}
               </button>
             ))}
           </div>
@@ -1550,12 +1559,12 @@ function TrackerPageInner() {
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
               <div className="space-y-1.5">
                 <Label>Company</Label>
-                <Input placeholder="Acme Corp" {...register('company')} />
+                <Input placeholder="Acme Corp" maxLength={200} {...register('company')} />
                 {errors.company && <p className="text-xs text-destructive">{errors.company.message}</p>}
               </div>
               <div className="space-y-1.5">
                 <Label>Role</Label>
-                <Input placeholder="Software Engineer" {...register('role')} />
+                <Input placeholder="Software Engineer" maxLength={200} {...register('role')} />
                 {errors.role && <p className="text-xs text-destructive">{errors.role.message}</p>}
               </div>
             </div>
@@ -1589,7 +1598,7 @@ function TrackerPageInner() {
             </div>
             <div className="space-y-1.5">
               <Label>Notes</Label>
-              <Textarea rows={3} placeholder="Any notes about this application…" className="resize-none" {...register('notes')} />
+              <Textarea rows={3} maxLength={3000} placeholder="Any notes about this application…" className="resize-none" {...register('notes')} />
             </div>
             <DialogFooter>
               <Button type="button" variant="outline" onClick={() => setShowForm(false)} className="rounded-xl">Cancel</Button>

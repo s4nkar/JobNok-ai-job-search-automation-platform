@@ -137,6 +137,10 @@ class Settings(BaseSettings):
     # creation (storage abuse, not a billed external call), matching
     # job_search_applications_per_day's "cheap but still bounded" profile.
     rate_limit_templates_create_per_day: int = 50
+    # Same "not AI-costed, generous storage-abuse ceiling" profile as
+    # templates_create above - tracker applications are user-entered, not
+    # scraped/generated, so this is deliberately high.
+    rate_limit_tracker_create_per_day: int = 100
     rate_limit_bulk_email_per_campaign: int = 500
     rate_limit_bulk_email_per_month: int = 3000
     # Short-window burst limit, separate from the daily quotas above - caps
