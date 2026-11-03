@@ -499,19 +499,6 @@ export interface StartupHuntResult {
   description_text?: string | null
 }
 
-export type OpportunityArtifactType = 'resume_analysis' | 'cover_letter' | 'interview_prep'
-
-export interface OpportunityArtifact {
-  id: string
-  user_id: string
-  opportunity_id: string | null
-  artifact_type: OpportunityArtifactType
-  tool_used: string
-  content: string
-  metadata: Record<string, unknown>
-  created_at: string
-}
-
 export type StartupHuntSourceType =
   | 'greenhouse' | 'lever' | 'ashby' | 'startup_company' | 'startup_directory'
   | 'google_web' | 'web_search' | 'ats_discovery' | 'apify_actor' | 'indeed_search' | 'theirstack_search'

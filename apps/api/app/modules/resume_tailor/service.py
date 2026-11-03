@@ -22,7 +22,7 @@ from app.modules.resume_tailor import rendering
 from app.modules.resume_tailor.models import SavedResume, TailoringSession
 from app.modules.resume_tailor.repository import TailoringSessionRepository
 from app.modules.resume_tailor.schemas import SessionSummary
-from app.modules.startup_hunt.models import OpportunityArtifact, StartupHuntOpportunity
+from app.modules.startup_hunt.models import StartupHuntOpportunity
 
 
 def _stringify_date(d):
@@ -217,22 +217,3 @@ async def list_sessions_for_docs_page(db: AsyncSession, user_id: str) -> list[Se
     return summaries
 
 
-async def save_resume_artifact(
-    db: AsyncSession, user_id: str, opportunity_id: str, template_id: str, match_score
-) -> None:
-    """Best-effort log of a generated PDF against a Startup Hunt opportunity.
-    Silently no-ops on failure, matching the original try/except pass."""
-    try:
-        db.add(
-            OpportunityArtifact(
-                user_id=user_id,
-                opportunity_id=opportunity_id,
-                artifact_type="resume_analysis",
-                tool_used="resume-tailor",
-                content=f"[Generated PDF — template: {template_id}]",
-                metadata_={"template_id": template_id, "match_score": match_score},
-            )
-        )
-        await db.flush()
-    except Exception:
-        pass

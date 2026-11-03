@@ -101,7 +101,6 @@ class ThumbnailsResponse(BaseModel):
 class PdfRequest(BaseModel):
     template_id: str
     cv_data: dict[str, Any]
-    opportunity_id: str | None = None
 
 
 class DraftSaveRequest(BaseModel):

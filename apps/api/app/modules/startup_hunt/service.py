@@ -41,7 +41,6 @@ from app.modules.startup_hunt.engine import (
 )
 from app.modules.startup_hunt.models import (
     CompanyRegistry,
-    OpportunityArtifact,
     StartupHuntCompany,
     StartupHuntContact,
     StartupHuntOpportunity,
@@ -624,59 +623,6 @@ async def list_startup_hunt_contacts(db: AsyncSession, user_id: str, opportunity
     return [row_to_dict(r) for r in rows]
 
 
-async def get_artifact_counts(db: AsyncSession, user_id: str) -> dict[str, int]:
-    rows = (
-        await db.execute(
-            select(OpportunityArtifact.opportunity_id, func.count())
-            .where(OpportunityArtifact.user_id == user_id, OpportunityArtifact.opportunity_id.is_not(None))
-            .group_by(OpportunityArtifact.opportunity_id)
-        )
-    ).all()
-    return {str(oid): count for oid, count in rows}
-
-
-async def list_opportunity_artifacts(db: AsyncSession, user_id: str, opportunity_id: str) -> list[dict]:
-    rows = (
-        await db.execute(
-            select(OpportunityArtifact)
-            .where(OpportunityArtifact.user_id == user_id, OpportunityArtifact.opportunity_id == opportunity_id)
-            .order_by(OpportunityArtifact.created_at.desc())
-        )
-    ).scalars().all()
-    return [row_to_dict(r) for r in rows]
-
-
-async def create_opportunity_artifact(db: AsyncSession, user_id: str, opportunity_id: str, body: dict) -> dict:
-    artifact_type = body.get("artifact_type", "")
-    if artifact_type not in {"resume_analysis", "cover_letter", "interview_prep"}:
-        raise HTTPException(status_code=422, detail="Invalid artifact_type")
-    obj = OpportunityArtifact(
-        user_id=user_id,
-        opportunity_id=opportunity_id,
-        artifact_type=artifact_type,
-        tool_used=body.get("tool_used", artifact_type),
-        content=body.get("content", ""),
-        metadata_=body.get("metadata", {}),
-    )
-    db.add(obj)
-    await db.flush()
-    await db.refresh(obj)
-    return row_to_dict(obj)
-
-
-async def delete_opportunity_artifact(db: AsyncSession, user_id: str, opportunity_id: str, artifact_id: str) -> None:
-    row = (
-        await db.execute(
-            select(OpportunityArtifact).where(
-                OpportunityArtifact.id == artifact_id,
-                OpportunityArtifact.opportunity_id == opportunity_id,
-                OpportunityArtifact.user_id == user_id,
-            )
-        )
-    ).scalar_one_or_none()
-    if row is None:
-        raise HTTPException(status_code=404, detail="Artifact not found")
-    await db.delete(row)
     await db.flush()
 
 

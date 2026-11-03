@@ -180,19 +180,6 @@ function CoverLetterInner() {
         setOutput((prev) => prev + chunk)
       }
 
-      if (opportunityId && fullText.trim()) {
-        await apiFetch(`/api/startup-hunt/opportunities/${opportunityId}/artifacts`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            artifact_type: 'cover_letter',
-            tool_used: 'cover-letter',
-            content: fullText,
-            metadata: { company: data.company, role: data.role },
-          }),
-        })
-        toast({ title: 'Cover letter saved to lead' })
-      }
     } catch {
       setError('Network error. Please try again.')
     }

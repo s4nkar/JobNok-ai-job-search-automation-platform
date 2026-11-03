@@ -15,7 +15,6 @@ import {
   STATUS_COLORS,
   StartupHuntSavedOpportunity,
   StartupHuntOpportunityStatus,
-  OpportunityArtifact,
   JobSearchApplication,
   JobSearchApplicationStatus,
 } from '@/lib/types'
@@ -39,7 +38,7 @@ import { useToast } from '@jobnok/ui'
 import {
   Plus, Pencil, Trash2, Briefcase, Loader2, AlertCircle, TrendingUp, CheckCircle,
   Clock, ExternalLink, Compass, Mail, MapPin, MoreHorizontal, FileSearch, PenLine,
-  MessageSquare, ChevronDown, ChevronUp, FileText, Radar, Users, Globe, Linkedin,
+  MessageSquare, ChevronDown, ChevronUp, Radar, Users, Globe, Linkedin,
   StopCircle, Building2, BookmarkCheck, Search, ClipboardList, Send, XCircle, StickyNote,
 } from 'lucide-react'
 import { ScoutCompany, ScoutContact, ScoutCrawlStatus } from '@/lib/types'
@@ -133,12 +132,6 @@ const TRACKER_TAB_META: Record<TrackerTab, { label: string; description: string;
 
 const TRACKER_TAB_ORDER: TrackerTab[] = ['applications', 'leads', 'scout', 'job-search']
 
-const ARTIFACT_META: Record<string, { label: string; icon: React.ElementType; color: string; tool: string }> = {
-  resume_analysis: { label: 'Resume Analysis', icon: FileSearch, color: 'text-slate-600', tool: 'resume-tailor' },
-  cover_letter: { label: 'Cover Letter', icon: PenLine, color: 'text-slate-600', tool: 'cover-letter' },
-  interview_prep: { label: 'Interview Prep', icon: MessageSquare, color: 'text-slate-600', tool: 'interview-prep' },
-}
-
 const SCOUT_STATUS_META: Record<ScoutCrawlStatus, { label: string; classes: string }> = {
   pending: { label: 'Pending', classes: 'bg-slate-100 text-slate-600' },
   crawling: { label: 'Crawling…', classes: 'bg-indigo-100 text-indigo-700' },
@@ -183,10 +176,6 @@ function TrackerPageInner() {
     queryKey: queryKeys.startupHuntOpportunities,
     queryFn: () => apiGet<StartupHuntSavedOpportunity[]>('/api/startup-hunt/opportunities'),
   })
-  const { data: artifactCounts = {} } = useQuery({
-    queryKey: queryKeys.startupHuntArtifactCounts,
-    queryFn: () => apiGet<Record<string, number>>('/api/startup-hunt/artifact-counts'),
-  })
   const { data: scoutCompanies = [], isLoading: scoutLoading } = useQuery({
     queryKey: queryKeys.startupScoutCompanies,
     queryFn: () => apiGet<ScoutCompany[]>('/api/startup-scout/companies'),
@@ -209,9 +198,6 @@ function TrackerPageInner() {
   const [applicationsFilter, setApplicationsFilter] = useState<'all' | 'active' | 'overdue' | 'offers'>('all')
   const [scoutFilter, setScoutFilter] = useState<'all' | 'pending' | 'enriched' | 'partial_failed'>('all')
   const [updatingAppId, setUpdatingAppId] = useState<string | null>(null)
-  const [expandedDocs, setExpandedDocs] = useState<Record<string, boolean>>({})
-  const [docsCache, setDocsCache] = useState<Record<string, OpportunityArtifact[]>>({})
-  const [docsLoading, setDocsLoading] = useState<Record<string, boolean>>({})
   const { toast } = useToast()
 
   const { register, handleSubmit, setValue, reset, watch, formState: { errors } } = useForm<FormData>({
@@ -228,9 +214,6 @@ function TrackerPageInner() {
   }
   function setLeads(updater: (prev: StartupHuntSavedOpportunity[]) => StartupHuntSavedOpportunity[]) {
     queryClient.setQueryData<StartupHuntSavedOpportunity[]>(queryKeys.startupHuntOpportunities, (prev) => updater(prev || []))
-  }
-  function setArtifactCounts(updater: (prev: Record<string, number>) => Record<string, number>) {
-    queryClient.setQueryData<Record<string, number>>(queryKeys.startupHuntArtifactCounts, (prev) => updater(prev || {}))
   }
   function setJobSearchApplications(updater: (prev: JobSearchApplication[]) => JobSearchApplication[]) {
     queryClient.setQueryData<JobSearchApplication[]>(queryKeys.jobSearchApplications, (prev) => updater(prev || []))
@@ -450,32 +433,9 @@ function TrackerPageInner() {
     const res = await apiFetch(`/api/startup-hunt/opportunities/${id}`, { method: 'DELETE' })
     if (res.ok) {
       setLeads((prev) => prev.filter((l) => l.id !== id))
-      setArtifactCounts((prev) => { const n = { ...prev }; delete n[id]; return n })
       toast({ title: 'Lead removed' })
     } else {
       toast({ title: 'Could not remove lead', variant: 'destructive' })
-    }
-  }
-
-  async function toggleDocs(leadId: string) {
-    const nowOpen = !expandedDocs[leadId]
-    setExpandedDocs((prev) => ({ ...prev, [leadId]: nowOpen }))
-    if (nowOpen && !docsCache[leadId]) {
-      setDocsLoading((prev) => ({ ...prev, [leadId]: true }))
-      const res = await apiFetch(`/api/startup-hunt/opportunities/${leadId}/artifacts`)
-      if (res.ok) {
-        const data: OpportunityArtifact[] = await res.json()
-        setDocsCache((prev) => ({ ...prev, [leadId]: data }))
-      }
-      setDocsLoading((prev) => ({ ...prev, [leadId]: false }))
-    }
-  }
-
-  async function deleteArtifact(leadId: string, artifactId: string) {
-    const res = await apiFetch(`/api/startup-hunt/opportunities/${leadId}/artifacts/${artifactId}`, { method: 'DELETE' })
-    if (res.ok) {
-      setDocsCache((prev) => ({ ...prev, [leadId]: (prev[leadId] || []).filter((a) => a.id !== artifactId) }))
-      setArtifactCounts((prev) => ({ ...prev, [leadId]: Math.max(0, (prev[leadId] || 1) - 1) }))
     }
   }
 
@@ -839,7 +799,7 @@ function TrackerPageInner() {
               <Table>
                 <TableHeader>
                   <TableRow className="bg-slate-50/50 border-b border-slate-100 hover:bg-slate-50/50">
-                    {['Company', 'Role', 'Location', 'Source', 'Status', 'Score', 'Docs', 'Saved'].map((h) => (
+                    {['Company', 'Role', 'Location', 'Source', 'Status', 'Score', 'Saved'].map((h) => (
                       <TableHead key={h} className="text-xs font-semibold text-slate-500 uppercase tracking-wider">{h}</TableHead>
                     ))}
                     <TableHead className="w-28" />
@@ -849,14 +809,9 @@ function TrackerPageInner() {
                   {filteredLeads.map((lead) => {
                     const applyUrl = lead.direct_apply_url || lead.company_careers_url || lead.portal_job_url || lead.company_website_url
                     const isUpdating = updatingLeadId === lead.id
-                    const docCount = artifactCounts[lead.id] || 0
-                    const docsOpen = Boolean(expandedDocs[lead.id])
-                    const artifacts = docsCache[lead.id] || []
-                    const docsAreLoading = docsLoading[lead.id]
 
                     return (
-                      <React.Fragment key={lead.id}>
-                        <TableRow className="border-b border-slate-50 hover:bg-slate-50/50 transition-colors">
+                      <TableRow key={lead.id} className="border-b border-slate-50 hover:bg-slate-50/50 transition-colors">
                           <TableCell className="font-semibold text-slate-800">
                             {lead.company_website_url ? (
                               <Link href={lead.company_website_url} target="_blank" className="hover:text-indigo-600 hover:underline transition-colors">{lead.company_name}</Link>
@@ -887,21 +842,6 @@ function TrackerPageInner() {
                           </TableCell>
                           <TableCell>
                             <span className="text-xs font-semibold text-indigo-600">{lead.score_total.toFixed(1)}%</span>
-                          </TableCell>
-                          <TableCell>
-                            <button
-                              onClick={() => toggleDocs(lead.id)}
-                              className={cn(
-                                'flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-semibold border transition-colors',
-                                docCount > 0
-                                  ? 'bg-indigo-50 text-indigo-700 border-indigo-200 hover:bg-indigo-100'
-                                  : 'bg-slate-50 text-slate-400 border-slate-200 hover:bg-slate-100'
-                              )}
-                            >
-                              <FileText className="h-3 w-3" />
-                              {docCount}
-                              {docsOpen ? <ChevronUp className="h-3 w-3" /> : <ChevronDown className="h-3 w-3" />}
-                            </button>
                           </TableCell>
                           <TableCell className="text-xs text-slate-400">{formatDate(lead.created_at)}</TableCell>
                           <TableCell>
@@ -952,76 +892,6 @@ function TrackerPageInner() {
                             </div>
                           </TableCell>
                         </TableRow>
-
-                        {/* Documents panel */}
-                        {docsOpen && (
-                          <tr key={`${lead.id}-docs`} className="bg-slate-50/60 border-b border-slate-100">
-                            <td colSpan={9} className="px-5 py-4">
-                              {docsAreLoading ? (
-                                <div className="flex items-center gap-2 text-sm text-slate-400">
-                                  <Loader2 className="h-3.5 w-3.5 animate-spin" /> Loading documents…
-                                </div>
-                              ) : artifacts.length === 0 ? (
-                                <div className="flex items-center gap-3">
-                                  <p className="text-sm text-slate-400">No documents yet. Use the Actions menu to generate one.</p>
-                                  <div className="flex gap-2">
-                                    {(['resume-tailor', 'cover-letter', 'interview-prep'] as const).map((tool) => {
-                                      const meta = Object.values(ARTIFACT_META).find((m) => m.tool === tool)!
-                                      return (
-                                        <button
-                                          key={tool}
-                                          onClick={() => router.push(`/${tool}?opportunity_id=${lead.id}`)}
-                                          className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium bg-white border border-slate-200 text-slate-600 hover:border-indigo-300 hover:text-indigo-600 transition-colors"
-                                        >
-                                          <meta.icon className={cn('h-3 w-3', meta.color)} />
-                                          {meta.label}
-                                        </button>
-                                      )
-                                    })}
-                                  </div>
-                                </div>
-                              ) : (
-                                <div className="space-y-2">
-                                  <p className="text-[10px] font-bold text-slate-500 uppercase tracking-widest mb-3">Generated Documents</p>
-                                  <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
-                                    {artifacts.map((artifact) => {
-                                      const meta = ARTIFACT_META[artifact.artifact_type] || ARTIFACT_META.cover_letter
-                                      const preview = artifact.artifact_type === 'cover_letter'
-                                        ? artifact.content.slice(0, 120) + '…'
-                                        : artifact.artifact_type === 'resume_analysis'
-                                          ? (() => { try { const p = JSON.parse(artifact.content); return `ATS Score: ${p.match_score}% · ${p.matched_keywords?.length ?? 0} matched keywords` } catch { return artifact.content.slice(0, 80) } })()
-                                          : (() => { try { const qs = JSON.parse(artifact.content); return `${qs.length} interview questions generated` } catch { return artifact.content.slice(0, 80) } })()
-                                      return (
-                                        <div key={artifact.id} className="bg-white rounded-xl border border-slate-200 p-3 space-y-2">
-                                          <div className="flex items-center justify-between">
-                                            <div className="flex items-center gap-1.5">
-                                              <meta.icon className={cn('h-3.5 w-3.5', meta.color)} />
-                                              <span className="text-xs font-semibold text-slate-700">{meta.label}</span>
-                                            </div>
-                                            <button onClick={() => deleteArtifact(lead.id, artifact.id)} className="text-slate-300 hover:text-red-400 transition-colors">
-                                              <Trash2 className="h-3 w-3" />
-                                            </button>
-                                          </div>
-                                          <p className="text-xs text-slate-500 leading-relaxed">{preview}</p>
-                                          <div className="flex items-center justify-between">
-                                            <span className="text-[10px] text-slate-400">{formatDate(artifact.created_at)}</span>
-                                            <button
-                                              onClick={() => router.push(`/${meta.tool}?opportunity_id=${lead.id}`)}
-                                              className="text-[10px] font-semibold text-indigo-600 hover:underline"
-                                            >
-                                              Open in {meta.label} →
-                                            </button>
-                                          </div>
-                                        </div>
-                                      )
-                                    })}
-                                  </div>
-                                </div>
-                              )}
-                            </td>
-                          </tr>
-                        )}
-                      </React.Fragment>
                     )
                   })}
                 </TableBody>

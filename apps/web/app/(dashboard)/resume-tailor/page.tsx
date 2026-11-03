@@ -198,19 +198,6 @@ function ResumeTailorInner() {
         if (parsed.ai.status === 'degraded') {
           toast({ title: 'AI prose unavailable', description: 'Showing the deterministic match score and keywords only.' })
         }
-        if (opportunityId) {
-          await apiFetch(`/api/startup-hunt/opportunities/${opportunityId}/artifacts`, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-              artifact_type: 'resume_analysis',
-              tool_used: 'resume-tailor',
-              content: JSON.stringify(parsed),
-              metadata: { match_score: parsed.analysis.match_score, company: lead?.company_name, role: lead?.role_title },
-            }),
-          })
-          toast({ title: 'Analysis saved to lead' })
-        }
       }
     } catch {
       setError('Network error. Please try again.')
@@ -236,7 +223,6 @@ function ResumeTailorInner() {
         body: JSON.stringify({
           template_id: 'standard',
           cv_data,
-          opportunity_id: opportunityId || undefined,
         }),
       })
       if (!res.ok) {

@@ -180,20 +180,6 @@ function InterviewPrepInner() {
         // rest of this visit so a regenerate patches the same row instead
         // of leaving it to drift out of sync.
         setSessionId(result.session_id)
-
-        if (opportunityId && qs.length) {
-          await apiFetch(`/api/startup-hunt/opportunities/${opportunityId}/artifacts`, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-              artifact_type: 'interview_prep',
-              tool_used: 'interview-prep',
-              content: JSON.stringify(qs),
-              metadata: { question_count: qs.length, company: lead?.company_name, role: lead?.role_title },
-            }),
-          })
-          toast({ title: 'Interview prep saved to lead' })
-        }
       }
     } catch {
       setError('Network error. Please try again.')

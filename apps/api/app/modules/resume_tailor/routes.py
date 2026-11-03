@@ -845,11 +845,6 @@ async def generate_tailor_pdf(session_id: str, request: Request, body: PdfReques
 
     await session_repo.set_template(user_id, session_id, body.template_id)
 
-    if body.opportunity_id:
-        await resume_tailor_service.save_resume_artifact(
-            db, user_id, body.opportunity_id, body.template_id, session.analysis.get("overall_score"),
-        )
-
     return Response(
         content=pdf_bytes,
         media_type="application/pdf",

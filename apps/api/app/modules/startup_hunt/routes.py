@@ -79,34 +79,6 @@ async def list_startup_hunt_contacts(
     return await service.list_startup_hunt_contacts(db, user_id, opportunity_id)
 
 
-@router.get("/artifact-counts")
-async def get_artifact_counts(request: Request, db: AsyncSession = Depends(get_db)):
-    user_id = await get_current_user_id(request, db)
-    return await service.get_artifact_counts(db, user_id)
-
-
-@router.get("/opportunities/{opportunity_id}/artifacts")
-async def list_opportunity_artifacts(opportunity_id: str, request: Request, db: AsyncSession = Depends(get_db)):
-    user_id = await get_current_user_id(request, db)
-    return await service.list_opportunity_artifacts(db, user_id, opportunity_id)
-
-
-@router.post("/opportunities/{opportunity_id}/artifacts", status_code=201)
-async def create_opportunity_artifact(
-    opportunity_id: str, request: Request, body: dict, db: AsyncSession = Depends(get_db)
-):
-    user_id = await get_current_user_id(request, db)
-    return await service.create_opportunity_artifact(db, user_id, opportunity_id, body)
-
-
-@router.delete("/opportunities/{opportunity_id}/artifacts/{artifact_id}", status_code=204)
-async def delete_opportunity_artifact(
-    opportunity_id: str, artifact_id: str, request: Request, db: AsyncSession = Depends(get_db)
-):
-    user_id = await get_current_user_id(request, db)
-    await service.delete_opportunity_artifact(db, user_id, opportunity_id, artifact_id)
-
-
 @router.post("/opportunities", status_code=201)
 async def create_startup_hunt_opportunity(
     request: Request, body: StartupHuntOpportunityCreateRequest, db: AsyncSession = Depends(get_db)
