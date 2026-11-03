@@ -206,13 +206,21 @@ function DocCard({ row, onRename }: { row: DocRow; onRename: (row: DocRow, newLa
 function JobGroupCard({ rows, onRename }: { rows: DocRow[]; onRename: (row: DocRow, newLabel: string) => void }) {
   const headerLabel = rows.find(r => r.kind === 'resume')?.label ?? rows[0].label
   return (
-    <div className="rounded-xl border border-indigo-100 bg-indigo-50/40 p-2 space-y-2">
-      <div className="flex items-center gap-1.5 px-1 pt-0.5">
+    <div className="col-span-2 rounded-xl border border-indigo-100 bg-indigo-50/40 p-3 space-y-2.5">
+      <div className="flex items-center gap-1.5 px-0.5">
         <Briefcase className="h-3.5 w-3.5 text-indigo-400 shrink-0" />
         <span className="text-xs font-semibold text-indigo-700 truncate">{headerLabel}</span>
+        <span className="text-[10px] text-indigo-400 ml-auto shrink-0">{rows.length} documents</span>
       </div>
-      <div className="space-y-2">
-        {rows.map(row => <DocCard key={row.id} row={row} onRename={onRename} />)}
+      {/* flex-wrap + flex-1, not a fixed grid-cols-2 - a 3rd (or 5th, etc.)
+          card then stretches to fill its own row instead of sitting alone
+          in a half-width cell with dead space beside it. */}
+      <div className="flex flex-wrap gap-2.5">
+        {rows.map(row => (
+          <div key={row.id} className="flex-1 min-w-[140px]">
+            <DocCard row={row} onRename={onRename} />
+          </div>
+        ))}
       </div>
     </div>
   )

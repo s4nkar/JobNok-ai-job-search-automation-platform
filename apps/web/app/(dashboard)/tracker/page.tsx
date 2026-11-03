@@ -40,7 +40,7 @@ import {
   Plus, Pencil, Trash2, Briefcase, Loader2, AlertCircle, TrendingUp, CheckCircle,
   Clock, ExternalLink, Compass, Mail, MapPin, MoreHorizontal, FileSearch, PenLine,
   MessageSquare, ChevronDown, ChevronUp, FileText, Radar, Users, Globe, Linkedin,
-  StopCircle, Building2, BookmarkCheck, Search, ClipboardList, Send, XCircle,
+  StopCircle, Building2, BookmarkCheck, Search, ClipboardList, Send, XCircle, StickyNote,
 } from 'lucide-react'
 import { ScoutCompany, ScoutContact, ScoutCrawlStatus } from '@/lib/types'
 import { apiFetch, apiGet } from '@/lib/api'
@@ -60,6 +60,32 @@ const schema = z.object({
   notes: z.string().max(3000, 'Keep it under 3,000 characters').optional(),
 })
 type FormData = z.infer<typeof schema>
+
+const FIELD_LABELS: Record<string, string> = {
+  company: 'Company', role: 'Role', applied_at: 'Applied date', status: 'Status',
+  follow_up_date: 'Follow-up date', salary_min: 'Salary min', salary_max: 'Salary max', notes: 'Notes',
+}
+
+// FastAPI's 422 body shapes `detail` as either a plain string (our own
+// raised HTTPExceptions) or a list of Pydantic error objects (schema
+// validation failures, e.g. a length/type mismatch Zod didn't already
+// catch client-side) - without this, those list-shaped errors rendered as
+// a flat "Something went wrong" with no indication of which field or why.
+function describeApiError(body: unknown): string {
+  const detail = body && typeof body === 'object' && 'detail' in body
+    ? (body as { detail: unknown }).detail
+    : undefined
+  if (typeof detail === 'string' && detail.trim()) return detail
+  if (Array.isArray(detail) && detail.length > 0) {
+    const first = detail[0] as { msg?: string; loc?: unknown[] }
+    if (first && typeof first.msg === 'string') {
+      const field = Array.isArray(first.loc) ? first.loc[first.loc.length - 1] : undefined
+      const label = typeof field === 'string' ? FIELD_LABELS[field] : undefined
+      return label ? `${label}: ${first.msg}` : first.msg
+    }
+  }
+  return 'Please double check the form - Company and Role are required.'
+}
 
 const today = new Date().toISOString().split('T')[0]
 
@@ -175,6 +201,7 @@ function TrackerPageInner() {
   const [showForm, setShowForm] = useState(false)
   const [editing, setEditing] = useState<JobApplication | null>(null)
   const [saving, setSaving] = useState(false)
+  const [viewingNotes, setViewingNotes] = useState<JobApplication | null>(null)
   const [updatingLeadId, setUpdatingLeadId] = useState<string | null>(null)
   const [leadStatusFilter, setLeadStatusFilter] = useState<StartupHuntOpportunityStatus | 'all'>('all')
   const [updatingJobSearchId, setUpdatingJobSearchId] = useState<string | null>(null)
@@ -324,7 +351,12 @@ function TrackerPageInner() {
       setShowForm(false)
       toast({ title: editing ? 'Application updated' : 'Application added' })
     } else {
-      toast({ title: 'Error', description: 'Something went wrong', variant: 'destructive' })
+      const body = await res.json().catch(() => ({}))
+      toast({
+        title: editing ? 'Could not save changes' : 'Could not add application',
+        description: describeApiError(body),
+        variant: 'destructive',
+      })
     }
     setSaving(false)
   }
@@ -644,7 +676,20 @@ function TrackerPageInner() {
                     const isUpdatingStatus = updatingAppId === app.id
                     return (
                       <TableRow key={app.id} className={cn('border-b border-slate-50 hover:bg-slate-50/50 transition-colors', overdueRow && 'bg-red-50/40 hover:bg-red-50/60')}>
-                        <TableCell className="font-semibold text-slate-800">{app.company}</TableCell>
+                        <TableCell className="font-semibold text-slate-800">
+                          <div className="flex items-center gap-1.5">
+                            <span>{app.company}</span>
+                            {app.notes && (
+                              <button
+                                onClick={() => setViewingNotes(app)}
+                                title="View note"
+                                className="text-slate-300 hover:text-indigo-500 transition-colors shrink-0"
+                              >
+                                <StickyNote className="h-3.5 w-3.5" />
+                              </button>
+                            )}
+                          </div>
+                        </TableCell>
                         <TableCell className="text-slate-600">{app.role}</TableCell>
                         <TableCell>
                           <Select
@@ -1517,7 +1562,7 @@ function TrackerPageInner() {
                                   <FileSearch className="h-3.5 w-3.5 text-slate-500" />
                                   Resume Tailor
                                 </DropdownMenuItem>
-                                <DropdownMenuItem onClick={() => router.push(`/cover-letter?company=${encodeURIComponent(app.company)}&role=${encodeURIComponent(app.role)}`)}>
+                                <DropdownMenuItem onClick={() => router.push(`/cover-letter?job_search_application_id=${app.id}&company=${encodeURIComponent(app.company)}&role=${encodeURIComponent(app.role)}`)}>
                                   <PenLine className="h-3.5 w-3.5 text-slate-500" />
                                   Cover Letter
                                 </DropdownMenuItem>
@@ -1558,20 +1603,21 @@ function TrackerPageInner() {
           <form onSubmit={handleSubmit(onSubmit)} className="space-y-4">
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
               <div className="space-y-1.5">
-                <Label>Company</Label>
+                <Label>Company <span className="text-red-500">*</span></Label>
                 <Input placeholder="Acme Corp" maxLength={200} {...register('company')} />
                 {errors.company && <p className="text-xs text-destructive">{errors.company.message}</p>}
               </div>
               <div className="space-y-1.5">
-                <Label>Role</Label>
+                <Label>Role <span className="text-red-500">*</span></Label>
                 <Input placeholder="Software Engineer" maxLength={200} {...register('role')} />
                 {errors.role && <p className="text-xs text-destructive">{errors.role.message}</p>}
               </div>
             </div>
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
               <div className="space-y-1.5">
-                <Label>Applied date</Label>
+                <Label>Applied date <span className="text-red-500">*</span></Label>
                 <Input type="date" {...register('applied_at')} />
+                {errors.applied_at && <p className="text-xs text-destructive">{errors.applied_at.message}</p>}
               </div>
               <div className="space-y-1.5">
                 <Label>Status</Label>
@@ -1608,6 +1654,26 @@ function TrackerPageInner() {
               </Button>
             </DialogFooter>
           </form>
+        </DialogContent>
+      </Dialog>
+
+      {/* View Note Dialog */}
+      <Dialog open={!!viewingNotes} onOpenChange={(open) => !open && setViewingNotes(null)}>
+        <DialogContent className="w-[90%] max-w-md rounded-2xl">
+          <DialogHeader>
+            <DialogTitle className="text-lg font-bold">{viewingNotes?.company} · {viewingNotes?.role}</DialogTitle>
+          </DialogHeader>
+          <p className="text-sm text-slate-600 whitespace-pre-wrap">{viewingNotes?.notes}</p>
+          <DialogFooter>
+            <Button type="button" variant="outline" onClick={() => setViewingNotes(null)} className="rounded-xl">Close</Button>
+            <Button
+              type="button"
+              onClick={() => { if (viewingNotes) openEdit(viewingNotes); setViewingNotes(null) }}
+              className="gradient-brand text-white border-0 shadow-brand-sm hover:opacity-90 transition-opacity rounded-xl"
+            >
+              Edit
+            </Button>
+          </DialogFooter>
         </DialogContent>
       </Dialog>
     </div>
