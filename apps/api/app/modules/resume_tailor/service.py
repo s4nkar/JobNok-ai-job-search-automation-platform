@@ -1,9 +1,10 @@
-"""DB touchpoints for resume-tailor: profile overlay reads + resume-artifact
-logging, plus render_cv_template_html (rendering.render_html wrapped with the
-lebenslauf profile-photo overlay, which needs a DB read + Redis cache). Pure
-rendering (Jinja/WeasyPrint, no DB) still lives in rendering.py - this file
-only owns the DB-touching orchestration around it, shared by routes.py's
-/preview, /preview/thumbnails, and this module's own My Docs card previews.
+"""DB touchpoints for resume-tailor: profile overlay reads, source-linkage
+ownership checks, and render_cv_template_html (rendering.render_html wrapped
+with the lebenslauf profile-photo overlay, which needs a DB read + Redis
+cache). Pure rendering (Jinja/WeasyPrint, no DB) still lives in rendering.py -
+this file only owns the DB-touching orchestration around it, shared by
+routes.py's /preview, /preview/thumbnails, and this module's own My Docs card
+previews.
 """
 
 import json
@@ -23,6 +24,7 @@ from app.modules.resume_tailor.models import SavedResume, TailoringSession
 from app.modules.resume_tailor.repository import TailoringSessionRepository
 from app.modules.resume_tailor.schemas import SessionSummary
 from app.modules.startup_hunt.models import StartupHuntOpportunity
+from app.modules.tracker.models import JobApplication
 
 
 def _stringify_date(d):
@@ -97,6 +99,21 @@ async def verify_opportunity_ownership(db: AsyncSession, user_id: str, opportuni
     return row is not None
 
 
+async def verify_job_application_ownership(db: AsyncSession, user_id: str, job_application_id: str) -> bool:
+    """True if job_application_id exists and belongs to user_id. Used to
+    validate the optional source_job_application_id linkage on a new
+    tailoring session - the manually-added-tracker-row counterpart to
+    verify_opportunity_ownership/verify_application_ownership above."""
+    row = (
+        await db.execute(
+            select(JobApplication.id).where(
+                JobApplication.id == job_application_id, JobApplication.user_id == user_id
+            )
+        )
+    ).scalar_one_or_none()
+    return row is not None
+
+
 async def verify_application_ownership(db: AsyncSession, user_id: str, application_id: str) -> bool:
     """True if application_id exists and belongs to user_id. Used to validate
     the optional source_application_id linkage on a new tailoring session."""
@@ -131,6 +148,7 @@ def _session_display_label(
     session: TailoringSession,
     opportunities: dict[str, StartupHuntOpportunity],
     applications: dict[str, JobSearchApplication],
+    job_applications: dict[str, JobApplication],
 ) -> tuple[str, bool]:
     """Fallback chain for "My Docs": user-set title, then a real linked
     job (factual, DB-backed), then an AI-parsed one (model output, could
@@ -148,6 +166,10 @@ def _session_display_label(
         app = applications.get(str(session.source_application_id))
         if app is not None:
             return f"{app.role} at {app.company}", False
+    if session.source_job_application_id:
+        job_app = job_applications.get(str(session.source_job_application_id))
+        if job_app is not None:
+            return f"{job_app.role} at {job_app.company}", False
 
     prose = session.prose or {}
     target_role = (prose.get("target_role") or "").strip()
@@ -169,6 +191,7 @@ async def list_sessions_for_docs_page(db: AsyncSession, user_id: str) -> list[Se
 
     opportunity_ids = {str(s.source_opportunity_id) for s in sessions if s.source_opportunity_id}
     application_ids = {str(s.source_application_id) for s in sessions if s.source_application_id}
+    job_application_ids = {str(s.source_job_application_id) for s in sessions if s.source_job_application_id}
 
     opportunities: dict[str, StartupHuntOpportunity] = {}
     if opportunity_ids:
@@ -184,9 +207,16 @@ async def list_sessions_for_docs_page(db: AsyncSession, user_id: str) -> list[Se
         ).scalars()
         applications = {str(a.id): a for a in rows}
 
+    job_applications: dict[str, JobApplication] = {}
+    if job_application_ids:
+        rows = (
+            await db.execute(select(JobApplication).where(JobApplication.id.in_(job_application_ids)))
+        ).scalars()
+        job_applications = {str(a.id): a for a in rows}
+
     summaries = []
     for s in sessions:
-        display_label, is_ai_matched = _session_display_label(s, opportunities, applications)
+        display_label, is_ai_matched = _session_display_label(s, opportunities, applications, job_applications)
         preview_html = None
         if s.draft_cv_data is not None:
             # Only for sessions that already have a draft - draft_cv_data is
@@ -213,6 +243,7 @@ async def list_sessions_for_docs_page(db: AsyncSession, user_id: str) -> list[Se
             preview_html=preview_html,
             source_opportunity_id=str(s.source_opportunity_id) if s.source_opportunity_id else None,
             source_application_id=str(s.source_application_id) if s.source_application_id else None,
+            source_job_application_id=str(s.source_job_application_id) if s.source_job_application_id else None,
         ))
     return summaries
 

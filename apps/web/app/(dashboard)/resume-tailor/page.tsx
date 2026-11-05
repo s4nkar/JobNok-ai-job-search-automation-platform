@@ -82,6 +82,7 @@ function ResumeTailorInner() {
   const router = useRouter()
   const opportunityId = searchParams.get('opportunity_id')
   const jobSearchApplicationId = searchParams.get('job_search_application_id')
+  const jobApplicationId = searchParams.get('job_application_id')
   const trackerCompany = searchParams.get('company')
   const trackerRole = searchParams.get('role')
 
@@ -182,6 +183,7 @@ function ResumeTailorInner() {
     formData.append('job_description', jd)
     if (opportunityId) formData.append('opportunity_id', opportunityId)
     if (jobSearchApplicationId) formData.append('job_search_application_id', jobSearchApplicationId)
+    if (jobApplicationId) formData.append('job_application_id', jobApplicationId)
 
     try {
       const res = await apiFetch('/api/ai/tailor', { method: 'POST', body: formData })

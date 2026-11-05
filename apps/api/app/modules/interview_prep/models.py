@@ -62,3 +62,10 @@ class InterviewPrepSession(Base, UUIDPKMixin, CreatedAtMixin):
         ForeignKey("job_search_applications.id", ondelete="SET NULL"),
         nullable=True,
     )
+    # Third linkage column, same rationale - a manually-added (not synced,
+    # not from a Startup Hunt lead) tracker row.
+    source_job_application_id: Mapped[uuid.UUID | None] = mapped_column(
+        PG_UUID(as_uuid=True),
+        ForeignKey("job_applications.id", ondelete="SET NULL"),
+        nullable=True,
+    )

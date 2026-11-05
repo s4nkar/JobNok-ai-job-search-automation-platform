@@ -61,7 +61,10 @@ class TailoringSessionRepository(UserScopedRepository[TailoringSession]):
     model = TailoringSession
 
     async def get_by_source(
-        self, user_id: str, *, source_opportunity_id: str | None = None, source_application_id: str | None = None,
+        self, user_id: str, *,
+        source_opportunity_id: str | None = None,
+        source_application_id: str | None = None,
+        source_job_application_id: str | None = None,
     ) -> TailoringSession | None:
         """The existing session already linked to this job, if any - the
         upsert target for "only one saved resume per job" (see routes.py's
@@ -69,15 +72,17 @@ class TailoringSessionRepository(UserScopedRepository[TailoringSession]):
         hash-based cache-hit lookup misses - a resubmission of the exact
         same resume+JD pair should still hit that fast path unchanged, this
         is for when the content differs but the job link doesn't). Exactly
-        one of the two ids should be given; if both are None this returns
+        one of the three ids should be given; if all are None this returns
         None rather than matching every unlinked row."""
-        if not source_opportunity_id and not source_application_id:
+        if not source_opportunity_id and not source_application_id and not source_job_application_id:
             return None
         stmt = self._scoped(select(self.model), user_id)
         if source_opportunity_id:
             stmt = stmt.where(self.model.source_opportunity_id == source_opportunity_id)
-        else:
+        elif source_application_id:
             stmt = stmt.where(self.model.source_application_id == source_application_id)
+        else:
+            stmt = stmt.where(self.model.source_job_application_id == source_job_application_id)
         stmt = stmt.order_by(self.model.created_at.desc()).limit(1)
         return (await self.session.execute(stmt)).scalar_one_or_none()
 
@@ -147,6 +152,7 @@ class TailoringSessionRepository(UserScopedRepository[TailoringSession]):
         ai_error: str | None,
         source_opportunity_id: str | None = None,
         source_application_id: str | None = None,
+        source_job_application_id: str | None = None,
         saved_resume_id: str | None = None,
     ) -> TailoringSession:
         return await self.create(
@@ -166,6 +172,7 @@ class TailoringSessionRepository(UserScopedRepository[TailoringSession]):
             ai_error=ai_error,
             source_opportunity_id=source_opportunity_id,
             source_application_id=source_application_id,
+            source_job_application_id=source_job_application_id,
             saved_resume_id=saved_resume_id,
         )
 

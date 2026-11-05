@@ -39,6 +39,7 @@ def _detail_response(session) -> CoverLetterSessionDetail:
         created_at=session.created_at.isoformat(),
         source_opportunity_id=str(session.source_opportunity_id) if session.source_opportunity_id else None,
         source_application_id=str(session.source_application_id) if session.source_application_id else None,
+        source_job_application_id=str(session.source_job_application_id) if session.source_job_application_id else None,
     )
 
 

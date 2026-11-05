@@ -322,6 +322,7 @@ async def tailor_resume(
     force_refresh: bool = Form(False),
     opportunity_id: str | None = Form(None),
     job_search_application_id: str | None = Form(None),
+    job_application_id: str | None = Form(None),
     db: AsyncSession = Depends(get_db),
 ):
     user_id = await get_current_user_id(request, db)
@@ -350,8 +351,8 @@ async def tailor_resume(
     # else will ever contend for; real ownership is still re-checked before
     # the id is trusted as a source_opportunity_id/source_application_id
     # further down).
-    if opportunity_id or job_search_application_id:
-        job_lock_key = f"tailor_job:{user_id}:{opportunity_id or job_search_application_id}:lock"
+    if opportunity_id or job_search_application_id or job_application_id:
+        job_lock_key = f"tailor_job:{user_id}:{opportunity_id or job_search_application_id or job_application_id}:lock"
         try:
             job_lock_acquired = await acquire_lock(job_lock_key, _JOB_LOCK_TTL_SECONDS)
         except Exception:
@@ -492,6 +493,9 @@ async def tailor_resume(
         source_application_id = None
         if job_search_application_id and await resume_tailor_service.verify_application_ownership(db, user_id, job_search_application_id):
             source_application_id = job_search_application_id
+        source_job_application_id = None
+        if job_application_id and await resume_tailor_service.verify_job_application_ownership(db, user_id, job_application_id):
+            source_job_application_id = job_application_id
 
         # "Only one saved resume per job": the hash-based lookup above
         # already missed (different resume/JD content than last time), but
@@ -500,9 +504,12 @@ async def tailor_resume(
         # second row for the same job - auto-save should accumulate one
         # row per job, not one per generate click.
         existing_for_job = None
-        if source_opportunity_id or source_application_id:
+        if source_opportunity_id or source_application_id or source_job_application_id:
             existing_for_job = await session_repo.get_by_source(
-                user_id, source_opportunity_id=source_opportunity_id, source_application_id=source_application_id,
+                user_id,
+                source_opportunity_id=source_opportunity_id,
+                source_application_id=source_application_id,
+                source_job_application_id=source_job_application_id,
             )
 
         if existing_for_job is not None:
@@ -539,6 +546,7 @@ async def tailor_resume(
                 ai_error=prose.ai_error,
                 source_opportunity_id=source_opportunity_id,
                 source_application_id=source_application_id,
+                source_job_application_id=source_job_application_id,
                 saved_resume_id=str(saved_resume_row.id) if saved_resume_row else None,
             )
 

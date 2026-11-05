@@ -48,6 +48,7 @@ function InterviewPrepInner() {
   const searchParams = useSearchParams()
   const opportunityId = searchParams.get('opportunity_id')
   const jobSearchApplicationId = searchParams.get('job_search_application_id')
+  const jobApplicationId = searchParams.get('job_application_id')
   const trackerCompany = searchParams.get('company')
   const trackerRole = searchParams.get('role')
   const reopenSessionId = searchParams.get('session_id')
@@ -160,6 +161,7 @@ function InterviewPrepInner() {
           job_description: jd, company: knownCompany, role: knownRole,
           opportunity_id: opportunityId || undefined,
           job_search_application_id: jobSearchApplicationId || undefined,
+          job_application_id: jobApplicationId || undefined,
           session_id: sessionId || undefined,
         }),
       })

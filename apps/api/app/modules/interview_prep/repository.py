@@ -14,20 +14,25 @@ class InterviewPrepSessionRepository(UserScopedRepository[InterviewPrepSession])
     model = InterviewPrepSession
 
     async def get_by_source(
-        self, user_id: str, *, source_opportunity_id: str | None = None, source_application_id: str | None = None,
+        self, user_id: str, *,
+        source_opportunity_id: str | None = None,
+        source_application_id: str | None = None,
+        source_job_application_id: str | None = None,
     ) -> InterviewPrepSession | None:
         """The existing session already linked to this job, if any - the
         upsert target for "only one saved interview kit per job" (see
-        service.py::resolve_session). Exactly one of the two ids should be
-        given; if both are None this returns None rather than matching
+        service.py::resolve_session). Exactly one of the three ids should be
+        given; if all are None this returns None rather than matching
         every unlinked row."""
-        if not source_opportunity_id and not source_application_id:
+        if not source_opportunity_id and not source_application_id and not source_job_application_id:
             return None
         stmt = self._scoped(select(self.model), user_id)
         if source_opportunity_id:
             stmt = stmt.where(self.model.source_opportunity_id == source_opportunity_id)
-        else:
+        elif source_application_id:
             stmt = stmt.where(self.model.source_application_id == source_application_id)
+        else:
+            stmt = stmt.where(self.model.source_job_application_id == source_job_application_id)
         stmt = stmt.order_by(self.model.created_at.desc()).limit(1)
         return (await self.session.execute(stmt)).scalar_one_or_none()
 
@@ -41,6 +46,7 @@ class InterviewPrepSessionRepository(UserScopedRepository[InterviewPrepSession])
         result: dict[str, Any],
         source_opportunity_id: str | None = None,
         source_application_id: str | None = None,
+        source_job_application_id: str | None = None,
     ) -> InterviewPrepSession:
         return await self.create(
             user_id,
@@ -50,6 +56,7 @@ class InterviewPrepSessionRepository(UserScopedRepository[InterviewPrepSession])
             result=result,
             source_opportunity_id=source_opportunity_id,
             source_application_id=source_application_id,
+            source_job_application_id=source_job_application_id,
         )
 
     async def set_title(self, user_id: str, id_: str, title: str) -> InterviewPrepSession | None:

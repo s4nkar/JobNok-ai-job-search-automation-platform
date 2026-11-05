@@ -17,6 +17,9 @@ import {
   StartupHuntOpportunityStatus,
   JobSearchApplication,
   JobSearchApplicationStatus,
+  SessionSummary,
+  CoverLetterSessionSummary,
+  InterviewPrepSessionSummary,
 } from '@/lib/types'
 import { isOverdue, formatDate, formatCurrency, cn } from '@jobnok/ui'
 import { Button } from '@jobnok/ui'
@@ -39,7 +42,7 @@ import {
   Plus, Pencil, Trash2, Briefcase, Loader2, AlertCircle, TrendingUp, CheckCircle,
   Clock, ExternalLink, Compass, Mail, MapPin, MoreHorizontal, FileSearch, PenLine,
   MessageSquare, ChevronDown, ChevronUp, Radar, Users, Globe, Linkedin,
-  StopCircle, Building2, BookmarkCheck, Search, ClipboardList, Send, XCircle, StickyNote,
+  StopCircle, Building2, BookmarkCheck, Search, ClipboardList, Send, XCircle, StickyNote, FolderOpen,
 } from 'lucide-react'
 import { ScoutCompany, ScoutContact, ScoutCrawlStatus } from '@/lib/types'
 import { apiFetch, apiGet } from '@/lib/api'
@@ -180,6 +183,42 @@ function TrackerPageInner() {
     queryKey: queryKeys.startupScoutCompanies,
     queryFn: () => apiGet<ScoutCompany[]>('/api/startup-scout/companies'),
   })
+  // Same queries/cache keys My Docs itself uses - just for a per-row doc
+  // count + "View docs" deep link here, not full session detail. Shares
+  // react-query's cache with My Docs, so visiting either page warms the
+  // other instead of double-fetching. Must return the exact same shape
+  // My Docs' queryFn does ({ sessions: [...] }, not unwrapped) - react-query
+  // caches by key alone, so whichever page's queryFn runs first "wins" that
+  // shape for both, and an unwrapped array here crashed when My Docs' object
+  // shape won the race.
+  const { data: resumeSessionsData } = useQuery({
+    queryKey: queryKeys.tailoringSessions,
+    queryFn: () => apiGet<{ sessions: SessionSummary[] }>('/api/ai/tailor/sessions'),
+  })
+  const { data: coverLetterSessionsData } = useQuery({
+    queryKey: queryKeys.coverLetterSessions,
+    queryFn: () => apiGet<{ sessions: CoverLetterSessionSummary[] }>('/api/ai/cover-letter/sessions'),
+  })
+  const { data: interviewPrepSessionsData } = useQuery({
+    queryKey: queryKeys.interviewPrepSessions,
+    queryFn: () => apiGet<{ sessions: InterviewPrepSessionSummary[] }>('/api/ai/interview/sessions'),
+  })
+  const resumeSessions = resumeSessionsData?.sessions ?? []
+  const coverLetterSessions = coverLetterSessionsData?.sessions ?? []
+  const interviewPrepSessions = interviewPrepSessionsData?.sessions ?? []
+  type SourceLinkedSession = {
+    source_opportunity_id: string | null
+    source_application_id: string | null
+    source_job_application_id: string | null
+  }
+  const docCountFor = (sourceId: string, field: keyof SourceLinkedSession): number => {
+    const matches = (s: SourceLinkedSession) => s[field] === sourceId
+    return (
+      resumeSessions.filter(matches).length +
+      coverLetterSessions.filter(matches).length +
+      interviewPrepSessions.filter(matches).length
+    )
+  }
 
   const [crawlingIds, setCrawlingIds] = useState<Set<string>>(new Set())
   const [stoppingIds, setStoppingIds] = useState<Set<string>>(new Set())
@@ -683,6 +722,16 @@ function TrackerPageInner() {
                         </TableCell>
                         <TableCell>
                           <div className="flex gap-1 justify-end">
+                            {docCountFor(app.id, 'source_job_application_id') > 0 && (
+                              <button
+                                onClick={() => router.push(`/my-docs?q=${encodeURIComponent(`${app.role} at ${app.company}`)}`)}
+                                title="View generated documents for this job"
+                                className="h-7 px-2 rounded-lg flex items-center gap-1 text-xs text-slate-500 hover:text-indigo-600 hover:bg-indigo-50 transition-colors font-medium border border-slate-200 hover:border-indigo-200"
+                              >
+                                <FolderOpen className="h-3 w-3" />
+                                {docCountFor(app.id, 'source_job_application_id')}
+                              </button>
+                            )}
                             <button
                               onClick={() => openEdit(app)}
                               className="h-7 px-2 rounded-lg flex items-center gap-1 text-xs text-slate-500 hover:text-indigo-600 hover:bg-indigo-50 transition-colors font-medium border border-slate-200 hover:border-indigo-200"
@@ -698,15 +747,15 @@ function TrackerPageInner() {
                               </DropdownMenuTrigger>
                               <DropdownMenuContent align="end" className="w-48">
                                 <DropdownMenuLabel>Use with tools</DropdownMenuLabel>
-                                <DropdownMenuItem onClick={() => router.push(`/resume-tailor?company=${encodeURIComponent(app.company)}&role=${encodeURIComponent(app.role)}`)}>
+                                <DropdownMenuItem onClick={() => router.push(`/resume-tailor?job_application_id=${app.id}&company=${encodeURIComponent(app.company)}&role=${encodeURIComponent(app.role)}`)}>
                                   <FileSearch className="h-3.5 w-3.5 text-slate-500" />
                                   Resume Tailor
                                 </DropdownMenuItem>
-                                <DropdownMenuItem onClick={() => router.push(`/cover-letter?company=${encodeURIComponent(app.company)}&role=${encodeURIComponent(app.role)}`)}>
+                                <DropdownMenuItem onClick={() => router.push(`/cover-letter?job_application_id=${app.id}&company=${encodeURIComponent(app.company)}&role=${encodeURIComponent(app.role)}`)}>
                                   <PenLine className="h-3.5 w-3.5 text-slate-500" />
                                   Cover Letter
                                 </DropdownMenuItem>
-                                <DropdownMenuItem onClick={() => router.push(`/interview-prep?company=${encodeURIComponent(app.company)}&role=${encodeURIComponent(app.role)}`)}>
+                                <DropdownMenuItem onClick={() => router.push(`/interview-prep?job_application_id=${app.id}&company=${encodeURIComponent(app.company)}&role=${encodeURIComponent(app.role)}`)}>
                                   <MessageSquare className="h-3.5 w-3.5 text-slate-500" />
                                   Interview Prep
                                 </DropdownMenuItem>
@@ -846,6 +895,16 @@ function TrackerPageInner() {
                           <TableCell className="text-xs text-slate-400">{formatDate(lead.created_at)}</TableCell>
                           <TableCell>
                             <div className="flex gap-1 justify-end">
+                              {docCountFor(lead.id, 'source_opportunity_id') > 0 && (
+                                <button
+                                  onClick={() => router.push(`/my-docs?q=${encodeURIComponent(`${lead.role_title} at ${lead.company_name}`)}`)}
+                                  title="View generated documents for this job"
+                                  className="h-7 px-2 rounded-lg flex items-center gap-1 text-xs text-slate-500 hover:text-indigo-600 hover:bg-indigo-50 transition-colors font-medium border border-slate-200 hover:border-indigo-200"
+                                >
+                                  <FolderOpen className="h-3 w-3" />
+                                  {docCountFor(lead.id, 'source_opportunity_id')}
+                                </button>
+                              )}
                               {applyUrl && (
                                 <Link href={applyUrl} target="_blank">
                                   <button className="h-7 px-2 rounded-lg flex items-center gap-1 text-xs text-slate-500 hover:text-indigo-600 hover:bg-indigo-50 transition-colors font-medium border border-slate-200 hover:border-indigo-200">
@@ -1414,6 +1473,16 @@ function TrackerPageInner() {
                         <TableCell className="text-xs text-slate-400">{formatDate(app.discovered_at)}</TableCell>
                         <TableCell>
                           <div className="flex gap-1 justify-end">
+                            {docCountFor(app.id, 'source_application_id') > 0 && (
+                              <button
+                                onClick={() => router.push(`/my-docs?q=${encodeURIComponent(`${app.role} at ${app.company}`)}`)}
+                                title="View generated documents for this job"
+                                className="h-7 px-2 rounded-lg flex items-center gap-1 text-xs text-slate-500 hover:text-indigo-600 hover:bg-indigo-50 transition-colors font-medium border border-slate-200 hover:border-indigo-200"
+                              >
+                                <FolderOpen className="h-3 w-3" />
+                                {docCountFor(app.id, 'source_application_id')}
+                              </button>
+                            )}
                             <Link href={app.job_url} target="_blank">
                               <button className="h-7 px-2 rounded-lg flex items-center gap-1 text-xs text-slate-500 hover:text-indigo-600 hover:bg-indigo-50 transition-colors font-medium border border-slate-200 hover:border-indigo-200">
                                 <ExternalLink className="h-3 w-3" />

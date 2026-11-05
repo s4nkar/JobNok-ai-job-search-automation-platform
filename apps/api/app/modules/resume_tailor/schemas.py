@@ -141,6 +141,7 @@ class SessionSummary(BaseModel):
     # equivalent for the other half of that grouping.
     source_opportunity_id: str | None = None
     source_application_id: str | None = None
+    source_job_application_id: str | None = None
 
 
 class SessionListResponse(BaseModel):
