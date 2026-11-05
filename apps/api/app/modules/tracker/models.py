@@ -1,7 +1,7 @@
 import uuid
 from datetime import date, datetime
 
-from sqlalchemy import Date, ForeignKey, Index, Integer, Text, func, text
+from sqlalchemy import CheckConstraint, Date, ForeignKey, Index, Integer, Text, func, text
 from sqlalchemy.dialects.postgresql import TIMESTAMP, UUID as PG_UUID
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -14,6 +14,17 @@ class JobApplication(Base, UUIDPKMixin, CreatedAtMixin):
         Index("applications_user_id_idx", "user_id"),
         Index("applications_status_idx", "status"),
         Index("applications_follow_up_idx", "follow_up_date"),
+        # Defense in depth alongside the Pydantic max_length/Literal
+        # boundary checks in schemas.py - belt-and-suspenders per this
+        # codebase's input length convention, in case a future code path
+        # ever writes this table without going through ApplicationIn.
+        CheckConstraint("char_length(company) <= 200", name="applications_company_length_check"),
+        CheckConstraint("char_length(role) <= 200", name="applications_role_length_check"),
+        CheckConstraint("notes is null or char_length(notes) <= 3000", name="applications_notes_length_check"),
+        CheckConstraint(
+            "status in ('Applied', 'Phone Screen', 'Interview', 'Offer', 'Rejected', 'Withdrawn')",
+            name="applications_status_check",
+        ),
     )
 
     user_id: Mapped[uuid.UUID] = mapped_column(

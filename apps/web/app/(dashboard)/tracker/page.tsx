@@ -15,9 +15,11 @@ import {
   STATUS_COLORS,
   StartupHuntSavedOpportunity,
   StartupHuntOpportunityStatus,
-  OpportunityArtifact,
   JobSearchApplication,
   JobSearchApplicationStatus,
+  SessionSummary,
+  CoverLetterSessionSummary,
+  InterviewPrepSessionSummary,
 } from '@/lib/types'
 import { isOverdue, formatDate, formatCurrency, cn } from '@jobnok/ui'
 import { Button } from '@jobnok/ui'
@@ -39,24 +41,53 @@ import { useToast } from '@jobnok/ui'
 import {
   Plus, Pencil, Trash2, Briefcase, Loader2, AlertCircle, TrendingUp, CheckCircle,
   Clock, ExternalLink, Compass, Mail, MapPin, MoreHorizontal, FileSearch, PenLine,
-  MessageSquare, ChevronDown, ChevronUp, FileText, Radar, Users, Globe, Linkedin,
-  StopCircle, Building2, BookmarkCheck, ScanSearch, Search,
+  MessageSquare, ChevronDown, ChevronUp, Radar, Users, Globe, Linkedin,
+  StopCircle, Building2, BookmarkCheck, Search, ClipboardList, Send, XCircle, StickyNote, FolderOpen,
 } from 'lucide-react'
 import { ScoutCompany, ScoutContact, ScoutCrawlStatus } from '@/lib/types'
 import { apiFetch, apiGet } from '@/lib/api'
 import { queryKeys } from '@/lib/queryKeys'
 
+// Bounds mirror the backend's Pydantic schema (apps/api/app/modules/
+// tracker/schemas.py) — kept in sync by hand, same pattern CLAUDE.md
+// documents for every other tool's Zod/Pydantic pair.
 const schema = z.object({
-  company: z.string().min(1, 'Required'),
-  role: z.string().min(1, 'Required'),
+  company: z.string().min(1, 'Required').max(200, 'Keep it under 200 characters'),
+  role: z.string().min(1, 'Required').max(200, 'Keep it under 200 characters'),
   applied_at: z.string().min(1, 'Required'),
   status: z.enum(APPLICATION_STATUSES as [ApplicationStatus, ...ApplicationStatus[]]),
   follow_up_date: z.string().optional(),
   salary_min: z.coerce.number().optional(),
   salary_max: z.coerce.number().optional(),
-  notes: z.string().optional(),
+  notes: z.string().max(3000, 'Keep it under 3,000 characters').optional(),
 })
 type FormData = z.infer<typeof schema>
+
+const FIELD_LABELS: Record<string, string> = {
+  company: 'Company', role: 'Role', applied_at: 'Applied date', status: 'Status',
+  follow_up_date: 'Follow-up date', salary_min: 'Salary min', salary_max: 'Salary max', notes: 'Notes',
+}
+
+// FastAPI's 422 body shapes `detail` as either a plain string (our own
+// raised HTTPExceptions) or a list of Pydantic error objects (schema
+// validation failures, e.g. a length/type mismatch Zod didn't already
+// catch client-side) - without this, those list-shaped errors rendered as
+// a flat "Something went wrong" with no indication of which field or why.
+function describeApiError(body: unknown): string {
+  const detail = body && typeof body === 'object' && 'detail' in body
+    ? (body as { detail: unknown }).detail
+    : undefined
+  if (typeof detail === 'string' && detail.trim()) return detail
+  if (Array.isArray(detail) && detail.length > 0) {
+    const first = detail[0] as { msg?: string; loc?: unknown[] }
+    if (first && typeof first.msg === 'string') {
+      const field = Array.isArray(first.loc) ? first.loc[first.loc.length - 1] : undefined
+      const label = typeof field === 'string' ? FIELD_LABELS[field] : undefined
+      return label ? `${label}: ${first.msg}` : first.msg
+    }
+  }
+  return 'Please double check the form - Company and Role are required.'
+}
 
 const today = new Date().toISOString().split('T')[0]
 
@@ -104,12 +135,6 @@ const TRACKER_TAB_META: Record<TrackerTab, { label: string; description: string;
 
 const TRACKER_TAB_ORDER: TrackerTab[] = ['applications', 'leads', 'scout', 'job-search']
 
-const ARTIFACT_META: Record<string, { label: string; icon: React.ElementType; color: string; tool: string }> = {
-  resume_analysis: { label: 'Resume Analysis', icon: FileSearch, color: 'text-slate-600', tool: 'resume-tailor' },
-  cover_letter: { label: 'Cover Letter', icon: PenLine, color: 'text-slate-600', tool: 'cover-letter' },
-  interview_prep: { label: 'Interview Prep', icon: MessageSquare, color: 'text-slate-600', tool: 'interview-prep' },
-}
-
 const SCOUT_STATUS_META: Record<ScoutCrawlStatus, { label: string; classes: string }> = {
   pending: { label: 'Pending', classes: 'bg-slate-100 text-slate-600' },
   crawling: { label: 'Crawling…', classes: 'bg-indigo-100 text-indigo-700' },
@@ -154,14 +179,46 @@ function TrackerPageInner() {
     queryKey: queryKeys.startupHuntOpportunities,
     queryFn: () => apiGet<StartupHuntSavedOpportunity[]>('/api/startup-hunt/opportunities'),
   })
-  const { data: artifactCounts = {} } = useQuery({
-    queryKey: queryKeys.startupHuntArtifactCounts,
-    queryFn: () => apiGet<Record<string, number>>('/api/startup-hunt/artifact-counts'),
-  })
   const { data: scoutCompanies = [], isLoading: scoutLoading } = useQuery({
     queryKey: queryKeys.startupScoutCompanies,
     queryFn: () => apiGet<ScoutCompany[]>('/api/startup-scout/companies'),
   })
+  // Same queries/cache keys My Docs itself uses - just for a per-row doc
+  // count + "View docs" deep link here, not full session detail. Shares
+  // react-query's cache with My Docs, so visiting either page warms the
+  // other instead of double-fetching. Must return the exact same shape
+  // My Docs' queryFn does ({ sessions: [...] }, not unwrapped) - react-query
+  // caches by key alone, so whichever page's queryFn runs first "wins" that
+  // shape for both, and an unwrapped array here crashed when My Docs' object
+  // shape won the race.
+  const { data: resumeSessionsData } = useQuery({
+    queryKey: queryKeys.tailoringSessions,
+    queryFn: () => apiGet<{ sessions: SessionSummary[] }>('/api/ai/tailor/sessions'),
+  })
+  const { data: coverLetterSessionsData } = useQuery({
+    queryKey: queryKeys.coverLetterSessions,
+    queryFn: () => apiGet<{ sessions: CoverLetterSessionSummary[] }>('/api/ai/cover-letter/sessions'),
+  })
+  const { data: interviewPrepSessionsData } = useQuery({
+    queryKey: queryKeys.interviewPrepSessions,
+    queryFn: () => apiGet<{ sessions: InterviewPrepSessionSummary[] }>('/api/ai/interview/sessions'),
+  })
+  const resumeSessions = resumeSessionsData?.sessions ?? []
+  const coverLetterSessions = coverLetterSessionsData?.sessions ?? []
+  const interviewPrepSessions = interviewPrepSessionsData?.sessions ?? []
+  type SourceLinkedSession = {
+    source_opportunity_id: string | null
+    source_application_id: string | null
+    source_job_application_id: string | null
+  }
+  const docCountFor = (sourceId: string, field: keyof SourceLinkedSession): number => {
+    const matches = (s: SourceLinkedSession) => s[field] === sourceId
+    return (
+      resumeSessions.filter(matches).length +
+      coverLetterSessions.filter(matches).length +
+      interviewPrepSessions.filter(matches).length
+    )
+  }
 
   const [crawlingIds, setCrawlingIds] = useState<Set<string>>(new Set())
   const [stoppingIds, setStoppingIds] = useState<Set<string>>(new Set())
@@ -172,14 +229,14 @@ function TrackerPageInner() {
   const [showForm, setShowForm] = useState(false)
   const [editing, setEditing] = useState<JobApplication | null>(null)
   const [saving, setSaving] = useState(false)
+  const [viewingNotes, setViewingNotes] = useState<JobApplication | null>(null)
   const [updatingLeadId, setUpdatingLeadId] = useState<string | null>(null)
   const [leadStatusFilter, setLeadStatusFilter] = useState<StartupHuntOpportunityStatus | 'all'>('all')
   const [updatingJobSearchId, setUpdatingJobSearchId] = useState<string | null>(null)
   const [jobSearchStatusFilter, setJobSearchStatusFilter] = useState<JobSearchApplicationStatus | 'all'>('all')
+  const [applicationsFilter, setApplicationsFilter] = useState<'all' | 'active' | 'overdue' | 'offers'>('all')
+  const [scoutFilter, setScoutFilter] = useState<'all' | 'pending' | 'enriched' | 'partial_failed'>('all')
   const [updatingAppId, setUpdatingAppId] = useState<string | null>(null)
-  const [expandedDocs, setExpandedDocs] = useState<Record<string, boolean>>({})
-  const [docsCache, setDocsCache] = useState<Record<string, OpportunityArtifact[]>>({})
-  const [docsLoading, setDocsLoading] = useState<Record<string, boolean>>({})
   const { toast } = useToast()
 
   const { register, handleSubmit, setValue, reset, watch, formState: { errors } } = useForm<FormData>({
@@ -196,9 +253,6 @@ function TrackerPageInner() {
   }
   function setLeads(updater: (prev: StartupHuntSavedOpportunity[]) => StartupHuntSavedOpportunity[]) {
     queryClient.setQueryData<StartupHuntSavedOpportunity[]>(queryKeys.startupHuntOpportunities, (prev) => updater(prev || []))
-  }
-  function setArtifactCounts(updater: (prev: Record<string, number>) => Record<string, number>) {
-    queryClient.setQueryData<Record<string, number>>(queryKeys.startupHuntArtifactCounts, (prev) => updater(prev || {}))
   }
   function setJobSearchApplications(updater: (prev: JobSearchApplication[]) => JobSearchApplication[]) {
     queryClient.setQueryData<JobSearchApplication[]>(queryKeys.jobSearchApplications, (prev) => updater(prev || []))
@@ -319,7 +373,12 @@ function TrackerPageInner() {
       setShowForm(false)
       toast({ title: editing ? 'Application updated' : 'Application added' })
     } else {
-      toast({ title: 'Error', description: 'Something went wrong', variant: 'destructive' })
+      const body = await res.json().catch(() => ({}))
+      toast({
+        title: editing ? 'Could not save changes' : 'Could not add application',
+        description: describeApiError(body),
+        variant: 'destructive',
+      })
     }
     setSaving(false)
   }
@@ -413,38 +472,26 @@ function TrackerPageInner() {
     const res = await apiFetch(`/api/startup-hunt/opportunities/${id}`, { method: 'DELETE' })
     if (res.ok) {
       setLeads((prev) => prev.filter((l) => l.id !== id))
-      setArtifactCounts((prev) => { const n = { ...prev }; delete n[id]; return n })
       toast({ title: 'Lead removed' })
     } else {
       toast({ title: 'Could not remove lead', variant: 'destructive' })
     }
   }
 
-  async function toggleDocs(leadId: string) {
-    const nowOpen = !expandedDocs[leadId]
-    setExpandedDocs((prev) => ({ ...prev, [leadId]: nowOpen }))
-    if (nowOpen && !docsCache[leadId]) {
-      setDocsLoading((prev) => ({ ...prev, [leadId]: true }))
-      const res = await apiFetch(`/api/startup-hunt/opportunities/${leadId}/artifacts`)
-      if (res.ok) {
-        const data: OpportunityArtifact[] = await res.json()
-        setDocsCache((prev) => ({ ...prev, [leadId]: data }))
-      }
-      setDocsLoading((prev) => ({ ...prev, [leadId]: false }))
-    }
-  }
-
-  async function deleteArtifact(leadId: string, artifactId: string) {
-    const res = await apiFetch(`/api/startup-hunt/opportunities/${leadId}/artifacts/${artifactId}`, { method: 'DELETE' })
-    if (res.ok) {
-      setDocsCache((prev) => ({ ...prev, [leadId]: (prev[leadId] || []).filter((a) => a.id !== artifactId) }))
-      setArtifactCounts((prev) => ({ ...prev, [leadId]: Math.max(0, (prev[leadId] || 1) - 1) }))
-    }
-  }
-
   const overdue = applications.filter((a) => isOverdue(a.follow_up_date) && !['Rejected', 'Withdrawn'].includes(a.status))
   const active = applications.filter((a) => !['Rejected', 'Withdrawn'].includes(a.status))
   const offers = applications.filter((a) => a.status === 'Offer')
+
+  const filteredApplications = applicationsFilter === 'all' ? applications
+    : applicationsFilter === 'active' ? active
+      : applicationsFilter === 'overdue' ? overdue
+        : offers
+
+  const scoutPartialFailed = scoutCompanies.filter((c) => ['partial', 'failed'].includes(c.crawl_status))
+  const filteredScoutCompanies = scoutFilter === 'all' ? scoutCompanies
+    : scoutFilter === 'pending' ? scoutCompanies.filter((c) => c.crawl_status === 'pending')
+      : scoutFilter === 'enriched' ? scoutCompanies.filter((c) => c.crawl_status === 'enriched')
+        : scoutPartialFailed
 
   const filteredLeads = leadStatusFilter === 'all'
     ? leads.filter((l) => l.opportunity_status !== 'skipped')
@@ -473,25 +520,23 @@ function TrackerPageInner() {
 
   return (
     <div className="animate-fade-in">
-      <div className="flex items-start justify-between mb-6">
-        <div className="flex items-center gap-4">
-          <div className="page-header-icon bg-indigo-100">
-            <Briefcase className="h-5 w-5 text-indigo-600" />
-          </div>
-          <div>
-            <h1 className="text-2xl font-bold text-slate-900 tracking-tight">Follow-Up Tracker</h1>
-            <p className="text-slate-500 text-sm mt-0.5">Everything tracked here, added by hand or synced from other tools, in one place</p>
-          </div>
+      <div className="flex items-center gap-4 mb-6">
+        <div className="hidden sm:flex page-header-icon bg-indigo-100">
+          <Briefcase className="h-5 w-5 text-indigo-600" />
         </div>
-        {tab === 'applications' && (
-          <Button onClick={openCreate} className="gradient-brand text-white border-0 shadow-sm hover:opacity-90 transition-opacity rounded-xl h-9 text-sm px-5">
-            <Plus className="h-3.5 w-3.5 mr-2" /> Add Application
-          </Button>
-        )}
+        <div>
+          <h1 className="text-2xl font-bold text-slate-900 tracking-tight">Follow-Up Tracker</h1>
+          <p className="text-slate-500 text-sm mt-0.5">Everything tracked here, added by hand or synced from other tools, in one place</p>
+        </div>
       </div>
 
-      {/* Tabs */}
-      <div className="flex gap-1 bg-slate-100 rounded-xl p-1 w-fit mb-2.5">
+      {/* Tabs — a proper white card (matching every other surface in this
+          app) instead of a flat gray block that barely separated from the
+          page background. The active tab is solid indigo, not just white-
+          on-gray, so it reads as clearly selected against the white card.
+          2x2 grid on mobile (4 tabs fit evenly, no horizontal scrolling
+          needed), back to a compact single row at sm+. */}
+      <div className="grid grid-cols-2 sm:flex sm:w-fit gap-1 bg-white rounded-2xl border border-slate-100 shadow-sm p-1.5 mb-2.5">
         {TRACKER_TAB_ORDER.map((id) => {
           const meta = TRACKER_TAB_META[id]
           const count = TAB_COUNTS[id]
@@ -501,42 +546,100 @@ function TrackerPageInner() {
               onClick={() => setTab(id)}
               title={meta.description}
               className={cn(
-                'flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-semibold transition-colors',
-                tab === id ? 'bg-white text-slate-900 shadow-sm' : 'text-slate-500 hover:text-slate-700'
+                'flex items-center justify-center sm:justify-start gap-2 px-4 py-2 rounded-xl text-sm font-semibold transition-all',
+                tab === id ? 'bg-indigo-600 text-white shadow-sm' : 'text-slate-500 hover:text-slate-700 hover:bg-slate-50'
               )}
             >
               <meta.icon className="h-4 w-4" />
               {meta.label}
               <span className={cn('inline-flex items-center justify-center min-w-[20px] h-5 px-1.5 rounded-full text-xs font-bold',
-                tab === id ? 'bg-indigo-100 text-indigo-700' : 'bg-slate-200 text-slate-600')}>
+                tab === id ? 'bg-white/25 text-white' : 'bg-slate-100 text-slate-500')}>
                 {count}
               </span>
             </button>
           )
         })}
       </div>
-      <p className="text-xs text-slate-400 mb-6">{TRACKER_TAB_META[tab].description}</p>
+      {/* One row, wrapping only if it truly doesn't fit - this caption is
+          short enough to sit next to a small button at any width, unlike
+          the big header title+description this button used to sit under. */}
+      <div className="flex items-center justify-between gap-3 mb-6 flex-wrap">
+        <p className="text-xs text-slate-400">{TRACKER_TAB_META[tab].description}</p>
+        {tab === 'applications' && (
+          <Button onClick={openCreate} className="hidden sm:inline-flex ml-auto gradient-brand text-white border-0 shadow-sm hover:opacity-90 transition-opacity rounded-xl h-9 text-sm px-5">
+            <Plus className="h-3.5 w-3.5 mr-2" /> Add Application
+          </Button>
+        )}
+      </div>
 
       {/* ─── APPLICATIONS TAB ─── */}
       {tab === 'applications' && (
         <>
-          <div className="grid grid-cols-4 gap-4 mb-6">
+          {/* Desktop/tablet: clickable stat cards double as the filter.
+              Mobile: the same filter as a compact pill row below instead -
+              four cards side by side get congested at phone widths, so
+              only one of the two ever renders at a given breakpoint, never
+              both (see tracker UI pass notes). */}
+          {/* Icon box theme (hardcoded across all 4 tracker tabs, not yet
+              promoted to the shared stat-card pattern other tools use): a
+              flat bg-{color}-100 square behind a small icon read as
+              generic - no depth. Gradient fill + a subtle ring + shadow
+              gives it dimension instead of a flat color block (a no-
+              background version was tried and dropped - looked worse, not
+              better). Icons are chosen so no tab's "overview" card reuses
+              that same tab's own nav icon (e.g. Total here is ClipboardList,
+              not Briefcase - Briefcase is this tab's icon in the tab bar
+              above), and the same status word uses the same icon across
+              tabs (Saved/Applied/Skipped mean the same thing in Leads and
+              Job Search, so they share BookmarkCheck/Send/XCircle). */}
+          <div className="hidden sm:grid sm:grid-cols-4 gap-4 mb-6">
             {[
-              { label: 'Total', value: applications.length, Icon: Briefcase, iconBg: 'bg-slate-100', iconColor: 'text-slate-600', description: 'All applications you have added.' },
-              { label: 'Active', value: active.length, Icon: TrendingUp, iconBg: 'bg-indigo-100', iconColor: 'text-indigo-600', description: 'Not yet Rejected or Withdrawn.' },
-              { label: 'Overdue', value: overdue.length, Icon: AlertCircle, iconBg: 'bg-red-100', iconColor: 'text-red-600', description: "Not a status you pick - it's automatic. An active application becomes overdue once its Follow-up date (set in the Add/Edit form) has passed." },
-              { label: 'Offers', value: offers.length, Icon: CheckCircle, iconBg: 'bg-emerald-100', iconColor: 'text-emerald-600', description: 'Status is Offer.' },
-            ].map(({ label, value, Icon, iconBg, iconColor, description }) => (
-              <div key={label} title={description} className="bg-white rounded-2xl border border-slate-100 shadow-sm p-5 flex items-center gap-4">
-                <div className={cn('w-10 h-10 rounded-xl flex items-center justify-center flex-shrink-0', iconBg)}>
-                  <Icon className={cn('h-5 w-5', iconColor)} />
+              { label: 'Total', key: 'all' as const, value: applications.length, Icon: ClipboardList, iconBg: 'bg-gradient-to-br from-slate-50 to-slate-200', iconColor: 'text-slate-600', description: 'All applications you have added.' },
+              { label: 'Active', key: 'active' as const, value: active.length, Icon: TrendingUp, iconBg: 'bg-gradient-to-br from-indigo-50 to-indigo-200', iconColor: 'text-indigo-600', description: 'Not yet Rejected or Withdrawn.' },
+              { label: 'Overdue', key: 'overdue' as const, value: overdue.length, Icon: AlertCircle, iconBg: 'bg-gradient-to-br from-red-50 to-red-200', iconColor: 'text-red-600', description: "Not a status you pick - it's automatic. An active application becomes overdue once its Follow-up date (set in the Add/Edit form) has passed." },
+              { label: 'Offers', key: 'offers' as const, value: offers.length, Icon: CheckCircle, iconBg: 'bg-gradient-to-br from-emerald-50 to-emerald-200', iconColor: 'text-emerald-600', description: 'Status is Offer.' },
+            ].map(({ label, key, value, Icon, iconBg, iconColor, description }) => (
+              <button
+                key={label}
+                title={description}
+                onClick={() => setApplicationsFilter(applicationsFilter === key ? 'all' : key)}
+                className={cn('bg-white rounded-2xl border shadow-sm p-5 flex items-center gap-4 text-left transition-all hover:shadow-md',
+                  applicationsFilter === key ? 'border-indigo-300 ring-1 ring-indigo-200' : 'border-slate-100')}
+              >
+                <div className={cn('w-8 h-8 rounded-xl flex items-center justify-center flex-shrink-0 shadow-sm ring-1 ring-black/5', iconBg)}>
+                  <Icon className={cn('h-4 w-4', iconColor)} />
                 </div>
                 <div>
                   <p className="text-2xl font-bold text-slate-900 leading-none">{value}</p>
                   <p className="text-xs text-slate-500 mt-1">{label}</p>
                 </div>
-              </div>
+              </button>
             ))}
+          </div>
+
+          <div className="flex sm:hidden items-center gap-2 mb-4 flex-wrap">
+            <span className="text-xs text-slate-500 font-medium">Filter:</span>
+            {[
+              { key: 'all' as const, label: `All (${applications.length})` },
+              { key: 'active' as const, label: `Active (${active.length})` },
+              { key: 'overdue' as const, label: `Overdue (${overdue.length})` },
+              { key: 'offers' as const, label: `Offers (${offers.length})` },
+            ].map(({ key, label }) => (
+              <button
+                key={key}
+                onClick={() => setApplicationsFilter(key)}
+                className={cn('px-3 py-1 rounded-full text-xs font-semibold border transition-colors',
+                  applicationsFilter === key ? 'bg-indigo-600 text-white border-indigo-600 shadow-sm' : 'bg-white text-slate-600 border-slate-200 hover:border-slate-400')}
+              >
+                {label}
+              </button>
+            ))}
+            <button
+              onClick={openCreate}
+              className="ml-auto flex items-center gap-1 px-3 py-1 rounded-full text-xs font-semibold bg-indigo-600 text-white shadow-sm hover:opacity-90 transition-opacity flex-shrink-0"
+            >
+              <Plus className="h-3 w-3" /> Add
+            </button>
           </div>
 
           <div className="bg-white rounded-2xl border border-slate-100 shadow-sm overflow-hidden">
@@ -547,13 +650,14 @@ function TrackerPageInner() {
                   <p className="text-sm text-slate-400">Loading applications…</p>
                 </div>
               </div>
-            ) : applications.length === 0 ? (
-              <div className="flex flex-col items-center justify-center h-56">
-                <div className="w-14 h-14 rounded-2xl bg-slate-100 flex items-center justify-center mb-4">
-                  <Briefcase className="h-7 w-7 text-slate-300" />
-                </div>
-                <p className="font-medium text-slate-600">No applications yet</p>
-                <p className="text-sm text-slate-400 mt-1">Add your first one or track a lead from Startup Hunt</p>
+            ) : filteredApplications.length === 0 ? (
+              <div className="flex flex-col items-center justify-center h-56 text-center">
+                <p className="font-semibold text-slate-500">
+                  {applicationsFilter === 'all' ? 'No applications yet' : `No ${applicationsFilter} applications`}
+                </p>
+                <p className="text-sm text-slate-400 mt-1">
+                  {applicationsFilter === 'all' ? 'Add your first one or track a lead from Startup Hunt' : 'Try a different filter.'}
+                </p>
               </div>
             ) : (
               <Table>
@@ -566,12 +670,25 @@ function TrackerPageInner() {
                   </TableRow>
                 </TableHeader>
                 <TableBody>
-                  {applications.map((app) => {
+                  {filteredApplications.map((app) => {
                     const overdueRow = isOverdue(app.follow_up_date) && !['Rejected', 'Withdrawn'].includes(app.status)
                     const isUpdatingStatus = updatingAppId === app.id
                     return (
                       <TableRow key={app.id} className={cn('border-b border-slate-50 hover:bg-slate-50/50 transition-colors', overdueRow && 'bg-red-50/40 hover:bg-red-50/60')}>
-                        <TableCell className="font-semibold text-slate-800">{app.company}</TableCell>
+                        <TableCell className="font-semibold text-slate-800">
+                          <div className="flex items-center gap-1.5">
+                            <span>{app.company}</span>
+                            {app.notes && (
+                              <button
+                                onClick={() => setViewingNotes(app)}
+                                title="View note"
+                                className="text-slate-300 hover:text-indigo-500 transition-colors shrink-0"
+                              >
+                                <StickyNote className="h-3.5 w-3.5" />
+                              </button>
+                            )}
+                          </div>
+                        </TableCell>
                         <TableCell className="text-slate-600">{app.role}</TableCell>
                         <TableCell>
                           <Select
@@ -605,6 +722,16 @@ function TrackerPageInner() {
                         </TableCell>
                         <TableCell>
                           <div className="flex gap-1 justify-end">
+                            {docCountFor(app.id, 'source_job_application_id') > 0 && (
+                              <button
+                                onClick={() => router.push(`/my-docs?q=${encodeURIComponent(`${app.role} at ${app.company}`)}`)}
+                                title="View generated documents for this job"
+                                className="h-7 px-2 rounded-lg flex items-center gap-1 text-xs text-slate-500 hover:text-indigo-600 hover:bg-indigo-50 transition-colors font-medium border border-slate-200 hover:border-indigo-200"
+                              >
+                                <FolderOpen className="h-3 w-3" />
+                                {docCountFor(app.id, 'source_job_application_id')}
+                              </button>
+                            )}
                             <button
                               onClick={() => openEdit(app)}
                               className="h-7 px-2 rounded-lg flex items-center gap-1 text-xs text-slate-500 hover:text-indigo-600 hover:bg-indigo-50 transition-colors font-medium border border-slate-200 hover:border-indigo-200"
@@ -620,15 +747,15 @@ function TrackerPageInner() {
                               </DropdownMenuTrigger>
                               <DropdownMenuContent align="end" className="w-48">
                                 <DropdownMenuLabel>Use with tools</DropdownMenuLabel>
-                                <DropdownMenuItem onClick={() => router.push(`/resume-tailor?company=${encodeURIComponent(app.company)}&role=${encodeURIComponent(app.role)}`)}>
+                                <DropdownMenuItem onClick={() => router.push(`/resume-tailor?job_application_id=${app.id}&company=${encodeURIComponent(app.company)}&role=${encodeURIComponent(app.role)}`)}>
                                   <FileSearch className="h-3.5 w-3.5 text-slate-500" />
                                   Resume Tailor
                                 </DropdownMenuItem>
-                                <DropdownMenuItem onClick={() => router.push(`/cover-letter?company=${encodeURIComponent(app.company)}&role=${encodeURIComponent(app.role)}`)}>
+                                <DropdownMenuItem onClick={() => router.push(`/cover-letter?job_application_id=${app.id}&company=${encodeURIComponent(app.company)}&role=${encodeURIComponent(app.role)}`)}>
                                   <PenLine className="h-3.5 w-3.5 text-slate-500" />
                                   Cover Letter
                                 </DropdownMenuItem>
-                                <DropdownMenuItem onClick={() => router.push(`/interview-prep?company=${encodeURIComponent(app.company)}&role=${encodeURIComponent(app.role)}`)}>
+                                <DropdownMenuItem onClick={() => router.push(`/interview-prep?job_application_id=${app.id}&company=${encodeURIComponent(app.company)}&role=${encodeURIComponent(app.role)}`)}>
                                   <MessageSquare className="h-3.5 w-3.5 text-slate-500" />
                                   Interview Prep
                                 </DropdownMenuItem>
@@ -654,20 +781,26 @@ function TrackerPageInner() {
       {/* ─── STARTUP LEADS TAB ─── */}
       {tab === 'leads' && (
         <>
-          <div className="grid grid-cols-4 gap-4 mb-6">
+          {/* Desktop/tablet: clickable stat cards double as the filter.
+              Mobile: the same filter as a compact pill row below instead -
+              never both at once, same pattern as the Applications tab
+              above. */}
+          <div className="hidden sm:grid sm:grid-cols-4 gap-4 mb-6">
             {[
-              { label: 'Saved', value: leadCounts.saved, classes: 'bg-slate-100 text-slate-600' },
-              { label: 'Contacted', value: leadCounts.contacted, classes: 'bg-indigo-100 text-indigo-600' },
-              { label: 'Applied', value: leadCounts.applied, classes: 'bg-emerald-100 text-emerald-600' },
-              { label: 'Skipped', value: leadCounts.skipped, classes: 'bg-gray-100 text-gray-500' },
-            ].map(({ label, value, classes }) => (
+              { label: 'Saved', value: leadCounts.saved, Icon: BookmarkCheck, iconBg: 'bg-gradient-to-br from-slate-50 to-slate-200', iconColor: 'text-slate-600' },
+              { label: 'Contacted', value: leadCounts.contacted, Icon: Mail, iconBg: 'bg-gradient-to-br from-indigo-50 to-indigo-200', iconColor: 'text-indigo-600' },
+              { label: 'Applied', value: leadCounts.applied, Icon: Send, iconBg: 'bg-gradient-to-br from-emerald-50 to-emerald-200', iconColor: 'text-emerald-600' },
+              { label: 'Skipped', value: leadCounts.skipped, Icon: XCircle, iconBg: 'bg-gradient-to-br from-gray-50 to-gray-200', iconColor: 'text-gray-500' },
+            ].map(({ label, value, Icon, iconBg, iconColor }) => (
               <button
                 key={label}
                 onClick={() => setLeadStatusFilter(leadStatusFilter === label.toLowerCase() as StartupHuntOpportunityStatus ? 'all' : label.toLowerCase() as StartupHuntOpportunityStatus)}
                 className={cn('bg-white rounded-2xl border shadow-sm p-5 flex items-center gap-4 text-left transition-all hover:shadow-md',
                   leadStatusFilter === label.toLowerCase() ? 'border-indigo-300 ring-1 ring-indigo-200' : 'border-slate-100')}
               >
-                <div className={cn('w-10 h-10 rounded-xl flex items-center justify-center flex-shrink-0 text-sm font-bold', classes)}>{value}</div>
+                <div className={cn('w-8 h-8 rounded-xl flex items-center justify-center flex-shrink-0 shadow-sm ring-1 ring-black/5', iconBg)}>
+                  <Icon className={cn('h-4 w-4', iconColor)} />
+                </div>
                 <div>
                   <p className="text-2xl font-bold text-slate-900 leading-none">{value}</p>
                   <p className="text-xs text-slate-500 mt-1">{label}</p>
@@ -676,16 +809,22 @@ function TrackerPageInner() {
             ))}
           </div>
 
-          <div className="flex items-center gap-2 mb-4">
+          <div className="flex sm:hidden items-center gap-2 mb-4 flex-wrap">
             <span className="text-xs text-slate-500 font-medium">Filter:</span>
             {(['all', ...LEAD_STATUS_ORDER] as const).map((s) => (
               <button
                 key={s}
                 onClick={() => setLeadStatusFilter(s)}
                 className={cn('px-3 py-1 rounded-full text-xs font-semibold border transition-colors',
-                  leadStatusFilter === s ? 'bg-slate-900 text-white border-slate-900' : 'bg-white text-slate-600 border-slate-200 hover:border-slate-400')}
+                  leadStatusFilter === s ? 'bg-indigo-600 text-white border-indigo-600 shadow-sm' : 'bg-white text-slate-600 border-slate-200 hover:border-slate-400')}
               >
-                {s === 'all' ? `All (${leads.length})` : `${STARTUP_STATUS_META[s].label} (${leadCounts[s]})`}
+                {/* leads.length - leadCounts.skipped, not leads.length -
+                    "All" here means "all shown under the All filter," and
+                    filteredLeads already excludes skipped leads when the
+                    filter is 'all' (reduces noise from a high-volume
+                    Startup Hunt feed) - the label must match what's
+                    actually in the table, not the raw total. */}
+                {s === 'all' ? `All (${leads.length - leadCounts.skipped})` : `${STARTUP_STATUS_META[s].label} (${leadCounts[s]})`}
               </button>
             ))}
           </div>
@@ -699,11 +838,8 @@ function TrackerPageInner() {
                 </div>
               </div>
             ) : filteredLeads.length === 0 ? (
-              <div className="flex flex-col items-center justify-center h-56">
-                <div className="w-14 h-14 rounded-2xl bg-indigo-50 flex items-center justify-center mb-4">
-                  <Compass className="h-7 w-7 text-indigo-200" />
-                </div>
-                <p className="font-medium text-slate-600">No leads here yet</p>
+              <div className="flex flex-col items-center justify-center h-56 text-center">
+                <p className="font-semibold text-slate-500">No leads here yet</p>
                 <p className="text-sm text-slate-400 mt-1">
                   {leadStatusFilter === 'all' ? 'Save opportunities from Startup Hunt to see them here' : `No ${leadStatusFilter} leads.`}
                 </p>
@@ -712,7 +848,7 @@ function TrackerPageInner() {
               <Table>
                 <TableHeader>
                   <TableRow className="bg-slate-50/50 border-b border-slate-100 hover:bg-slate-50/50">
-                    {['Company', 'Role', 'Location', 'Source', 'Status', 'Score', 'Docs', 'Saved'].map((h) => (
+                    {['Company', 'Role', 'Location', 'Source', 'Status', 'Score', 'Saved'].map((h) => (
                       <TableHead key={h} className="text-xs font-semibold text-slate-500 uppercase tracking-wider">{h}</TableHead>
                     ))}
                     <TableHead className="w-28" />
@@ -722,14 +858,9 @@ function TrackerPageInner() {
                   {filteredLeads.map((lead) => {
                     const applyUrl = lead.direct_apply_url || lead.company_careers_url || lead.portal_job_url || lead.company_website_url
                     const isUpdating = updatingLeadId === lead.id
-                    const docCount = artifactCounts[lead.id] || 0
-                    const docsOpen = Boolean(expandedDocs[lead.id])
-                    const artifacts = docsCache[lead.id] || []
-                    const docsAreLoading = docsLoading[lead.id]
 
                     return (
-                      <React.Fragment key={lead.id}>
-                        <TableRow className="border-b border-slate-50 hover:bg-slate-50/50 transition-colors">
+                      <TableRow key={lead.id} className="border-b border-slate-50 hover:bg-slate-50/50 transition-colors">
                           <TableCell className="font-semibold text-slate-800">
                             {lead.company_website_url ? (
                               <Link href={lead.company_website_url} target="_blank" className="hover:text-indigo-600 hover:underline transition-colors">{lead.company_name}</Link>
@@ -761,24 +892,19 @@ function TrackerPageInner() {
                           <TableCell>
                             <span className="text-xs font-semibold text-indigo-600">{lead.score_total.toFixed(1)}%</span>
                           </TableCell>
-                          <TableCell>
-                            <button
-                              onClick={() => toggleDocs(lead.id)}
-                              className={cn(
-                                'flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-semibold border transition-colors',
-                                docCount > 0
-                                  ? 'bg-indigo-50 text-indigo-700 border-indigo-200 hover:bg-indigo-100'
-                                  : 'bg-slate-50 text-slate-400 border-slate-200 hover:bg-slate-100'
-                              )}
-                            >
-                              <FileText className="h-3 w-3" />
-                              {docCount}
-                              {docsOpen ? <ChevronUp className="h-3 w-3" /> : <ChevronDown className="h-3 w-3" />}
-                            </button>
-                          </TableCell>
                           <TableCell className="text-xs text-slate-400">{formatDate(lead.created_at)}</TableCell>
                           <TableCell>
                             <div className="flex gap-1 justify-end">
+                              {docCountFor(lead.id, 'source_opportunity_id') > 0 && (
+                                <button
+                                  onClick={() => router.push(`/my-docs?q=${encodeURIComponent(`${lead.role_title} at ${lead.company_name}`)}`)}
+                                  title="View generated documents for this job"
+                                  className="h-7 px-2 rounded-lg flex items-center gap-1 text-xs text-slate-500 hover:text-indigo-600 hover:bg-indigo-50 transition-colors font-medium border border-slate-200 hover:border-indigo-200"
+                                >
+                                  <FolderOpen className="h-3 w-3" />
+                                  {docCountFor(lead.id, 'source_opportunity_id')}
+                                </button>
+                              )}
                               {applyUrl && (
                                 <Link href={applyUrl} target="_blank">
                                   <button className="h-7 px-2 rounded-lg flex items-center gap-1 text-xs text-slate-500 hover:text-indigo-600 hover:bg-indigo-50 transition-colors font-medium border border-slate-200 hover:border-indigo-200">
@@ -825,76 +951,6 @@ function TrackerPageInner() {
                             </div>
                           </TableCell>
                         </TableRow>
-
-                        {/* Documents panel */}
-                        {docsOpen && (
-                          <tr key={`${lead.id}-docs`} className="bg-slate-50/60 border-b border-slate-100">
-                            <td colSpan={9} className="px-5 py-4">
-                              {docsAreLoading ? (
-                                <div className="flex items-center gap-2 text-sm text-slate-400">
-                                  <Loader2 className="h-3.5 w-3.5 animate-spin" /> Loading documents…
-                                </div>
-                              ) : artifacts.length === 0 ? (
-                                <div className="flex items-center gap-3">
-                                  <p className="text-sm text-slate-400">No documents yet. Use the Actions menu to generate one.</p>
-                                  <div className="flex gap-2">
-                                    {(['resume-tailor', 'cover-letter', 'interview-prep'] as const).map((tool) => {
-                                      const meta = Object.values(ARTIFACT_META).find((m) => m.tool === tool)!
-                                      return (
-                                        <button
-                                          key={tool}
-                                          onClick={() => router.push(`/${tool}?opportunity_id=${lead.id}`)}
-                                          className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium bg-white border border-slate-200 text-slate-600 hover:border-indigo-300 hover:text-indigo-600 transition-colors"
-                                        >
-                                          <meta.icon className={cn('h-3 w-3', meta.color)} />
-                                          {meta.label}
-                                        </button>
-                                      )
-                                    })}
-                                  </div>
-                                </div>
-                              ) : (
-                                <div className="space-y-2">
-                                  <p className="text-[10px] font-bold text-slate-500 uppercase tracking-widest mb-3">Generated Documents</p>
-                                  <div className="grid grid-cols-3 gap-3">
-                                    {artifacts.map((artifact) => {
-                                      const meta = ARTIFACT_META[artifact.artifact_type] || ARTIFACT_META.cover_letter
-                                      const preview = artifact.artifact_type === 'cover_letter'
-                                        ? artifact.content.slice(0, 120) + '…'
-                                        : artifact.artifact_type === 'resume_analysis'
-                                          ? (() => { try { const p = JSON.parse(artifact.content); return `ATS Score: ${p.match_score}% · ${p.matched_keywords?.length ?? 0} matched keywords` } catch { return artifact.content.slice(0, 80) } })()
-                                          : (() => { try { const qs = JSON.parse(artifact.content); return `${qs.length} interview questions generated` } catch { return artifact.content.slice(0, 80) } })()
-                                      return (
-                                        <div key={artifact.id} className="bg-white rounded-xl border border-slate-200 p-3 space-y-2">
-                                          <div className="flex items-center justify-between">
-                                            <div className="flex items-center gap-1.5">
-                                              <meta.icon className={cn('h-3.5 w-3.5', meta.color)} />
-                                              <span className="text-xs font-semibold text-slate-700">{meta.label}</span>
-                                            </div>
-                                            <button onClick={() => deleteArtifact(lead.id, artifact.id)} className="text-slate-300 hover:text-red-400 transition-colors">
-                                              <Trash2 className="h-3 w-3" />
-                                            </button>
-                                          </div>
-                                          <p className="text-xs text-slate-500 leading-relaxed">{preview}</p>
-                                          <div className="flex items-center justify-between">
-                                            <span className="text-[10px] text-slate-400">{formatDate(artifact.created_at)}</span>
-                                            <button
-                                              onClick={() => router.push(`/${meta.tool}?opportunity_id=${lead.id}`)}
-                                              className="text-[10px] font-semibold text-indigo-600 hover:underline"
-                                            >
-                                              Open in {meta.label} →
-                                            </button>
-                                          </div>
-                                        </div>
-                                      )
-                                    })}
-                                  </div>
-                                </div>
-                              )}
-                            </td>
-                          </tr>
-                        )}
-                      </React.Fragment>
                     )
                   })}
                 </TableBody>
@@ -908,39 +964,69 @@ function TrackerPageInner() {
       {tab === 'scout' && (
         <>
           {/* ── Stat cards ──────────────────────────────────────────────────── */}
-          <div className="grid grid-cols-3 gap-4 mb-6">
+          {/* Desktop/tablet: clickable stat cards double as the filter.
+              Mobile: the same filter as a compact pill row below instead -
+              never both at once, same pattern as the other three tabs. */}
+          <div className="hidden sm:grid sm:grid-cols-3 gap-4 mb-6">
             {[
               {
                 label: 'Saved',
+                key: 'pending' as const,
                 value: scoutCompanies.filter((c) => c.crawl_status === 'pending').length,
                 icon: BookmarkCheck,
-                iconBg: 'bg-slate-100',
-                iconColor: 'text-slate-500',
+                iconBg: 'bg-gradient-to-br from-slate-50 to-slate-200',
+                iconColor: 'text-slate-600',
               },
               {
                 label: 'Enriched',
+                key: 'enriched' as const,
                 value: scoutCompanies.filter((c) => c.crawl_status === 'enriched').length,
                 icon: CheckCircle,
-                iconBg: 'bg-emerald-100',
+                iconBg: 'bg-gradient-to-br from-emerald-50 to-emerald-200',
                 iconColor: 'text-emerald-600',
               },
               {
                 label: 'Partial / Failed',
-                value: scoutCompanies.filter((c) => ['partial', 'failed'].includes(c.crawl_status)).length,
+                key: 'partial_failed' as const,
+                value: scoutPartialFailed.length,
                 icon: AlertCircle,
-                iconBg: 'bg-amber-100',
-                iconColor: 'text-amber-500',
+                iconBg: 'bg-gradient-to-br from-amber-50 to-amber-200',
+                iconColor: 'text-amber-600',
               },
-            ].map(({ label, value, icon: Icon, iconBg, iconColor }) => (
-              <div key={label} className="bg-white rounded-2xl border border-slate-100 shadow-sm p-5 flex items-center gap-4">
-                <div className={cn('w-10 h-10 rounded-xl flex items-center justify-center flex-shrink-0', iconBg)}>
-                  <Icon className={cn('h-5 w-5', iconColor)} />
+            ].map(({ label, key, value, icon: Icon, iconBg, iconColor }) => (
+              <button
+                key={label}
+                onClick={() => setScoutFilter(scoutFilter === key ? 'all' : key)}
+                className={cn('bg-white rounded-2xl border shadow-sm p-5 flex items-center gap-4 text-left transition-all hover:shadow-md',
+                  scoutFilter === key ? 'border-indigo-300 ring-1 ring-indigo-200' : 'border-slate-100')}
+              >
+                <div className={cn('w-8 h-8 rounded-xl flex items-center justify-center flex-shrink-0 shadow-sm ring-1 ring-black/5', iconBg)}>
+                  <Icon className={cn('h-4 w-4', iconColor)} />
                 </div>
                 <div>
                   <p className="text-2xl font-bold text-slate-900 leading-none tabular-nums">{value}</p>
                   <p className="text-xs text-slate-500 mt-1">{label}</p>
                 </div>
-              </div>
+              </button>
+            ))}
+          </div>
+
+          <div className="flex sm:hidden items-center gap-2 mb-4 flex-wrap">
+            <span className="text-xs text-slate-500 font-medium">Filter:</span>
+            {[
+              { key: 'all' as const, label: `All (${scoutCompanies.length})` },
+              { key: 'pending' as const, label: `Saved (${scoutCompanies.filter((c) => c.crawl_status === 'pending').length})` },
+              { key: 'enriched' as const, label: `Enriched (${scoutCompanies.filter((c) => c.crawl_status === 'enriched').length})` },
+              { key: 'partial_failed' as const, label: `Partial / Failed (${scoutPartialFailed.length})` },
+            ].map(({ key, label }) => (
+              <button
+                key={key}
+                onClick={() => setScoutFilter(key)}
+                className={cn('px-3 py-1 rounded-full text-xs font-semibold border transition-colors',
+                  scoutFilter === key ? 'bg-indigo-600 text-white border-indigo-600 shadow-sm' : 'bg-white text-slate-600 border-slate-200 hover:border-slate-400')}
+              >
+                {label}
+              </button>
             ))}
           </div>
 
@@ -969,11 +1055,8 @@ function TrackerPageInner() {
 
             ) : scoutCompanies.length === 0 ? (
               /* Empty state */
-              <div className="flex flex-col items-center justify-center py-20 px-6 text-center">
-                <div className="w-14 h-14 rounded-2xl bg-indigo-50 flex items-center justify-center mb-4">
-                  <Radar className="h-7 w-7 text-indigo-300" />
-                </div>
-                <p className="font-semibold text-slate-700 text-base">No companies saved yet</p>
+              <div className="flex flex-col items-center justify-center h-56 text-center">
+                <p className="font-semibold text-slate-500">No companies saved yet</p>
                 <p className="text-sm text-slate-400 mt-1 max-w-xs leading-relaxed">
                   Discover startups in{' '}
                   <button onClick={() => router.push('/startup-scout')} className="text-indigo-600 hover:underline font-medium">
@@ -981,6 +1064,12 @@ function TrackerPageInner() {
                   </button>
                   , then save them here to crawl for founder contacts.
                 </p>
+              </div>
+
+            ) : filteredScoutCompanies.length === 0 ? (
+              <div className="flex flex-col items-center justify-center h-56 text-center">
+                <p className="font-semibold text-slate-500">No matching companies</p>
+                <p className="text-sm text-slate-400 mt-1">Try a different filter.</p>
               </div>
 
             ) : (
@@ -994,7 +1083,7 @@ function TrackerPageInner() {
                   </TableRow>
                 </TableHeader>
                 <TableBody>
-                  {scoutCompanies.map((company) => {
+                  {filteredScoutCompanies.map((company) => {
                     const statusMeta = SCOUT_STATUS_META[company.crawl_status]
                     const stagePill = SCOUT_STAGE_PILL[company.funding_stage ?? ''] ?? ''
                     const isCrawling = company.crawl_status === 'crawling' || crawlingIds.has(company.id)
@@ -1141,7 +1230,7 @@ function TrackerPageInner() {
                             <td colSpan={7} className="px-5 py-5">
                               {contactsAreLoading ? (
                                 /* Contacts skeleton */
-                                <div className="grid grid-cols-2 gap-3">
+                                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                                   {Array.from({ length: 2 }).map((_, i) => (
                                     <div key={i} className="bg-white rounded-xl border border-slate-200 p-3 flex items-start gap-3 animate-pulse">
                                       <div className="w-8 h-8 rounded-full bg-slate-100 flex-shrink-0" />
@@ -1159,9 +1248,6 @@ function TrackerPageInner() {
                               ) : contacts.length === 0 ? (
                                 /* No contacts empty state */
                                 <div className="flex flex-col items-center justify-center py-6 text-center">
-                                  <div className="w-10 h-10 rounded-xl bg-slate-100 flex items-center justify-center mb-3">
-                                    <ScanSearch className="h-5 w-5 text-slate-300" />
-                                  </div>
                                   <p className="text-sm font-semibold text-slate-500">No contacts found</p>
                                   <p className="text-xs text-slate-400 mt-0.5">Try re-crawling — DDG results vary per session.</p>
                                   {canCrawl && (
@@ -1174,7 +1260,7 @@ function TrackerPageInner() {
                                   )}
                                 </div>
                               ) : (
-                                <div className="grid grid-cols-2 gap-3">
+                                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                                   {contacts.map((contact) => (
                                     <div key={contact.id} className="bg-white rounded-xl border border-slate-200 p-3 flex items-start gap-3">
                                       {/* Avatar */}
@@ -1290,19 +1376,24 @@ function TrackerPageInner() {
       {/* ─── JOB SEARCH TAB ─── */}
       {tab === 'job-search' && (
         <>
-          <div className="grid grid-cols-3 gap-4 mb-6">
+          {/* Desktop/tablet: clickable stat cards double as the filter.
+              Mobile: the same filter as a compact pill row below instead -
+              never both at once, same pattern as the other three tabs. */}
+          <div className="hidden sm:grid sm:grid-cols-3 gap-4 mb-6">
             {[
-              { label: 'Saved', value: jobSearchCounts.saved, classes: 'bg-slate-100 text-slate-600' },
-              { label: 'Applied', value: jobSearchCounts.applied, classes: 'bg-emerald-100 text-emerald-600' },
-              { label: 'Skipped', value: jobSearchCounts.skipped, classes: 'bg-gray-100 text-gray-500' },
-            ].map(({ label, value, classes }) => (
+              { label: 'Saved', value: jobSearchCounts.saved, Icon: BookmarkCheck, iconBg: 'bg-gradient-to-br from-slate-50 to-slate-200', iconColor: 'text-slate-600' },
+              { label: 'Applied', value: jobSearchCounts.applied, Icon: Send, iconBg: 'bg-gradient-to-br from-emerald-50 to-emerald-200', iconColor: 'text-emerald-600' },
+              { label: 'Skipped', value: jobSearchCounts.skipped, Icon: XCircle, iconBg: 'bg-gradient-to-br from-gray-50 to-gray-200', iconColor: 'text-gray-500' },
+            ].map(({ label, value, Icon, iconBg, iconColor }) => (
               <button
                 key={label}
                 onClick={() => setJobSearchStatusFilter(jobSearchStatusFilter === label.toLowerCase() as JobSearchApplicationStatus ? 'all' : label.toLowerCase() as JobSearchApplicationStatus)}
                 className={cn('bg-white rounded-2xl border shadow-sm p-5 flex items-center gap-4 text-left transition-all hover:shadow-md',
                   jobSearchStatusFilter === label.toLowerCase() ? 'border-indigo-300 ring-1 ring-indigo-200' : 'border-slate-100')}
               >
-                <div className={cn('w-10 h-10 rounded-xl flex items-center justify-center flex-shrink-0 text-sm font-bold', classes)}>{value}</div>
+                <div className={cn('w-8 h-8 rounded-xl flex items-center justify-center flex-shrink-0 shadow-sm ring-1 ring-black/5', iconBg)}>
+                  <Icon className={cn('h-4 w-4', iconColor)} />
+                </div>
                 <div>
                   <p className="text-2xl font-bold text-slate-900 leading-none">{value}</p>
                   <p className="text-xs text-slate-500 mt-1">{label}</p>
@@ -1311,14 +1402,14 @@ function TrackerPageInner() {
             ))}
           </div>
 
-          <div className="flex items-center gap-2 mb-4">
+          <div className="flex sm:hidden items-center gap-2 mb-4 flex-wrap">
             <span className="text-xs text-slate-500 font-medium">Filter:</span>
             {(['all', ...JOB_SEARCH_STATUS_ORDER] as const).map((s) => (
               <button
                 key={s}
                 onClick={() => setJobSearchStatusFilter(s)}
                 className={cn('px-3 py-1 rounded-full text-xs font-semibold border transition-colors',
-                  jobSearchStatusFilter === s ? 'bg-slate-900 text-white border-slate-900' : 'bg-white text-slate-600 border-slate-200 hover:border-slate-400')}
+                  jobSearchStatusFilter === s ? 'bg-indigo-600 text-white border-indigo-600 shadow-sm' : 'bg-white text-slate-600 border-slate-200 hover:border-slate-400')}
               >
                 {s === 'all' ? `All (${jobSearchApplications.length})` : `${JOB_SEARCH_STATUS_META[s].label} (${jobSearchCounts[s]})`}
               </button>
@@ -1334,11 +1425,8 @@ function TrackerPageInner() {
                 </div>
               </div>
             ) : filteredJobSearchApplications.length === 0 ? (
-              <div className="flex flex-col items-center justify-center h-56">
-                <div className="w-14 h-14 rounded-2xl bg-indigo-50 flex items-center justify-center mb-4">
-                  <Search className="h-7 w-7 text-indigo-200" />
-                </div>
-                <p className="font-medium text-slate-600">No tracked jobs here yet</p>
+              <div className="flex flex-col items-center justify-center h-56 text-center">
+                <p className="font-semibold text-slate-500">No tracked jobs here yet</p>
                 <p className="text-sm text-slate-400 mt-1">
                   {jobSearchStatusFilter === 'all' ? 'Mark a result as applied in Recent Job Search to see it here' : `No ${jobSearchStatusFilter} jobs.`}
                 </p>
@@ -1385,6 +1473,16 @@ function TrackerPageInner() {
                         <TableCell className="text-xs text-slate-400">{formatDate(app.discovered_at)}</TableCell>
                         <TableCell>
                           <div className="flex gap-1 justify-end">
+                            {docCountFor(app.id, 'source_application_id') > 0 && (
+                              <button
+                                onClick={() => router.push(`/my-docs?q=${encodeURIComponent(`${app.role} at ${app.company}`)}`)}
+                                title="View generated documents for this job"
+                                className="h-7 px-2 rounded-lg flex items-center gap-1 text-xs text-slate-500 hover:text-indigo-600 hover:bg-indigo-50 transition-colors font-medium border border-slate-200 hover:border-indigo-200"
+                              >
+                                <FolderOpen className="h-3 w-3" />
+                                {docCountFor(app.id, 'source_application_id')}
+                              </button>
+                            )}
                             <Link href={app.job_url} target="_blank">
                               <button className="h-7 px-2 rounded-lg flex items-center gap-1 text-xs text-slate-500 hover:text-indigo-600 hover:bg-indigo-50 transition-colors font-medium border border-slate-200 hover:border-indigo-200">
                                 <ExternalLink className="h-3 w-3" />
@@ -1403,7 +1501,7 @@ function TrackerPageInner() {
                                   <FileSearch className="h-3.5 w-3.5 text-slate-500" />
                                   Resume Tailor
                                 </DropdownMenuItem>
-                                <DropdownMenuItem onClick={() => router.push(`/cover-letter?company=${encodeURIComponent(app.company)}&role=${encodeURIComponent(app.role)}`)}>
+                                <DropdownMenuItem onClick={() => router.push(`/cover-letter?job_search_application_id=${app.id}&company=${encodeURIComponent(app.company)}&role=${encodeURIComponent(app.role)}`)}>
                                   <PenLine className="h-3.5 w-3.5 text-slate-500" />
                                   Cover Letter
                                 </DropdownMenuItem>
@@ -1432,27 +1530,33 @@ function TrackerPageInner() {
 
       {/* Add/Edit Application Dialog */}
       <Dialog open={showForm} onOpenChange={setShowForm}>
-        <DialogContent className="max-w-lg rounded-2xl">
+        {/* w-[90%] overrides the shared Dialog's default calc(100%-2rem)
+            (only ~1rem margin per side, felt edge-to-edge on a phone) -
+            scoped to just this dialog, not the shared component, so other
+            dialogs across the app aren't affected. Unchanged at sm+, where
+            max-w-lg is still the binding constraint either way. */}
+        <DialogContent className="w-[90%] max-w-lg rounded-2xl">
           <DialogHeader>
             <DialogTitle className="text-lg font-bold">{editing ? 'Edit Application' : 'Add Application'}</DialogTitle>
           </DialogHeader>
           <form onSubmit={handleSubmit(onSubmit)} className="space-y-4">
-            <div className="grid grid-cols-2 gap-4">
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
               <div className="space-y-1.5">
-                <Label>Company</Label>
-                <Input placeholder="Acme Corp" {...register('company')} />
+                <Label>Company <span className="text-red-500">*</span></Label>
+                <Input placeholder="Acme Corp" maxLength={200} {...register('company')} />
                 {errors.company && <p className="text-xs text-destructive">{errors.company.message}</p>}
               </div>
               <div className="space-y-1.5">
-                <Label>Role</Label>
-                <Input placeholder="Software Engineer" {...register('role')} />
+                <Label>Role <span className="text-red-500">*</span></Label>
+                <Input placeholder="Software Engineer" maxLength={200} {...register('role')} />
                 {errors.role && <p className="text-xs text-destructive">{errors.role.message}</p>}
               </div>
             </div>
-            <div className="grid grid-cols-2 gap-4">
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
               <div className="space-y-1.5">
-                <Label>Applied date</Label>
+                <Label>Applied date <span className="text-red-500">*</span></Label>
                 <Input type="date" {...register('applied_at')} />
+                {errors.applied_at && <p className="text-xs text-destructive">{errors.applied_at.message}</p>}
               </div>
               <div className="space-y-1.5">
                 <Label>Status</Label>
@@ -1467,7 +1571,7 @@ function TrackerPageInner() {
               <Input type="date" {...register('follow_up_date')} />
               <p className="text-xs text-slate-400">Once this date passes, the application shows as Overdue - unless its status is Rejected or Withdrawn.</p>
             </div>
-            <div className="grid grid-cols-2 gap-4">
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
               <div className="space-y-1.5">
                 <Label>Salary min ($)</Label>
                 <Input type="number" placeholder="80000" {...register('salary_min')} />
@@ -1479,7 +1583,7 @@ function TrackerPageInner() {
             </div>
             <div className="space-y-1.5">
               <Label>Notes</Label>
-              <Textarea rows={3} placeholder="Any notes about this application…" className="resize-none" {...register('notes')} />
+              <Textarea rows={3} maxLength={3000} placeholder="Any notes about this application…" className="resize-none" {...register('notes')} />
             </div>
             <DialogFooter>
               <Button type="button" variant="outline" onClick={() => setShowForm(false)} className="rounded-xl">Cancel</Button>
@@ -1489,6 +1593,26 @@ function TrackerPageInner() {
               </Button>
             </DialogFooter>
           </form>
+        </DialogContent>
+      </Dialog>
+
+      {/* View Note Dialog */}
+      <Dialog open={!!viewingNotes} onOpenChange={(open) => !open && setViewingNotes(null)}>
+        <DialogContent className="w-[90%] max-w-md rounded-2xl">
+          <DialogHeader>
+            <DialogTitle className="text-lg font-bold">{viewingNotes?.company} · {viewingNotes?.role}</DialogTitle>
+          </DialogHeader>
+          <p className="text-sm text-slate-600 whitespace-pre-wrap">{viewingNotes?.notes}</p>
+          <DialogFooter>
+            <Button type="button" variant="outline" onClick={() => setViewingNotes(null)} className="rounded-xl">Close</Button>
+            <Button
+              type="button"
+              onClick={() => { if (viewingNotes) openEdit(viewingNotes); setViewingNotes(null) }}
+              className="gradient-brand text-white border-0 shadow-brand-sm hover:opacity-90 transition-opacity rounded-xl"
+            >
+              Edit
+            </Button>
+          </DialogFooter>
         </DialogContent>
       </Dialog>
     </div>

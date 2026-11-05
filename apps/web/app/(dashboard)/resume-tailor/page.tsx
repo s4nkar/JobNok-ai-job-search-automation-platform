@@ -82,6 +82,7 @@ function ResumeTailorInner() {
   const router = useRouter()
   const opportunityId = searchParams.get('opportunity_id')
   const jobSearchApplicationId = searchParams.get('job_search_application_id')
+  const jobApplicationId = searchParams.get('job_application_id')
   const trackerCompany = searchParams.get('company')
   const trackerRole = searchParams.get('role')
 
@@ -182,6 +183,7 @@ function ResumeTailorInner() {
     formData.append('job_description', jd)
     if (opportunityId) formData.append('opportunity_id', opportunityId)
     if (jobSearchApplicationId) formData.append('job_search_application_id', jobSearchApplicationId)
+    if (jobApplicationId) formData.append('job_application_id', jobApplicationId)
 
     try {
       const res = await apiFetch('/api/ai/tailor', { method: 'POST', body: formData })
@@ -197,19 +199,6 @@ function ResumeTailorInner() {
         setResult(parsed)
         if (parsed.ai.status === 'degraded') {
           toast({ title: 'AI prose unavailable', description: 'Showing the deterministic match score and keywords only.' })
-        }
-        if (opportunityId) {
-          await apiFetch(`/api/startup-hunt/opportunities/${opportunityId}/artifacts`, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-              artifact_type: 'resume_analysis',
-              tool_used: 'resume-tailor',
-              content: JSON.stringify(parsed),
-              metadata: { match_score: parsed.analysis.match_score, company: lead?.company_name, role: lead?.role_title },
-            }),
-          })
-          toast({ title: 'Analysis saved to lead' })
         }
       }
     } catch {
@@ -236,7 +225,6 @@ function ResumeTailorInner() {
         body: JSON.stringify({
           template_id: 'standard',
           cv_data,
-          opportunity_id: opportunityId || undefined,
         }),
       })
       if (!res.ok) {

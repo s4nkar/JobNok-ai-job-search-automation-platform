@@ -26,6 +26,7 @@ class CoverLetterRequest(BaseModel):
     # browser visit instead of piling up a new row per click.
     opportunity_id: str | None = None
     job_search_application_id: str | None = None
+    job_application_id: str | None = None
     session_id: str | None = None
 
 
@@ -50,6 +51,7 @@ class CoverLetterSessionSummary(BaseModel):
     created_at: str
     source_opportunity_id: str | None = None
     source_application_id: str | None = None
+    source_job_application_id: str | None = None
 
 
 class CoverLetterSessionListResponse(BaseModel):
@@ -67,6 +69,7 @@ class CoverLetterSessionDetail(BaseModel):
     created_at: str
     source_opportunity_id: str | None = None
     source_application_id: str | None = None
+    source_job_application_id: str | None = None
 
 
 class CoverLetterTitleUpdateRequest(BaseModel):

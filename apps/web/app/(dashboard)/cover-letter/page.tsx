@@ -39,6 +39,7 @@ function CoverLetterInner() {
   const searchParams = useSearchParams()
   const opportunityId = searchParams.get('opportunity_id')
   const jobSearchApplicationId = searchParams.get('job_search_application_id')
+  const jobApplicationId = searchParams.get('job_application_id')
   const trackerCompany = searchParams.get('company')
   const trackerRole = searchParams.get('role')
   const reopenSessionId = searchParams.get('session_id')
@@ -148,6 +149,7 @@ function CoverLetterInner() {
           ...data,
           opportunity_id: opportunityId || undefined,
           job_search_application_id: jobSearchApplicationId || undefined,
+          job_application_id: jobApplicationId || undefined,
           session_id: sessionId || undefined,
         }),
       })
@@ -180,19 +182,6 @@ function CoverLetterInner() {
         setOutput((prev) => prev + chunk)
       }
 
-      if (opportunityId && fullText.trim()) {
-        await apiFetch(`/api/startup-hunt/opportunities/${opportunityId}/artifacts`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            artifact_type: 'cover_letter',
-            tool_used: 'cover-letter',
-            content: fullText,
-            metadata: { company: data.company, role: data.role },
-          }),
-        })
-        toast({ title: 'Cover letter saved to lead' })
-      }
     } catch {
       setError('Network error. Please try again.')
     }

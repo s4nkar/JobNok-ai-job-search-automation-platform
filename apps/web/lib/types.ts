@@ -172,6 +172,7 @@ export interface SessionSummary {
   // Lets My Docs group this resume with a cover letter saved for the same job.
   source_opportunity_id: string | null
   source_application_id: string | null
+  source_job_application_id: string | null
 }
 
 export interface CoverLetterSessionSummary {
@@ -181,6 +182,7 @@ export interface CoverLetterSessionSummary {
   created_at: string
   source_opportunity_id: string | null
   source_application_id: string | null
+  source_job_application_id: string | null
 }
 
 export interface CoverLetterSessionDetail {
@@ -194,6 +196,7 @@ export interface CoverLetterSessionDetail {
   created_at: string
   source_opportunity_id: string | null
   source_application_id: string | null
+  source_job_application_id: string | null
 }
 
 export type TemplateId =
@@ -335,6 +338,7 @@ export interface InterviewPrepSessionSummary {
   created_at: string
   source_opportunity_id: string | null
   source_application_id: string | null
+  source_job_application_id: string | null
 }
 
 export interface InterviewPrepSessionDetail {
@@ -347,6 +351,7 @@ export interface InterviewPrepSessionDetail {
   created_at: string
   source_opportunity_id: string | null
   source_application_id: string | null
+  source_job_application_id: string | null
 }
 
 export interface SalaryResearchResult {
@@ -497,19 +502,6 @@ export interface StartupHuntResult {
   source_bucket?: string
   cache_hit?: boolean
   description_text?: string | null
-}
-
-export type OpportunityArtifactType = 'resume_analysis' | 'cover_letter' | 'interview_prep'
-
-export interface OpportunityArtifact {
-  id: string
-  user_id: string
-  opportunity_id: string | null
-  artifact_type: OpportunityArtifactType
-  tool_used: string
-  content: string
-  metadata: Record<string, unknown>
-  created_at: string
 }
 
 export type StartupHuntSourceType =

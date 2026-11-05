@@ -12,19 +12,24 @@ class CoverLetterSessionRepository(UserScopedRepository[CoverLetterSession]):
     model = CoverLetterSession
 
     async def get_by_source(
-        self, user_id: str, *, source_opportunity_id: str | None = None, source_application_id: str | None = None,
+        self, user_id: str, *,
+        source_opportunity_id: str | None = None,
+        source_application_id: str | None = None,
+        source_job_application_id: str | None = None,
     ) -> CoverLetterSession | None:
         """The existing session already linked to this job, if any - the
         upsert target for "only one saved cover letter per job" (see
-        routes.py). Exactly one of the two ids should be given; if both are
+        routes.py). Exactly one of the three ids should be given; if all are
         None this returns None rather than matching every unlinked row."""
-        if not source_opportunity_id and not source_application_id:
+        if not source_opportunity_id and not source_application_id and not source_job_application_id:
             return None
         stmt = self._scoped(select(self.model), user_id)
         if source_opportunity_id:
             stmt = stmt.where(self.model.source_opportunity_id == source_opportunity_id)
-        else:
+        elif source_application_id:
             stmt = stmt.where(self.model.source_application_id == source_application_id)
+        else:
+            stmt = stmt.where(self.model.source_job_application_id == source_job_application_id)
         stmt = stmt.order_by(self.model.created_at.desc()).limit(1)
         return (await self.session.execute(stmt)).scalar_one_or_none()
 
@@ -39,6 +44,7 @@ class CoverLetterSessionRepository(UserScopedRepository[CoverLetterSession]):
         content: str,
         source_opportunity_id: str | None = None,
         source_application_id: str | None = None,
+        source_job_application_id: str | None = None,
     ) -> CoverLetterSession:
         return await self.create(
             user_id,
@@ -49,6 +55,7 @@ class CoverLetterSessionRepository(UserScopedRepository[CoverLetterSession]):
             content=content,
             source_opportunity_id=source_opportunity_id,
             source_application_id=source_application_id,
+            source_job_application_id=source_job_application_id,
         )
 
     async def set_title(self, user_id: str, id_: str, title: str) -> CoverLetterSession | None:

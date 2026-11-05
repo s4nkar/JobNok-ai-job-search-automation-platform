@@ -17,7 +17,6 @@ from app.modules.startup_hunt.models import (  # noqa: F401
     StartupHuntCompany,
     StartupHuntOpportunity,
     StartupHuntContact,
-    OpportunityArtifact,
     StartupHuntSource,
     CompanyRegistry,
 )

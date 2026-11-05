@@ -48,6 +48,7 @@ function InterviewPrepInner() {
   const searchParams = useSearchParams()
   const opportunityId = searchParams.get('opportunity_id')
   const jobSearchApplicationId = searchParams.get('job_search_application_id')
+  const jobApplicationId = searchParams.get('job_application_id')
   const trackerCompany = searchParams.get('company')
   const trackerRole = searchParams.get('role')
   const reopenSessionId = searchParams.get('session_id')
@@ -160,6 +161,7 @@ function InterviewPrepInner() {
           job_description: jd, company: knownCompany, role: knownRole,
           opportunity_id: opportunityId || undefined,
           job_search_application_id: jobSearchApplicationId || undefined,
+          job_application_id: jobApplicationId || undefined,
           session_id: sessionId || undefined,
         }),
       })
@@ -180,20 +182,6 @@ function InterviewPrepInner() {
         // rest of this visit so a regenerate patches the same row instead
         // of leaving it to drift out of sync.
         setSessionId(result.session_id)
-
-        if (opportunityId && qs.length) {
-          await apiFetch(`/api/startup-hunt/opportunities/${opportunityId}/artifacts`, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-              artifact_type: 'interview_prep',
-              tool_used: 'interview-prep',
-              content: JSON.stringify(qs),
-              metadata: { question_count: qs.length, company: lead?.company_name, role: lead?.role_title },
-            }),
-          })
-          toast({ title: 'Interview prep saved to lead' })
-        }
       }
     } catch {
       setError('Network error. Please try again.')

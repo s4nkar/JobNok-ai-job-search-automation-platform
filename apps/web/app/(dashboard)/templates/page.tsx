@@ -150,21 +150,30 @@ export default function TemplatesPage() {
   return (
     <div className="animate-fade-in">
       {/* Page Header */}
-      <div className="flex items-start justify-between mb-8">
-        <div className="flex items-center gap-4">
-          <div className="hidden sm:flex page-header-icon bg-indigo-100">
-            <FileText className="h-5 w-5 text-indigo-600" />
-          </div>
-          <div>
-            <h1 className="text-2xl font-bold text-slate-900 tracking-tight">Smart Templates</h1>
-            <p className="text-slate-500 text-sm mt-0.5">
-              Create reusable messages with <code className="bg-slate-100 px-1.5 py-0.5 rounded-md text-xs font-mono text-slate-600">{'{{placeholder}}'}</code> auto-fill
-            </p>
-          </div>
+      <div className="flex items-center gap-4 mb-6">
+        <div className="hidden sm:flex page-header-icon bg-indigo-100">
+          <FileText className="h-5 w-5 text-indigo-600" />
         </div>
+        <div>
+          <h1 className="text-2xl font-bold text-slate-900 tracking-tight">Smart Templates</h1>
+          <p className="text-slate-500 text-sm mt-0.5">
+            Create reusable messages with <code className="bg-slate-100 px-1.5 py-0.5 rounded-md text-xs font-mono text-slate-600">{'{{placeholder}}'}</code> auto-fill
+          </p>
+        </div>
+      </div>
+
+      {/* Button moved below the header - squeezing it next to the title/
+          description on one row left too little width on narrow screens
+          and made the description wrap awkwardly, same issue and same fix
+          as Tracker's header. One row, wrapping only if it truly doesn't
+          fit. */}
+      <div className="flex items-center justify-between gap-3 mb-6 flex-wrap">
+        <p className="text-xs text-slate-400">
+          {allTemplates.length} template{allTemplates.length === 1 ? '' : 's'} available
+        </p>
         <Button
           onClick={() => setShowCreate(true)}
-          className="gradient-brand text-white border-0 shadow-sm hover:opacity-90 transition-opacity rounded-xl h-9 text-sm px-5"
+          className="ml-auto gradient-brand text-white border-0 shadow-sm hover:opacity-90 transition-opacity rounded-xl h-9 text-sm px-5"
         >
           <Plus className="h-3.5 w-3.5 mr-2" />
           New Template

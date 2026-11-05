@@ -16,6 +16,7 @@ from app.modules.cover_letter.repository import CoverLetterSessionRepository
 from app.modules.cover_letter.schemas import CoverLetterRequest, CoverLetterSessionSummary
 from app.modules.job_search.models import JobSearchApplication
 from app.modules.startup_hunt.models import StartupHuntOpportunity
+from app.modules.tracker.models import JobApplication
 
 
 async def verify_opportunity_ownership(db: AsyncSession, user_id: str, opportunity_id: str) -> bool:
@@ -37,6 +38,19 @@ async def verify_application_ownership(db: AsyncSession, user_id: str, applicati
         await db.execute(
             select(JobSearchApplication.id).where(
                 JobSearchApplication.id == application_id, JobSearchApplication.user_id == user_id
+            )
+        )
+    ).scalar_one_or_none()
+    return row is not None
+
+
+async def verify_job_application_ownership(db: AsyncSession, user_id: str, job_application_id: str) -> bool:
+    """True if job_application_id exists and belongs to user_id - the
+    manually-added-tracker-row counterpart to the two checks above."""
+    row = (
+        await db.execute(
+            select(JobApplication.id).where(
+                JobApplication.id == job_application_id, JobApplication.user_id == user_id
             )
         )
     ).scalar_one_or_none()
@@ -65,15 +79,21 @@ async def resolve_session(db: AsyncSession, user_id: str, body: CoverLetterReque
 
     source_opportunity_id = None
     source_application_id = None
+    source_job_application_id = None
     if body.opportunity_id and await verify_opportunity_ownership(db, user_id, body.opportunity_id):
         source_opportunity_id = body.opportunity_id
     elif body.job_search_application_id and await verify_application_ownership(db, user_id, body.job_search_application_id):
         source_application_id = body.job_search_application_id
+    elif body.job_application_id and await verify_job_application_ownership(db, user_id, body.job_application_id):
+        source_job_application_id = body.job_application_id
 
     existing = None
-    if source_opportunity_id or source_application_id:
+    if source_opportunity_id or source_application_id or source_job_application_id:
         existing = await repo.get_by_source(
-            user_id, source_opportunity_id=source_opportunity_id, source_application_id=source_application_id,
+            user_id,
+            source_opportunity_id=source_opportunity_id,
+            source_application_id=source_application_id,
+            source_job_application_id=source_job_application_id,
         )
     elif body.session_id:
         existing = await repo.get(user_id, body.session_id)
@@ -89,7 +109,9 @@ async def resolve_session(db: AsyncSession, user_id: str, body: CoverLetterReque
             user_id,
             company=body.company, role=body.role, selling_points=body.selling_points,
             resume_text=body.resume_text, content="",
-            source_opportunity_id=source_opportunity_id, source_application_id=source_application_id,
+            source_opportunity_id=source_opportunity_id,
+            source_application_id=source_application_id,
+            source_job_application_id=source_job_application_id,
         )
     await db.commit()
     return session
@@ -119,6 +141,7 @@ async def list_sessions_for_docs_page(db: AsyncSession, user_id: str) -> list[Co
             created_at=s.created_at.isoformat(),
             source_opportunity_id=str(s.source_opportunity_id) if s.source_opportunity_id else None,
             source_application_id=str(s.source_application_id) if s.source_application_id else None,
+            source_job_application_id=str(s.source_job_application_id) if s.source_job_application_id else None,
         )
         for s in sessions
     ]

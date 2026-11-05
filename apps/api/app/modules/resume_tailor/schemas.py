@@ -101,7 +101,6 @@ class ThumbnailsResponse(BaseModel):
 class PdfRequest(BaseModel):
     template_id: str
     cv_data: dict[str, Any]
-    opportunity_id: str | None = None
 
 
 class DraftSaveRequest(BaseModel):
@@ -142,6 +141,7 @@ class SessionSummary(BaseModel):
     # equivalent for the other half of that grouping.
     source_opportunity_id: str | None = None
     source_application_id: str | None = None
+    source_job_application_id: str | None = None
 
 
 class SessionListResponse(BaseModel):

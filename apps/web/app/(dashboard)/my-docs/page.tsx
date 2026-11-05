@@ -1,10 +1,10 @@
 'use client'
 
-import { useState } from 'react'
-import { useRouter } from 'next/navigation'
+import { Suspense, useState } from 'react'
+import { useRouter, useSearchParams } from 'next/navigation'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
-import { Loader2, Pencil, Sparkles, FolderOpen, FileText, PenLine, Briefcase, MessageSquare } from 'lucide-react'
-import { Button, useToast, cn, formatDate } from '@jobnok/ui'
+import { Loader2, Pencil, Sparkles, FolderOpen, FileText, PenLine, Briefcase, MessageSquare, Search, X } from 'lucide-react'
+import { Button, Input, useToast, cn, formatDate } from '@jobnok/ui'
 import { ScaledResumeThumb } from '@/components/shared/ScaledResumeThumb'
 import { apiFetch, apiGet } from '@/lib/api'
 import { queryKeys } from '@/lib/queryKeys'
@@ -12,9 +12,9 @@ import { CoverLetterSessionSummary, InterviewPrepSessionSummary, SessionSummary 
 
 // A generic row shape the grid renders from, kept separate from
 // SessionSummary/CoverLetterSessionSummary/InterviewPrepSessionSummary's own
-// fields. sourceOpportunityId/sourceApplicationId power the grouping below -
-// two or more rows sharing either id get bundled into a JobGroupCard instead
-// of appearing as unrelated cards.
+// fields. sourceOpportunityId/sourceApplicationId/sourceJobApplicationId power
+// the grouping below - two or more rows sharing any one of the three get
+// bundled into a JobGroupCard instead of appearing as unrelated cards.
 interface DocRow {
   id: string
   kind: 'resume' | 'cover_letter' | 'interview_prep'
@@ -28,6 +28,7 @@ interface DocRow {
   openHref: string
   sourceOpportunityId: string | null
   sourceApplicationId: string | null
+  sourceJobApplicationId: string | null
 }
 
 function toResumeDocRow(s: SessionSummary): DocRow {
@@ -44,6 +45,7 @@ function toResumeDocRow(s: SessionSummary): DocRow {
     openHref: `/resume-tailor/editor?session_id=${s.id}`,
     sourceOpportunityId: s.source_opportunity_id,
     sourceApplicationId: s.source_application_id,
+    sourceJobApplicationId: s.source_job_application_id,
   }
 }
 
@@ -61,6 +63,7 @@ function toCoverLetterDocRow(s: CoverLetterSessionSummary): DocRow {
     openHref: `/cover-letter?session_id=${s.id}`,
     sourceOpportunityId: s.source_opportunity_id,
     sourceApplicationId: s.source_application_id,
+    sourceJobApplicationId: s.source_job_application_id,
   }
 }
 
@@ -78,12 +81,14 @@ function toInterviewPrepDocRow(s: InterviewPrepSessionSummary): DocRow {
     openHref: `/interview-prep?session_id=${s.id}`,
     sourceOpportunityId: s.source_opportunity_id,
     sourceApplicationId: s.source_application_id,
+    sourceJobApplicationId: s.source_job_application_id,
   }
 }
 
 function groupKeyFor(row: DocRow): string | null {
   if (row.sourceOpportunityId) return `opp:${row.sourceOpportunityId}`
   if (row.sourceApplicationId) return `app:${row.sourceApplicationId}`
+  if (row.sourceJobApplicationId) return `job:${row.sourceJobApplicationId}`
   return null
 }
 
@@ -206,13 +211,21 @@ function DocCard({ row, onRename }: { row: DocRow; onRename: (row: DocRow, newLa
 function JobGroupCard({ rows, onRename }: { rows: DocRow[]; onRename: (row: DocRow, newLabel: string) => void }) {
   const headerLabel = rows.find(r => r.kind === 'resume')?.label ?? rows[0].label
   return (
-    <div className="rounded-xl border border-indigo-100 bg-indigo-50/40 p-2 space-y-2">
-      <div className="flex items-center gap-1.5 px-1 pt-0.5">
+    <div className="col-span-2 rounded-xl border border-indigo-100 bg-indigo-50/40 p-3 space-y-2.5">
+      <div className="flex items-center gap-1.5 px-0.5">
         <Briefcase className="h-3.5 w-3.5 text-indigo-400 shrink-0" />
         <span className="text-xs font-semibold text-indigo-700 truncate">{headerLabel}</span>
+        <span className="text-[10px] text-indigo-400 ml-auto shrink-0">{rows.length} documents</span>
       </div>
-      <div className="space-y-2">
-        {rows.map(row => <DocCard key={row.id} row={row} onRename={onRename} />)}
+      {/* flex-wrap + flex-1, not a fixed grid-cols-2 - a 3rd (or 5th, etc.)
+          card then stretches to fill its own row instead of sitting alone
+          in a half-width cell with dead space beside it. */}
+      <div className="flex flex-wrap gap-2.5">
+        {rows.map(row => (
+          <div key={row.id} className="flex-1 min-w-[140px]">
+            <DocCard row={row} onRename={onRename} />
+          </div>
+        ))}
       </div>
     </div>
   )
@@ -250,10 +263,28 @@ function buildGridItems(allRows: DocRow[]): GridItem[] {
   return items
 }
 
-export default function MyDocsPage() {
+function rowMatchesQuery(row: DocRow, needle: string): boolean {
+  return row.label.toLowerCase().includes(needle)
+}
+
+// A group stays visible (with ALL its rows, not just the matching one) if
+// any single document in it matches - searching "Google" for a job whose
+// cover letter got renamed to something else shouldn't split the group or
+// hide the rest of that job's documents.
+function filterGridItems(items: GridItem[], query: string): GridItem[] {
+  const needle = query.trim().toLowerCase()
+  if (!needle) return items
+  return items.filter(item =>
+    item.type === 'single' ? rowMatchesQuery(item.row, needle) : item.rows.some(r => rowMatchesQuery(r, needle))
+  )
+}
+
+function MyDocsPageInner() {
   const router = useRouter()
   const queryClient = useQueryClient()
   const { toast } = useToast()
+  const searchParams = useSearchParams()
+  const [query, setQuery] = useState(() => searchParams.get('q') ?? '')
 
   const resumeQuery = useQuery({
     queryKey: queryKeys.tailoringSessions,
@@ -277,6 +308,7 @@ export default function MyDocsPage() {
     ...(interviewPrepQuery.data?.sessions ?? []).map(toInterviewPrepDocRow),
   ]
   const gridItems = buildGridItems(allRows)
+  const filteredGridItems = filterGridItems(gridItems, query)
 
   const RENAME_ENDPOINT: Record<DocRow['kind'], (id: string) => string> = {
     resume: (id) => `/api/ai/tailor/${id}/title`,
@@ -338,6 +370,26 @@ export default function MyDocsPage() {
         </div>
       </div>
 
+      {!isLoading && !isError && allRows.length > 0 && (
+        <div className="relative mb-6 max-w-sm">
+          <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-slate-400" />
+          <Input
+            value={query}
+            onChange={(e) => setQuery(e.target.value)}
+            placeholder="Search by company or role…"
+            className="pl-9 pr-9 h-9 text-sm rounded-xl"
+          />
+          {query && (
+            <button
+              onClick={() => setQuery('')}
+              className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-300 hover:text-slate-500 transition-colors"
+            >
+              <X className="h-3.5 w-3.5" />
+            </button>
+          )}
+        </div>
+      )}
+
       {isLoading ? (
         <div className="flex flex-col items-center justify-center h-56 bg-white rounded-2xl border border-slate-100 shadow-sm">
           <Loader2 className="h-8 w-8 animate-spin text-indigo-400" />
@@ -362,14 +414,27 @@ export default function MyDocsPage() {
             Go to Resume Tailor
           </Button>
         </div>
+      ) : filteredGridItems.length === 0 ? (
+        <div className="flex flex-col items-center justify-center h-56 bg-white rounded-2xl border border-slate-100 shadow-sm px-4 text-center">
+          <p className="font-medium text-slate-600">No documents match &quot;{query}&quot;</p>
+          <p className="text-sm text-slate-400 mt-1">Try a different company or role</p>
+        </div>
       ) : (
         <div className="grid grid-cols-2 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 gap-4">
-          {gridItems.map((item) => item.type === 'single'
+          {filteredGridItems.map((item) => item.type === 'single'
             ? <DocCard key={item.row.id} row={item.row} onRename={handleRename} />
             : <JobGroupCard key={item.rows.map(r => r.id).join(',')} rows={item.rows} onRename={handleRename} />
           )}
         </div>
       )}
     </div>
+  )
+}
+
+export default function MyDocsPage() {
+  return (
+    <Suspense>
+      <MyDocsPageInner />
+    </Suspense>
   )
 }

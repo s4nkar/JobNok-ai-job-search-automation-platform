@@ -172,6 +172,15 @@ class TailoringSession(Base, UUIDPKMixin, CreatedAtMixin):
         ForeignKey("job_search_applications.id", ondelete="SET NULL"),
         nullable=True,
     )
+    # Third linkage column, same rationale - a manually-added (not synced,
+    # not from a Startup Hunt lead) tracker row. Distinct FK from the two
+    # above since it targets job_applications, not startup_hunt_opportunities
+    # or job_search_applications.
+    source_job_application_id: Mapped[uuid.UUID | None] = mapped_column(
+        PG_UUID(as_uuid=True),
+        ForeignKey("job_applications.id", ondelete="SET NULL"),
+        nullable=True,
+    )
     # Which saved resume (if any) this session was tailored from — NULL for a
     # one-off ad-hoc upload. Powers GET /tailor/{id}/original-pdf: only a
     # session with this set has a permanent original to compare against.

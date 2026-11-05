@@ -188,33 +188,6 @@ class StartupHuntSource(Base, UUIDPKMixin, CreatedAtMixin):
     resolution_error: Mapped[str | None] = mapped_column(Text, nullable=True)
 
 
-class OpportunityArtifact(Base, UUIDPKMixin, CreatedAtMixin):
-    __tablename__ = "opportunity_artifacts"
-    __table_args__ = (
-        CheckConstraint(
-            "artifact_type in ('resume_analysis', 'cover_letter', 'interview_prep')",
-            name="opportunity_artifact_type_check",
-        ),
-        Index("opportunity_artifacts_user_idx", "user_id"),
-        Index("opportunity_artifacts_opportunity_idx", "opportunity_id"),
-    )
-
-    user_id: Mapped[uuid.UUID] = mapped_column(
-        PG_UUID(as_uuid=True), ForeignKey("profiles.id", ondelete="CASCADE"), nullable=False
-    )
-    opportunity_id: Mapped[uuid.UUID | None] = mapped_column(
-        PG_UUID(as_uuid=True),
-        ForeignKey("startup_hunt_opportunities.id", ondelete="CASCADE"),
-        nullable=True,
-    )
-    artifact_type: Mapped[str] = mapped_column(Text, nullable=False)
-    tool_used: Mapped[str] = mapped_column(Text, nullable=False)
-    content: Mapped[str] = mapped_column(Text, nullable=False)
-    metadata_: Mapped[dict] = mapped_column(
-        "metadata", JSONB, server_default="{}", nullable=False
-    )
-
-
 class CompanyRegistry(Base, UUIDPKMixin, CreatedAtMixin):
     """Global, deduplicated registry of startups discovered by the background
     crawler pipeline (see discovery/, ingestion/, workers/) - one row per
