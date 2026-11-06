@@ -789,7 +789,7 @@ function TrackerPageInner() {
                               <button
                                 onClick={() => router.push(`/my-docs?q=${encodeURIComponent(`${app.role} at ${app.company}`)}`)}
                                 title="View generated documents for this job"
-                                className="h-7 px-2 rounded-lg flex items-center gap-1 text-xs text-slate-500 hover:text-indigo-600 hover:bg-indigo-50 transition-colors font-medium border border-slate-200 hover:border-indigo-200"
+                                className="h-7 px-2 rounded-lg flex items-center gap-1 whitespace-nowrap text-xs text-slate-500 hover:text-indigo-600 hover:bg-indigo-50 transition-colors font-medium border border-slate-200 hover:border-indigo-200 shrink-0"
                               >
                                 <FolderOpen className="h-3 w-3" />
                                 {docCountFor(app.id, 'source_job_application_id')}
@@ -797,7 +797,7 @@ function TrackerPageInner() {
                             )}
                             <button
                               onClick={() => openEdit(app)}
-                              className="h-7 px-2 rounded-lg flex items-center gap-1 text-xs text-slate-500 hover:text-indigo-600 hover:bg-indigo-50 transition-colors font-medium border border-slate-200 hover:border-indigo-200"
+                              className="h-7 px-2 rounded-lg flex items-center gap-1 whitespace-nowrap text-xs text-slate-500 hover:text-indigo-600 hover:bg-indigo-50 transition-colors font-medium border border-slate-200 hover:border-indigo-200 shrink-0"
                             >
                               <Pencil className="h-3 w-3" />
                               Edit
@@ -932,12 +932,12 @@ function TrackerPageInner() {
                           </TableCell>
                           <TableCell className="text-slate-600 text-xs max-w-[180px] truncate">{lead.role_title}</TableCell>
                           <TableCell>
-                            <span className="flex items-center gap-1 text-xs text-slate-500">
+                            <span className="flex items-center gap-1 text-xs text-slate-500 whitespace-nowrap">
                               <MapPin className="h-3 w-3 flex-shrink-0" />{lead.location}
                             </span>
                           </TableCell>
                           <TableCell>
-                            <span className="inline-flex items-center px-2 py-0.5 rounded-md text-[10px] font-semibold bg-slate-100 text-slate-600 border border-slate-200">
+                            <span className="inline-flex items-center px-2 py-0.5 rounded-md text-[10px] font-semibold bg-slate-100 text-slate-600 border border-slate-200 whitespace-nowrap">
                               {lead.source_name}
                             </span>
                           </TableCell>
@@ -963,7 +963,7 @@ function TrackerPageInner() {
                                 <button
                                   onClick={() => router.push(`/my-docs?q=${encodeURIComponent(`${lead.role_title} at ${lead.company_name}`)}`)}
                                   title="View generated documents for this job"
-                                  className="h-7 px-2 rounded-lg flex items-center gap-1 text-xs text-slate-500 hover:text-indigo-600 hover:bg-indigo-50 transition-colors font-medium border border-slate-200 hover:border-indigo-200"
+                                  className="h-7 px-2 rounded-lg flex items-center gap-1 whitespace-nowrap text-xs text-slate-500 hover:text-indigo-600 hover:bg-indigo-50 transition-colors font-medium border border-slate-200 hover:border-indigo-200 shrink-0"
                                 >
                                   <FolderOpen className="h-3 w-3" />
                                   {docCountFor(lead.id, 'source_opportunity_id')}
@@ -971,7 +971,7 @@ function TrackerPageInner() {
                               )}
                               {applyUrl && (
                                 <Link href={applyUrl} target="_blank">
-                                  <button className="h-7 px-2 rounded-lg flex items-center gap-1 text-xs text-slate-500 hover:text-indigo-600 hover:bg-indigo-50 transition-colors font-medium border border-slate-200 hover:border-indigo-200">
+                                  <button className="h-7 px-2 rounded-lg flex items-center gap-1 whitespace-nowrap text-xs text-slate-500 hover:text-indigo-600 hover:bg-indigo-50 transition-colors font-medium border border-slate-200 hover:border-indigo-200 shrink-0">
                                     <ExternalLink className="h-3 w-3" />
                                     {lead.direct_apply_url ? 'Apply' : lead.company_careers_url ? 'Careers' : 'Open'}
                                   </button>
@@ -1190,11 +1190,11 @@ function TrackerPageInner() {
                           {/* Stage */}
                           <TableCell className="py-3.5">
                             {company.funding_stage && stagePill ? (
-                              <span className={cn('inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-semibold ring-1', stagePill)}>
+                              <span className={cn('inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-semibold ring-1 whitespace-nowrap', stagePill)}>
                                 {company.funding_stage}
                               </span>
                             ) : company.funding_stage ? (
-                              <span className="inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-semibold bg-slate-50 text-slate-500 ring-1 ring-slate-200">
+                              <span className="inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-semibold bg-slate-50 text-slate-500 ring-1 ring-slate-200 whitespace-nowrap">
                                 {company.funding_stage}
                               </span>
                             ) : null}
@@ -1203,7 +1203,7 @@ function TrackerPageInner() {
                           {/* Location */}
                           <TableCell className="py-3.5">
                             {company.location ? (
-                              <span className="flex items-center gap-1 text-xs text-slate-500">
+                              <span className="flex items-center gap-1 text-xs text-slate-500 whitespace-nowrap">
                                 <MapPin className="h-3 w-3 flex-shrink-0 text-slate-300" />{company.location}
                               </span>
                             ) : null}
@@ -1257,7 +1257,7 @@ function TrackerPageInner() {
                                 <button
                                   onClick={() => stopCrawl(company)}
                                   disabled={isStopping}
-                                  className="h-7 px-2.5 rounded-lg flex items-center gap-1 text-xs font-semibold text-red-700 bg-red-50 hover:bg-red-100 border border-red-200 transition-colors disabled:opacity-50"
+                                  className="h-7 px-2 rounded-lg flex items-center gap-1 whitespace-nowrap text-xs font-semibold text-red-700 bg-red-50 hover:bg-red-100 border border-red-200 transition-colors disabled:opacity-50 shrink-0"
                                 >
                                   {isStopping ? <Loader2 className="h-3 w-3 animate-spin" /> : <StopCircle className="h-3 w-3" />}
                                   {isStopping ? 'Stopping…' : 'Stop'}
@@ -1266,7 +1266,7 @@ function TrackerPageInner() {
                               {canCrawl && (
                                 <button
                                   onClick={() => startCrawl(company)}
-                                  className="h-7 px-2.5 rounded-lg flex items-center gap-1 text-xs font-semibold text-indigo-700 bg-indigo-50 hover:bg-indigo-100 border border-indigo-200 transition-colors"
+                                  className="h-7 px-2 rounded-lg flex items-center gap-1 whitespace-nowrap text-xs font-semibold text-indigo-700 bg-indigo-50 hover:bg-indigo-100 border border-indigo-200 transition-colors shrink-0"
                                 >
                                   <Radar className="h-3 w-3" />
                                   {company.crawl_status === 'pending' ? 'Start Crawl' : 'Re-crawl'}
@@ -1295,18 +1295,14 @@ function TrackerPageInner() {
                             <td colSpan={7} className="px-5 py-5">
                               {contactsAreLoading ? (
                                 /* Contacts skeleton */
-                                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                                  {Array.from({ length: 2 }).map((_, i) => (
-                                    <div key={i} className="bg-white rounded-xl border border-slate-200 p-3 flex items-start gap-3 animate-pulse">
-                                      <div className="w-8 h-8 rounded-full bg-slate-100 flex-shrink-0" />
-                                      <div className="flex-1 space-y-2 pt-0.5">
-                                        <div className="h-3 w-32 bg-slate-100 rounded-full" />
-                                        <div className="h-2.5 w-24 bg-slate-100 rounded-full" />
-                                        <div className="flex gap-1.5">
-                                          <div className="h-4 w-16 bg-slate-100 rounded-full" />
-                                          <div className="h-4 w-12 bg-slate-100 rounded-full" />
-                                        </div>
+                                <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-2">
+                                  {Array.from({ length: 4 }).map((_, i) => (
+                                    <div key={i} className="bg-white rounded-lg border border-slate-200 px-3 py-2 flex items-center gap-2.5 animate-pulse">
+                                      <div className="w-7 h-7 rounded-full bg-slate-100 flex-shrink-0" />
+                                      <div className="flex-1 space-y-1.5">
+                                        <div className="h-2.5 w-20 bg-slate-100 rounded-full" />
                                       </div>
+                                      <div className="w-6 h-6 rounded-md bg-slate-100 flex-shrink-0" />
                                     </div>
                                   ))}
                                 </div>
@@ -1318,108 +1314,52 @@ function TrackerPageInner() {
                                   {canCrawl && (
                                     <button
                                       onClick={() => startCrawl(company)}
-                                      className="mt-3 h-7 px-3 rounded-lg flex items-center gap-1.5 text-xs font-semibold text-indigo-700 bg-indigo-50 hover:bg-indigo-100 border border-indigo-200 transition-colors"
+                                      className="mt-3 h-7 px-3 rounded-lg flex items-center gap-1.5 whitespace-nowrap text-xs font-semibold text-indigo-700 bg-indigo-50 hover:bg-indigo-100 border border-indigo-200 transition-colors"
                                     >
                                       <Radar className="h-3 w-3" /> Re-crawl now
                                     </button>
                                   )}
                                 </div>
                               ) : (
-                                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                                <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-2">
                                   {contacts.map((contact) => (
-                                    <div key={contact.id} className="bg-white rounded-xl border border-slate-200 p-3 flex items-start gap-3">
+                                    <div key={contact.id} className="bg-white rounded-lg border border-slate-200 px-3 py-2 flex items-center gap-2.5">
                                       {/* Avatar */}
-                                      <div className="w-8 h-8 rounded-full bg-indigo-100 flex items-center justify-center flex-shrink-0 text-xs font-bold text-indigo-700">
+                                      <div className="w-7 h-7 rounded-full bg-indigo-100 flex items-center justify-center flex-shrink-0 text-[11px] font-bold text-indigo-700">
                                         {(contact.name || '?')[0].toUpperCase()}
                                       </div>
 
-                                      <div className="min-w-0 flex-1">
-                                        {/* Name + title */}
-                                        <p className="text-sm font-semibold text-slate-800 truncate">{contact.name}</p>
-                                        {contact.title && (
-                                          <p className="text-xs text-slate-500 truncate">{contact.title}</p>
-                                        )}
-
-                                        {/* Contact links row */}
-                                        <div className="flex items-center gap-2 mt-1.5 flex-wrap">
-                                          {/* LinkedIn — primary, always show if available */}
-                                          {contact.linkedin_url ? (
-                                            <Link
-                                              href={contact.linkedin_url}
-                                              target="_blank"
-                                              className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-semibold bg-blue-50 text-blue-700 border border-blue-200 hover:bg-blue-100 transition-colors"
-                                            >
-                                              <Linkedin className="h-3 w-3" /> LinkedIn
-                                            </Link>
-                                          ) : (
-                                            <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-semibold bg-slate-50 text-slate-400 border border-slate-200">
-                                              <Linkedin className="h-3 w-3" /> No LinkedIn
-                                            </span>
-                                          )}
-
-                                          {/* Email */}
-                                          {contact.email && (
-                                            <a
-                                              href={`mailto:${contact.email}`}
-                                              className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-semibold bg-indigo-50 text-indigo-700 border border-indigo-200 hover:bg-indigo-100 transition-colors truncate max-w-[160px]"
-                                            >
-                                              <Mail className="h-3 w-3 flex-shrink-0" />
-                                              {contact.email}
-                                            </a>
-                                          )}
-                                        </div>
-
-                                        {/* Verification + citation footer */}
-                                        <div className="flex items-center gap-2 mt-1.5 flex-wrap">
-                                          {/* Verified / Unverified badge */}
-                                          {contact.is_verified ? (
-                                            <Link
-                                              href={contact.verification_url ?? '#'}
-                                              target={contact.verification_url ? '_blank' : undefined}
-                                              title={contact.verification_url
-                                                ? `Confirmed by ${contact.verification_url}`
-                                                : 'Verified by cross-check'}
-                                              className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] font-semibold bg-emerald-50 text-emerald-700 border border-emerald-200 hover:bg-emerald-100 transition-colors"
-                                            >
-                                              <CheckCircle className="h-2.5 w-2.5" />
-                                              Verified
-                                            </Link>
-                                          ) : (
-                                            <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] font-semibold bg-slate-50 text-slate-400 border border-slate-200">
-                                              <AlertCircle className="h-2.5 w-2.5" />
-                                              Unverified
-                                            </span>
-                                          )}
-
-                                          {/* Source pill */}
-                                          <span className={cn(
-                                            'inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-semibold',
-                                            contact.source === 'apollo'
-                                              ? 'bg-slate-100 text-slate-700'
-                                              : 'bg-slate-100 text-slate-500',
-                                          )}>
-                                            {contact.source === 'apollo' ? 'Apollo' : 'Web'}
+                                      {/* Name + verified tick */}
+                                      <div className="min-w-0 flex-1 flex items-center gap-1">
+                                        <p className="text-xs font-semibold text-slate-800 truncate">{contact.name}</p>
+                                        {contact.is_verified && (
+                                          <span title="Verified" className="flex-shrink-0">
+                                            <CheckCircle className="h-3 w-3 text-emerald-500" />
                                           </span>
+                                        )}
+                                      </div>
 
-                                          {/* Citation link — where we originally found them */}
-                                          {contact.source_url && (
-                                            <Link
-                                              href={contact.source_url}
-                                              target="_blank"
-                                              className="flex items-center gap-0.5 text-[10px] text-slate-400 hover:text-slate-600 hover:underline truncate max-w-[160px]"
-                                              title={`Found at: ${contact.source_url}`}
-                                            >
-                                              <ExternalLink className="h-2.5 w-2.5 flex-shrink-0" />
-                                              {(() => {
-                                                try {
-                                                  return new URL(contact.source_url).hostname.replace(/^www\./, '')
-                                                } catch {
-                                                  return 'source'
-                                                }
-                                              })()}
-                                            </Link>
-                                          )}
-                                        </div>
+                                      {/* Contact links — whatever's available, icon-only */}
+                                      <div className="flex items-center gap-0.5 flex-shrink-0">
+                                        {contact.linkedin_url && (
+                                          <Link
+                                            href={contact.linkedin_url}
+                                            target="_blank"
+                                            title="LinkedIn"
+                                            className="w-6 h-6 rounded-md flex items-center justify-center text-blue-600 hover:bg-blue-50 transition-colors"
+                                          >
+                                            <Linkedin className="h-3.5 w-3.5" />
+                                          </Link>
+                                        )}
+                                        {contact.email && (
+                                          <a
+                                            href={`mailto:${contact.email}`}
+                                            title={contact.email}
+                                            className="w-6 h-6 rounded-md flex items-center justify-center text-indigo-600 hover:bg-indigo-50 transition-colors"
+                                          >
+                                            <Mail className="h-3.5 w-3.5" />
+                                          </a>
+                                        )}
                                       </div>
                                     </div>
                                   ))}
@@ -1515,12 +1455,12 @@ function TrackerPageInner() {
                         <TableCell className="font-semibold text-slate-800">{app.role}</TableCell>
                         <TableCell className="text-slate-600">{app.company}</TableCell>
                         <TableCell>
-                          <span className="flex items-center gap-1 text-xs text-slate-500">
+                          <span className="flex items-center gap-1 text-xs text-slate-500 whitespace-nowrap">
                             <MapPin className="h-3 w-3 flex-shrink-0" />{app.location}
                           </span>
                         </TableCell>
                         <TableCell>
-                          <span className="inline-flex items-center px-2 py-0.5 rounded-md text-[10px] font-semibold bg-slate-100 text-slate-600 border border-slate-200">
+                          <span className="inline-flex items-center px-2 py-0.5 rounded-md text-[10px] font-semibold bg-slate-100 text-slate-600 border border-slate-200 whitespace-nowrap">
                             {app.source_name}
                           </span>
                         </TableCell>
@@ -1543,14 +1483,14 @@ function TrackerPageInner() {
                               <button
                                 onClick={() => router.push(`/my-docs?q=${encodeURIComponent(`${app.role} at ${app.company}`)}`)}
                                 title="View generated documents for this job"
-                                className="h-7 px-2 rounded-lg flex items-center gap-1 text-xs text-slate-500 hover:text-indigo-600 hover:bg-indigo-50 transition-colors font-medium border border-slate-200 hover:border-indigo-200"
+                                className="h-7 px-2 rounded-lg flex items-center gap-1 whitespace-nowrap text-xs text-slate-500 hover:text-indigo-600 hover:bg-indigo-50 transition-colors font-medium border border-slate-200 hover:border-indigo-200 shrink-0"
                               >
                                 <FolderOpen className="h-3 w-3" />
                                 {docCountFor(app.id, 'source_application_id')}
                               </button>
                             )}
                             <Link href={app.job_url} target="_blank">
-                              <button className="h-7 px-2 rounded-lg flex items-center gap-1 text-xs text-slate-500 hover:text-indigo-600 hover:bg-indigo-50 transition-colors font-medium border border-slate-200 hover:border-indigo-200">
+                              <button className="h-7 px-2 rounded-lg flex items-center gap-1 whitespace-nowrap text-xs text-slate-500 hover:text-indigo-600 hover:bg-indigo-50 transition-colors font-medium border border-slate-200 hover:border-indigo-200 shrink-0">
                                 <ExternalLink className="h-3 w-3" />
                                 Open
                               </button>

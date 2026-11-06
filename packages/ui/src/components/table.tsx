@@ -34,14 +34,20 @@ TableRow.displayName = 'TableRow'
 
 const TableHead = React.forwardRef<HTMLTableCellElement, React.ThHTMLAttributes<HTMLTableCellElement>>(
   ({ className, ...props }, ref) => (
-    <th ref={ref} className={cn('h-12 px-4 text-left align-middle font-medium text-muted-foreground [&:has([role=checkbox])]:pr-0', className)} {...props} />
+    <th ref={ref} className={cn('h-12 px-4 text-left align-middle font-medium text-muted-foreground whitespace-nowrap [&:has([role=checkbox])]:pr-0', className)} {...props} />
   )
 )
 TableHead.displayName = 'TableHead'
 
+// whitespace-nowrap: a data-table cell wrapping onto two lines (a status
+// pill, a date, a multi-word badge) is never intentional - the Table
+// wrapper above already scrolls horizontally (overflow-auto) for rows that
+// don't fit, so there's no good reason for a cell to wrap instead. A cell
+// that genuinely needs to wrap (a long free-text column) can still opt
+// back in locally via `className="whitespace-normal"`.
 const TableCell = React.forwardRef<HTMLTableCellElement, React.TdHTMLAttributes<HTMLTableCellElement>>(
   ({ className, ...props }, ref) => (
-    <td ref={ref} className={cn('p-4 align-middle [&:has([role=checkbox])]:pr-0', className)} {...props} />
+    <td ref={ref} className={cn('p-4 align-middle whitespace-nowrap [&:has([role=checkbox])]:pr-0', className)} {...props} />
   )
 )
 TableCell.displayName = 'TableCell'
