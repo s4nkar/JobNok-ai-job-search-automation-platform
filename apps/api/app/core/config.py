@@ -133,6 +133,11 @@ class Settings(BaseSettings):
     rate_limit_job_search_per_day: int = 10
     rate_limit_job_search_applications_per_day: int = 200
     rate_limit_startup_hunt_per_day: int = 8
+    # Previously hardcoded directly in startup_scout/routes.py - moved here
+    # per this codebase's "no hardcoding, use env" rule, same as every other
+    # rate limit.
+    rate_limit_startup_scout_search_per_day: int = 20
+    rate_limit_startup_scout_crawl_per_day: int = 30
     # Not AI/scrape-costed - a generous ceiling against runaway template
     # creation (storage abuse, not a billed external call), matching
     # job_search_applications_per_day's "cheap but still bounded" profile.
@@ -378,6 +383,23 @@ class Settings(BaseSettings):
     # send_campaign_email's own Retry nor ARQ's max_tries covers on its own.
     bulk_email_stuck_sending_after_minutes: int = 10
     bulk_email_sweep_batch_size: int = 200
+
+    # ── Startup Scout (contact enrichment) ──────────────────────────────────
+    # Whole-tool Apollo budget (check_tool_budget), separate from the
+    # per-user rate_limit_startup_scout_crawl_per_day above - that caps one
+    # user's call *rate*, this caps the deployment's total metered Apollo
+    # spend regardless of how many users are crawling. Apollo is a paid
+    # per-call API; DDG search (the primary path) costs nothing to call.
+    apollo_daily_call_budget: int = 200
+    # Stuck-'crawling' sweep (startup_scout/service.py::sweep_stuck_scout_crawls)
+    # - catches companies left at crawl_status='crawling' by a worker crash
+    # mid-run_crawl, the same class of gap bulk_email_stuck_sending_after_minutes
+    # covers for email sends and startup_hunt_resolution_stuck_after_minutes
+    # covers for company resolution. Without this, a crashed crawl is stuck
+    # forever - the frontend's "Start Crawl" button is deliberately hidden
+    # once a row is 'crawling'.
+    startup_scout_crawl_stuck_after_minutes: int = 10
+    startup_scout_crawl_sweep_batch_size: int = 20
 
     # ── Cloudinary (CV photo storage) ───────────────────────────────────────
     # Get from Cloudinary dashboard's Account Details page.

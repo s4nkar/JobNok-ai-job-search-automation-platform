@@ -1,15 +1,20 @@
 """Startup Scout business logic — SQLAlchemy-backed.
 
-_run_crawl runs as a FastAPI BackgroundTask (after the HTTP response is
-sent), so it cannot reuse the request-scoped AsyncSession from Depends(get_db)
-— it opens its own session via AsyncSessionLocal() and commits incrementally,
-mirroring the original supabase-py calls' per-statement auto-commit behavior.
+run_crawl runs as a real ARQ job (see app/workers/arq_worker.py), not a
+FastAPI BackgroundTask - it's genuinely heavy, multi-minute work (sequential
+DDG/Apollo calls with deliberate pacing sleeps), and a BackgroundTask dies
+with the API process with no retry and no durable cancel signal. It cannot
+reuse a request-scoped AsyncSession from Depends(get_db) either way, since it
+outlives the request - it opens its own session via AsyncSessionLocal() and
+commits incrementally, mirroring the original supabase-py calls' per-statement
+auto-commit behavior.
 """
 
 import asyncio
 import hashlib
 import json
 import logging
+from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 
 from fastapi import HTTPException
@@ -18,7 +23,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import settings
 from app.core.database import AsyncSessionLocal
-from app.services.cache import acquire_lock, get_cached, jittered_ttl, record_search_outcome, set_cached
+from app.services.cache import acquire_lock, delete_cached, get_cached, jittered_ttl, record_search_outcome, set_cached
 from app.shared import funding_stages
 from app.shared.repository import UserScopedRepository
 from app.shared.utils import row_to_dict
@@ -43,9 +48,39 @@ _SINGLE_FLIGHT_MAX_WAIT_SECONDS = 10
 
 MIN_VERIFIED_CONTACTS = 2
 
-# In-process cancel flags keyed by company_id.
-# Set to True by the /stop endpoint; run_crawl checks between each contact save.
-_cancel_flags: dict[str, bool] = {}
+# Redis-backed cancel signal, keyed by company_id - replaces a plain
+# in-process dict, which only worked with exactly one worker process and
+# forgot every pending cancel on restart. Set by the /stop endpoint (and by
+# delete_company, to stop crawling a row that's about to disappear);
+# run_crawl (and the enrich/verify helpers it calls) check it between every
+# contact. TTL is generous headroom over any real crawl's duration, not a
+# meaningful expiry - it only exists so an abandoned key can't leak forever.
+_CANCEL_FLAG_TTL_SECONDS = 1800
+
+
+def _cancel_key(company_id: str) -> str:
+    return f"scout_crawl_cancel:{company_id}"
+
+
+async def _request_cancel(company_id: str) -> None:
+    try:
+        await set_cached(_cancel_key(company_id), "1", _CANCEL_FLAG_TTL_SECONDS)
+    except Exception:
+        pass  # best-effort - a failed cancel signal shouldn't break delete/stop
+
+
+async def _is_cancelled(company_id: str) -> bool:
+    try:
+        return bool(await get_cached(_cancel_key(company_id)))
+    except Exception:
+        return False  # fail open - Redis being down shouldn't abort a crawl mid-flight
+
+
+async def _clear_cancel_flag(company_id: str) -> None:
+    try:
+        await delete_cached(_cancel_key(company_id))
+    except Exception:
+        pass
 
 
 class CompanyRepository(UserScopedRepository[StartupScoutCompany]):
@@ -378,9 +413,16 @@ async def search_startups_stream(
         yield {"type": "done", **result}
 
 
-async def list_companies(db: AsyncSession, user_id: str) -> list[dict]:
-    rows = await CompanyRepository(db).list(user_id, order_by=StartupScoutCompany.created_at.desc())
-    return [row_to_dict(r) for r in rows]
+async def list_companies(
+    db: AsyncSession, user_id: str, *, limit: int | None = None, cursor: str | None = None,
+) -> tuple[list[dict], str | None]:
+    """Unpaginated (limit=None) by default - see tracker/service.py's
+    list_applications for the same opt-in cursor-pagination pattern."""
+    if limit is None:
+        rows = await CompanyRepository(db).list(user_id, order_by=StartupScoutCompany.created_at.desc())
+        return [row_to_dict(r) for r in rows], None
+    rows, next_cursor = await CompanyRepository(db).list_page(user_id, limit=limit, cursor=cursor)
+    return [row_to_dict(r) for r in rows], next_cursor
 
 
 async def get_company_or_404(db: AsyncSession, user_id: str, company_id: str) -> dict:
@@ -436,7 +478,7 @@ async def save_company(db: AsyncSession, user_id: str, req: SaveCompanyRequest) 
 
 
 async def delete_company(db: AsyncSession, user_id: str, company_id: str) -> None:
-    _cancel_flags[company_id] = True
+    await _request_cancel(company_id)
     ok = await CompanyRepository(db).delete(user_id, company_id)
     if not ok:
         raise HTTPException(status_code=404, detail="Company not found")
@@ -454,22 +496,37 @@ async def get_contacts(db: AsyncSession, user_id: str, company_id: str) -> list[
 
 
 async def start_crawl(db: AsyncSession, user_id: str, company_id: str) -> dict:
-    company = await get_company_or_404(db, user_id, company_id)
-    if company["crawl_status"] == "crawling":
+    """Flips crawl_status to 'crawling' and commits HERE, synchronously,
+    before the route enqueues the actual job - not inside run_crawl itself.
+    Previously the status-check below read whatever was committed before
+    this call and run_crawl only flipped it to 'crawling' after the HTTP
+    response had already gone out, so two rapid clicks (or two tabs) could
+    both pass this check before either background job started, launching
+    two concurrent crawls for the same company (duplicate Apollo spend, and
+    a delete-then-insert race between the two). Committing the flip here
+    closes that window - the second click's read now sees the first's
+    committed 'crawling' status and gets a clean 409."""
+    row = await CompanyRepository(db).get(user_id, company_id)
+    if row is None:
+        raise HTTPException(status_code=404, detail="Company not found")
+    if row.crawl_status == "crawling":
         raise HTTPException(status_code=409, detail="Crawl already in progress")
-    return company
+    row.crawl_status = "crawling"
+    await db.commit()
+    await db.refresh(row)
+    return row_to_dict(row)
 
 
 async def stop_crawl(db: AsyncSession, user_id: str, company_id: str) -> None:
     company = await get_company_or_404(db, user_id, company_id)
     if company["crawl_status"] != "crawling":
         raise HTTPException(status_code=409, detail="No crawl in progress")
-    _cancel_flags[company_id] = True
+    await _request_cancel(company_id)
 
 
 # ── Background crawl orchestration (own session — runs post-response) ──────
 
-async def _save_contact(db: AsyncSession, company_id: str, user_id: str, contact: dict) -> None:
+async def _save_contact(db: AsyncSession, company_id: str, user_id: str, contact: dict) -> StartupScoutContact:
     obj = StartupScoutContact(
         company_id=company_id,
         user_id=user_id,
@@ -486,22 +543,28 @@ async def _save_contact(db: AsyncSession, company_id: str, user_id: str, contact
     )
     db.add(obj)
     await db.flush()
+    return obj
 
 
-async def _load_saved_contacts(db: AsyncSession, company_id: str) -> list[StartupScoutContact]:
-    rows = (
-        await db.execute(select(StartupScoutContact).where(StartupScoutContact.company_id == company_id))
-    ).scalars().all()
+async def _load_saved_contacts(
+    db: AsyncSession, company_id: str, *, ids: set | None = None,
+) -> list[StartupScoutContact]:
+    stmt = select(StartupScoutContact).where(StartupScoutContact.company_id == company_id)
+    if ids is not None:
+        stmt = stmt.where(StartupScoutContact.id.in_(ids))
+    rows = (await db.execute(stmt)).scalars().all()
     return list(rows)
 
 
-async def _enrich_missing_linkedin(db: AsyncSession, company_id: str, company_name: str) -> None:
-    rows = await _load_saved_contacts(db, company_id)
+async def _enrich_missing_linkedin(
+    db: AsyncSession, company_id: str, company_name: str, *, only_ids: set | None = None,
+) -> None:
+    rows = await _load_saved_contacts(db, company_id, ids=only_ids)
     needs_linkedin = [r for r in rows if not r.linkedin_url and r.name]
     log.info("Stage 1.5: enriching LinkedIn for %d contacts without a URL", len(needs_linkedin))
 
     for row in needs_linkedin:
-        if _cancel_flags.get(company_id):
+        if await _is_cancelled(company_id):
             break
         await asyncio.sleep(1.5)
         linkedin_url = await enrich_linkedin_url(row.name, company_name)
@@ -515,12 +578,14 @@ async def _enrich_missing_linkedin(db: AsyncSession, company_id: str, company_na
             log.warning("Stage 1.5 LinkedIn update failed for %s: %s", row.name, enrich_exc)
 
 
-async def _verify_saved_contacts(db: AsyncSession, company_id: str, company_name: str) -> int:
-    saved_rows = await _load_saved_contacts(db, company_id)
+async def _verify_saved_contacts(
+    db: AsyncSession, company_id: str, company_name: str, *, only_ids: set | None = None,
+) -> int:
+    saved_rows = await _load_saved_contacts(db, company_id, ids=only_ids)
     log.info("Stage 2: verifying %d contacts for %r", len(saved_rows), company_name)
 
     for row in saved_rows:
-        if _cancel_flags.get(company_id):
+        if await _is_cancelled(company_id):
             break
         contact_name = row.name or ""
         if not contact_name:
@@ -545,7 +610,9 @@ async def _verify_saved_contacts(db: AsyncSession, company_id: str, company_name
     return verified_count
 
 
-async def _supplement_with_apollo(db: AsyncSession, company_id: str, user_id: str, company_name: str) -> int:
+async def _supplement_with_apollo(
+    db: AsyncSession, company_id: str, user_id: str, company_name: str,
+) -> tuple[int, set]:
     existing_rows = await _load_saved_contacts(db, company_id)
     seen_names = {(r.name or "").strip().lower() for r in existing_rows if (r.name or "").strip()}
     seen_linkedin_urls = {
@@ -554,9 +621,9 @@ async def _supplement_with_apollo(db: AsyncSession, company_id: str, user_id: st
     seen_emails = {(r.email or "").strip().lower() for r in existing_rows if (r.email or "").strip()}
 
     apollo_contacts = await apollo_search_contacts(company_name)
-    imported = 0
+    new_ids: set = set()
     for contact in apollo_contacts:
-        if _cancel_flags.get(company_id):
+        if await _is_cancelled(company_id):
             break
 
         name_key = (contact.get("name") or "").strip().lower()
@@ -571,8 +638,8 @@ async def _supplement_with_apollo(db: AsyncSession, company_id: str, user_id: st
         if is_duplicate:
             continue
 
-        await _save_contact(db, company_id, user_id, contact)
-        imported += 1
+        new_row = await _save_contact(db, company_id, user_id, contact)
+        new_ids.add(new_row.id)
 
         if name_key:
             seen_names.add(name_key)
@@ -581,14 +648,21 @@ async def _supplement_with_apollo(db: AsyncSession, company_id: str, user_id: st
         if email_key:
             seen_emails.add(email_key)
 
-    log.info("Apollo supplement: imported %d new contacts for %r", imported, company_name)
-    return imported
+    log.info("Apollo supplement: imported %d new contacts for %r", len(new_ids), company_name)
+    return len(new_ids), new_ids
 
 
-async def run_crawl(company_id: str, user_id: str, company_name: str) -> None:
-    """Crawl contacts for a company, saving each one immediately."""
+async def run_crawl(ctx: dict, company_id: str, user_id: str, company_name: str) -> None:
+    """Crawl contacts for a company, saving each one immediately.
+
+    ARQ job (see app/workers/arq_worker.py's docstring on why this isn't a
+    FastAPI BackgroundTask). crawl_status is already 'crawling' by the time
+    this runs - service.start_crawl flips and commits that synchronously,
+    before the HTTP response that triggered the enqueue even goes out - so
+    this never needs to (and no longer does) set it itself.
+    """
     async with AsyncSessionLocal() as db:
-        _cancel_flags.pop(company_id, None)
+        await _clear_cancel_flag(company_id)
 
         company = (
             await db.execute(
@@ -599,37 +673,49 @@ async def run_crawl(company_id: str, user_id: str, company_name: str) -> None:
         ).scalar_one_or_none()
         if company is None:
             return
-        company.crawl_status = "crawling"
-        await db.commit()
-
-        await db.execute(
-            StartupScoutContact.__table__.delete().where(StartupScoutContact.company_id == company_id)
-        )
-        await db.commit()
 
         contacts_saved = 0
         crawl_errored = False
+        # Old contacts are only cleared once we actually have something new
+        # to replace them with - previously this deleted unconditionally
+        # right after flipping to 'crawling', so a crawl that found nothing
+        # at all (DDG blocked, Apollo also empty) silently wiped out
+        # perfectly good contacts from a prior successful crawl.
+        old_contacts_cleared = False
+
+        async def _clear_old_contacts_once() -> None:
+            nonlocal old_contacts_cleared
+            if old_contacts_cleared:
+                return
+            await db.execute(
+                StartupScoutContact.__table__.delete().where(StartupScoutContact.company_id == company_id)
+            )
+            old_contacts_cleared = True
 
         try:
             web_contacts = await web_search_contacts(company_name)
+            if web_contacts:
+                await _clear_old_contacts_once()
             for contact in web_contacts:
-                if _cancel_flags.get(company_id):
+                if await _is_cancelled(company_id):
                     break
                 await _save_contact(db, company_id, user_id, contact)
                 contacts_saved += 1
             await db.commit()
 
-            if contacts_saved == 0 and not _cancel_flags.get(company_id):
+            if contacts_saved == 0 and not await _is_cancelled(company_id):
                 apollo_contacts = await apollo_search_contacts(company_name)
+                if apollo_contacts:
+                    await _clear_old_contacts_once()
                 for contact in apollo_contacts:
-                    if _cancel_flags.get(company_id):
+                    if await _is_cancelled(company_id):
                         break
                     await _save_contact(db, company_id, user_id, contact)
                     contacts_saved += 1
                 await db.commit()
 
             verified_contacts = 0
-            if contacts_saved > 0 and not _cancel_flags.get(company_id):
+            if contacts_saved > 0 and not await _is_cancelled(company_id):
                 await _enrich_missing_linkedin(db, company_id, company_name)
                 verified_contacts = await _verify_saved_contacts(db, company_id, company_name)
                 await db.commit()
@@ -637,17 +723,22 @@ async def run_crawl(company_id: str, user_id: str, company_name: str) -> None:
             if (
                 contacts_saved > 0
                 and verified_contacts < MIN_VERIFIED_CONTACTS
-                and not _cancel_flags.get(company_id)
+                and not await _is_cancelled(company_id)
             ):
                 log.info(
                     "Apollo supplement: only %d verified contacts for %r, fetching Apollo",
                     verified_contacts, company_name,
                 )
-                imported_count = await _supplement_with_apollo(db, company_id, user_id, company_name)
+                imported_count, new_ids = await _supplement_with_apollo(db, company_id, user_id, company_name)
                 contacts_saved += imported_count
-                if imported_count > 0 and not _cancel_flags.get(company_id):
-                    await _enrich_missing_linkedin(db, company_id, company_name)
-                    await _verify_saved_contacts(db, company_id, company_name)
+                # Only the newly-imported contacts need enrich/verify - the
+                # rest were already processed in the pass above. Previously
+                # this re-ran both stages over every saved contact again,
+                # burning a DDG call per already-verified contact for
+                # nothing.
+                if imported_count > 0 and not await _is_cancelled(company_id):
+                    await _enrich_missing_linkedin(db, company_id, company_name, only_ids=new_ids)
+                    await _verify_saved_contacts(db, company_id, company_name, only_ids=new_ids)
                 await db.commit()
 
         except Exception as exc:
@@ -656,7 +747,7 @@ async def run_crawl(company_id: str, user_id: str, company_name: str) -> None:
             await db.rollback()
 
         finally:
-            _cancel_flags.pop(company_id, None)
+            await _clear_cancel_flag(company_id)
 
         if crawl_errored:
             final_status = "failed"
@@ -675,3 +766,39 @@ async def run_crawl(company_id: str, user_id: str, company_name: str) -> None:
         if company2 is not None:
             company2.crawl_status = final_status
             await db.commit()
+
+
+async def sweep_stuck_scout_crawls(ctx: dict) -> None:
+    """ARQ cron entrypoint (see arq_worker.py's cron_jobs) - catches
+    companies left at crawl_status='crawling' by a worker crash mid-
+    run_crawl, the one window run_crawl's own try/except/finally can't
+    cover (a killed process doesn't raise a catchable exception). Same
+    class of gap as startup_hunt's sweep_stuck_resolutions and bulk_email's
+    sweep_stuck_email_sends - see either's docstring for the fuller
+    explanation of why ARQ's own max_tries doesn't catch this on its own.
+    Re-enqueues run_crawl rather than just marking the row 'failed': a
+    stuck row only ever means the worker died, never a real application-
+    level failure (those already set 'failed' via the except block above),
+    so simply trying again is safe and saves the user a manual re-crawl.
+    """
+    stuck_cutoff = datetime.now(timezone.utc) - timedelta(
+        minutes=settings.startup_scout_crawl_stuck_after_minutes
+    )
+    async with AsyncSessionLocal() as db:
+        rows = (
+            await db.execute(
+                select(StartupScoutCompany)
+                .where(
+                    StartupScoutCompany.crawl_status == "crawling",
+                    StartupScoutCompany.updated_at < stuck_cutoff,
+                )
+                .limit(settings.startup_scout_crawl_sweep_batch_size)
+            )
+        ).scalars().all()
+        if not rows:
+            return
+        stuck = [(str(r.id), str(r.user_id), r.name) for r in rows]
+
+    for company_id, user_id, company_name in stuck:
+        await ctx["redis"].enqueue_job("run_crawl", company_id=company_id, user_id=user_id, company_name=company_name)
+    log.info("Re-enqueued %d stuck scout crawl(s)", len(stuck))

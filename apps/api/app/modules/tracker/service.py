@@ -30,9 +30,18 @@ def _application_fields(body: ApplicationIn) -> dict:
     return data
 
 
-async def list_applications(db: AsyncSession, user_id: str) -> list[dict]:
-    rows = await TrackerRepository(db).list(user_id, order_by=JobApplication.created_at.desc())
-    return [row_to_dict(r) for r in rows]
+async def list_applications(
+    db: AsyncSession, user_id: str, *, limit: int | None = None, cursor: str | None = None,
+) -> tuple[list[dict], str | None]:
+    """Unpaginated (limit=None) by default - the plain list() path every
+    caller used before cursor pagination existed. Passing limit opts into
+    keyset pagination instead; next_cursor is None either way once there's
+    nothing more to page through."""
+    if limit is None:
+        rows = await TrackerRepository(db).list(user_id, order_by=JobApplication.created_at.desc())
+        return [row_to_dict(r) for r in rows], None
+    rows, next_cursor = await TrackerRepository(db).list_page(user_id, limit=limit, cursor=cursor)
+    return [row_to_dict(r) for r in rows], next_cursor
 
 
 async def create_application(db: AsyncSession, user_id: str, body: ApplicationIn) -> dict:

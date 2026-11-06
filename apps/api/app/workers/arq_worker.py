@@ -21,6 +21,7 @@ from app.shared import model_registry  # noqa: F401 — registers every table on
 from app.modules.bulk_email.tasks import send_campaign_email, sweep_stuck_email_sends
 from app.modules.job_search.tasks import sweep_expired_jobs
 from app.modules.startup_hunt.tasks import resolve_startup_hunt_source_task
+from app.modules.startup_scout.service import run_crawl, sweep_stuck_scout_crawls
 from app.modules.startup_hunt.ingestion.scheduler import (
     dispatch_due_companies,
     sweep_stuck_resolutions,
@@ -66,6 +67,12 @@ class WorkerSettings:
         # HTTP fetches (even at concurrency=5) - hit this exact TimeoutError
         # live on the first real run before adding this override.
         func(backfill_company_metadata, timeout=1800),
+        # Per-task timeout override, same reasoning as backfill above - a
+        # crawl is sequential DDG/Apollo calls with deliberate pacing sleeps
+        # between each (see startup_scout/service.py::run_crawl), easily
+        # 30s-2min+ for a company with several contacts, nowhere near
+        # job_timeout=30's single-API-call sizing.
+        func(run_crawl, timeout=600),
     ]
     # Startup Hunt's automated discovery/resolution/sync pipeline (see
     # modules/startup_hunt/discovery|ingestion|workers/) - this worker had no
@@ -100,6 +107,9 @@ class WorkerSettings:
         # Same class of gap, for bulk email sends - see
         # bulk_email/tasks.py::sweep_stuck_email_sends's docstring.
         cron(sweep_stuck_email_sends, minute={0, 10, 20, 30, 40, 50}),
+        # Same class of gap, for Startup Scout contact crawls - see
+        # startup_scout/service.py::sweep_stuck_scout_crawls's docstring.
+        cron(sweep_stuck_scout_crawls, minute={0, 10, 20, 30, 40, 50}),
         # Table hygiene, not correctness (every read already filters expired
         # rows out) - once a day at a quiet hour is plenty.
         cron(sweep_expired_jobs, hour={3}, minute=0),

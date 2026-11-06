@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from arq.connections import ArqRedis
-from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import settings
@@ -60,9 +60,18 @@ async def search_startup_hunt_opportunities(
 
 
 @router.get("/opportunities")
-async def list_startup_hunt_opportunities(request: Request, db: AsyncSession = Depends(get_db)):
+async def list_startup_hunt_opportunities(
+    request: Request,
+    response: Response,
+    limit: int | None = Query(None, ge=1, le=200),
+    cursor: str | None = Query(None),
+    db: AsyncSession = Depends(get_db),
+):
     user_id = await get_current_user_id(request, db)
-    return await service.list_startup_hunt_opportunities(db, user_id)
+    items, next_cursor = await service.list_startup_hunt_opportunities(db, user_id, limit=limit, cursor=cursor)
+    if next_cursor:
+        response.headers["X-Next-Cursor"] = next_cursor
+    return items
 
 
 @router.get("/opportunities/{opportunity_id}")
