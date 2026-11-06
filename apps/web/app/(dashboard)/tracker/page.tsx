@@ -42,7 +42,7 @@ import {
   Plus, Pencil, Trash2, Briefcase, Loader2, AlertCircle, TrendingUp, CheckCircle,
   Clock, ExternalLink, Compass, Mail, MapPin, MoreHorizontal, FileSearch, PenLine,
   MessageSquare, ChevronDown, ChevronUp, Radar, Users, Globe, Linkedin,
-  StopCircle, Building2, BookmarkCheck, Search, ClipboardList, Send, XCircle, StickyNote, FolderOpen,
+  StopCircle, Building2, BookmarkCheck, Search, ClipboardList, Send, XCircle, StickyNote, FolderOpen, UserSearch,
 } from 'lucide-react'
 import { ScoutCompany, ScoutContact, ScoutCrawlStatus } from '@/lib/types'
 import { apiFetch, apiGet } from '@/lib/api'
@@ -159,6 +159,20 @@ const SCOUT_STAGE_PILL: Record<string, string> = {
 function initialTrackerTab(searchParams: URLSearchParams): TrackerTab {
   const requested = searchParams.get('tab')
   return requested === 'leads' || requested === 'scout' || requested === 'job-search' ? requested : 'applications'
+}
+
+// Free, zero-risk default for "find this company's founders": opens a
+// pre-filled Google search in the USER's own browser instead of this app's
+// server scraping DDG/calling Apollo on their behalf. Same underlying query
+// shape as startup_scout's own server-side LinkedIn search (see engine.py's
+// web_search_contacts), just run client-side - no shared-IP rate-limit
+// risk, no Apollo spend, no multi-minute crawl. The server-side crawl
+// ("Start Crawl" in the Advanced menu below) still exists and still works,
+// kept as a separate, lower-priority path rather than removed - see this
+// tab's own comment block further down for why.
+function founderSearchUrl(companyName: string): string {
+  const query = `"${companyName}" (founder OR "co-founder" OR CEO OR CTO) site:linkedin.com/in`
+  return `https://www.google.com/search?q=${encodeURIComponent(query)}`
 }
 
 const TRACKER_PAGE_SIZE = 50
@@ -840,15 +854,7 @@ function TrackerPageInner() {
       return (
         <div className="flex flex-col items-center justify-center py-6 text-center">
           <p className="text-sm font-semibold text-slate-500">No contacts found</p>
-          <p className="text-xs text-slate-400 mt-0.5">Try re-crawling — DDG results vary per session.</p>
-          {canCrawl && (
-            <button
-              onClick={() => startCrawl(company)}
-              className="mt-3 h-7 px-3 rounded-lg flex items-center gap-1.5 whitespace-nowrap text-xs font-semibold text-indigo-700 bg-indigo-50 hover:bg-indigo-100 border border-indigo-200 transition-colors"
-            >
-              <Radar className="h-3 w-3" /> Re-crawl now
-            </button>
-          )}
+          <p className="text-xs text-slate-400 mt-0.5">Advanced crawl is currently unavailable.</p>
         </div>
       )
     }
@@ -964,25 +970,35 @@ function TrackerPageInner() {
             <span className="text-slate-300 text-[11px]">Not crawled</span>
           )}
           <div className="flex gap-1 ml-auto">
-            {isCrawling && (
-              <button
-                onClick={() => stopCrawl(company)}
-                disabled={isStopping}
-                className="h-7 px-2 rounded-lg flex items-center gap-1 whitespace-nowrap text-xs font-semibold text-red-700 bg-red-50 border border-red-200 disabled:opacity-50"
-              >
-                {isStopping ? <Loader2 className="h-3 w-3 animate-spin" /> : <StopCircle className="h-3 w-3" />}
-                {isStopping ? 'Stopping…' : 'Stop'}
+            <Link href={founderSearchUrl(company.name)} target="_blank">
+              <button className="h-7 px-2 rounded-lg flex items-center gap-1 whitespace-nowrap text-xs font-semibold text-indigo-700 bg-indigo-50 border border-indigo-200">
+                <UserSearch className="h-3 w-3" />
+                Find Founders
               </button>
-            )}
-            {canCrawl && (
-              <button
-                onClick={() => startCrawl(company)}
-                className="h-7 px-2 rounded-lg flex items-center gap-1 whitespace-nowrap text-xs font-semibold text-indigo-700 bg-indigo-50 border border-indigo-200"
-              >
-                <Radar className="h-3 w-3" />
-                {company.crawl_status === 'pending' ? 'Start Crawl' : 'Re-crawl'}
-              </button>
-            )}
+            </Link>
+            <DropdownMenu>
+              <DropdownMenuTrigger asChild>
+                <button className="h-7 w-7 rounded-lg flex items-center justify-center text-slate-400 hover:text-slate-700 hover:bg-slate-100 transition-colors border border-slate-200 shrink-0">
+                  <MoreHorizontal className="h-3.5 w-3.5" />
+                </button>
+              </DropdownMenuTrigger>
+              <DropdownMenuContent align="end" className="w-56">
+                <DropdownMenuLabel>Advanced crawl</DropdownMenuLabel>
+                <p className="px-3 pb-1.5 -mt-1 text-[10px] text-slate-400">Currently unavailable</p>
+                {isCrawling && (
+                  <DropdownMenuItem disabled>
+                    <StopCircle className="h-3.5 w-3.5 text-slate-400" />
+                    Stop crawl
+                  </DropdownMenuItem>
+                )}
+                {canCrawl && (
+                  <DropdownMenuItem disabled>
+                    <Radar className="h-3.5 w-3.5 text-slate-400" />
+                    {company.crawl_status === 'pending' ? 'Start Crawl' : 'Re-crawl'}
+                  </DropdownMenuItem>
+                )}
+              </DropdownMenuContent>
+            </DropdownMenu>
           </div>
         </div>
 
@@ -1713,25 +1729,12 @@ function TrackerPageInner() {
                           {/* Actions */}
                           <TableCell className="py-3.5">
                             <div className="flex gap-1 justify-end">
-                              {isCrawling && (
-                                <button
-                                  onClick={() => stopCrawl(company)}
-                                  disabled={isStopping}
-                                  className="h-7 px-2 rounded-lg flex items-center gap-1 whitespace-nowrap text-xs font-semibold text-red-700 bg-red-50 hover:bg-red-100 border border-red-200 transition-colors disabled:opacity-50 shrink-0"
-                                >
-                                  {isStopping ? <Loader2 className="h-3 w-3 animate-spin" /> : <StopCircle className="h-3 w-3" />}
-                                  {isStopping ? 'Stopping…' : 'Stop'}
+                              <Link href={founderSearchUrl(company.name)} target="_blank">
+                                <button className="h-7 px-2 rounded-lg flex items-center gap-1 whitespace-nowrap text-xs font-semibold text-indigo-700 bg-indigo-50 hover:bg-indigo-100 border border-indigo-200 transition-colors shrink-0">
+                                  <UserSearch className="h-3 w-3" />
+                                  Find Founders
                                 </button>
-                              )}
-                              {canCrawl && (
-                                <button
-                                  onClick={() => startCrawl(company)}
-                                  className="h-7 px-2 rounded-lg flex items-center gap-1 whitespace-nowrap text-xs font-semibold text-indigo-700 bg-indigo-50 hover:bg-indigo-100 border border-indigo-200 transition-colors shrink-0"
-                                >
-                                  <Radar className="h-3 w-3" />
-                                  {company.crawl_status === 'pending' ? 'Start Crawl' : 'Re-crawl'}
-                                </button>
-                              )}
+                              </Link>
                               {company.website && (
                                 <Link href={company.website} target="_blank">
                                   <button className="h-7 w-7 rounded-lg flex items-center justify-center text-slate-300 hover:text-slate-600 hover:bg-slate-100 transition-colors">
@@ -1739,12 +1742,34 @@ function TrackerPageInner() {
                                   </button>
                                 </Link>
                               )}
-                              <button
-                                onClick={() => deleteScoutCompany(company.id)}
-                                className="h-7 w-7 rounded-lg flex items-center justify-center text-slate-300 hover:text-red-500 hover:bg-red-50 transition-colors"
-                              >
-                                <Trash2 className="h-3.5 w-3.5" />
-                              </button>
+                              <DropdownMenu>
+                                <DropdownMenuTrigger asChild>
+                                  <button className="h-7 w-7 rounded-lg flex items-center justify-center text-slate-400 hover:text-slate-700 hover:bg-slate-100 transition-colors border border-slate-200">
+                                    <MoreHorizontal className="h-3.5 w-3.5" />
+                                  </button>
+                                </DropdownMenuTrigger>
+                                <DropdownMenuContent align="end" className="w-56">
+                                  <DropdownMenuLabel>Advanced crawl</DropdownMenuLabel>
+                                  <p className="px-3 pb-1.5 -mt-1 text-[10px] text-slate-400">Currently unavailable</p>
+                                  {isCrawling && (
+                                    <DropdownMenuItem disabled>
+                                      <StopCircle className="h-3.5 w-3.5 text-slate-400" />
+                                      Stop crawl
+                                    </DropdownMenuItem>
+                                  )}
+                                  {canCrawl && (
+                                    <DropdownMenuItem disabled>
+                                      <Radar className="h-3.5 w-3.5 text-slate-400" />
+                                      {company.crawl_status === 'pending' ? 'Start Crawl' : 'Re-crawl'}
+                                    </DropdownMenuItem>
+                                  )}
+                                  <DropdownMenuSeparator />
+                                  <DropdownMenuItem onClick={() => deleteScoutCompany(company.id)} className="text-red-600 focus:text-red-600 focus:bg-red-50">
+                                    <Trash2 className="h-3.5 w-3.5" />
+                                    Remove Company
+                                  </DropdownMenuItem>
+                                </DropdownMenuContent>
+                              </DropdownMenu>
                             </div>
                           </TableCell>
                         </TableRow>
