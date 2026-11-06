@@ -288,14 +288,29 @@ function TrackerPageInner() {
     source_application_id: string | null
     source_job_application_id: string | null
   }
-  const docCountFor = (sourceId: string, field: keyof SourceLinkedSession): number => {
-    const matches = (s: SourceLinkedSession) => s[field] === sourceId
-    return (
-      resumeSessions.filter(matches).length +
-      coverLetterSessions.filter(matches).length +
-      interviewPrepSessions.filter(matches).length
-    )
-  }
+  const SOURCE_LINK_FIELDS = ['source_opportunity_id', 'source_application_id', 'source_job_application_id'] as const
+  // One pass over the 3 session arrays per render, not one pass per
+  // docCountFor() CALL (this tab calls it twice per row - once for the
+  // `> 0` check, once for the displayed count - across 3 tabs' worth of
+  // rows). Previously every call re-scanned all three arrays with
+  // .filter(), so cost scaled with rows-on-screen x sessions; now it's a
+  // fixed 3 passes to build the map, then O(1) per lookup regardless of
+  // how many rows read from it.
+  const docCountMap = (() => {
+    const map = new Map<string, number>()
+    const tally = (s: SourceLinkedSession) => {
+      for (const field of SOURCE_LINK_FIELDS) {
+        const id = s[field]
+        if (id) map.set(`${field}:${id}`, (map.get(`${field}:${id}`) ?? 0) + 1)
+      }
+    }
+    resumeSessions.forEach(tally)
+    coverLetterSessions.forEach(tally)
+    interviewPrepSessions.forEach(tally)
+    return map
+  })()
+  const docCountFor = (sourceId: string, field: keyof SourceLinkedSession): number =>
+    docCountMap.get(`${field}:${sourceId}`) ?? 0
 
   const [crawlingIds, setCrawlingIds] = useState<Set<string>>(new Set())
   const [stoppingIds, setStoppingIds] = useState<Set<string>>(new Set())
@@ -625,7 +640,7 @@ function TrackerPageInner() {
           </div>
           <DropdownMenu>
             <DropdownMenuTrigger asChild>
-              <button className="h-7 w-7 rounded-lg flex items-center justify-center text-slate-400 hover:text-slate-700 hover:bg-slate-100 transition-colors border border-slate-200 shrink-0">
+              <button aria-label="More actions" className="h-7 w-7 rounded-lg flex items-center justify-center text-slate-400 hover:text-slate-700 hover:bg-slate-100 transition-colors border border-slate-200 shrink-0">
                 <MoreHorizontal className="h-3.5 w-3.5" />
               </button>
             </DropdownMenuTrigger>
@@ -703,7 +718,7 @@ function TrackerPageInner() {
           </div>
           <DropdownMenu>
             <DropdownMenuTrigger asChild>
-              <button className="h-7 w-7 rounded-lg flex items-center justify-center text-slate-400 hover:text-slate-700 hover:bg-slate-100 transition-colors border border-slate-200 shrink-0">
+              <button aria-label="More actions" className="h-7 w-7 rounded-lg flex items-center justify-center text-slate-400 hover:text-slate-700 hover:bg-slate-100 transition-colors border border-slate-200 shrink-0">
                 <MoreHorizontal className="h-3.5 w-3.5" />
               </button>
             </DropdownMenuTrigger>
@@ -778,7 +793,7 @@ function TrackerPageInner() {
           </div>
           <DropdownMenu>
             <DropdownMenuTrigger asChild>
-              <button className="h-7 w-7 rounded-lg flex items-center justify-center text-slate-400 hover:text-slate-700 hover:bg-slate-100 transition-colors border border-slate-200 shrink-0">
+              <button aria-label="More actions" className="h-7 w-7 rounded-lg flex items-center justify-center text-slate-400 hover:text-slate-700 hover:bg-slate-100 transition-colors border border-slate-200 shrink-0">
                 <MoreHorizontal className="h-3.5 w-3.5" />
               </button>
             </DropdownMenuTrigger>
@@ -929,6 +944,7 @@ function TrackerPageInner() {
           </div>
           <button
             onClick={() => deleteScoutCompany(company.id)}
+            aria-label="Remove company"
             className="h-7 w-7 rounded-lg flex items-center justify-center text-slate-300 hover:text-red-500 hover:bg-red-50 transition-colors shrink-0"
           >
             <Trash2 className="h-3.5 w-3.5" />
@@ -978,7 +994,7 @@ function TrackerPageInner() {
             </Link>
             <DropdownMenu>
               <DropdownMenuTrigger asChild>
-                <button className="h-7 w-7 rounded-lg flex items-center justify-center text-slate-400 hover:text-slate-700 hover:bg-slate-100 transition-colors border border-slate-200 shrink-0">
+                <button aria-label="More actions" className="h-7 w-7 rounded-lg flex items-center justify-center text-slate-400 hover:text-slate-700 hover:bg-slate-100 transition-colors border border-slate-200 shrink-0">
                   <MoreHorizontal className="h-3.5 w-3.5" />
                 </button>
               </DropdownMenuTrigger>
@@ -1234,7 +1250,7 @@ function TrackerPageInner() {
                             </button>
                             <DropdownMenu>
                               <DropdownMenuTrigger asChild>
-                                <button className="h-7 w-7 rounded-lg flex items-center justify-center text-slate-400 hover:text-slate-700 hover:bg-slate-100 transition-colors border border-slate-200">
+                                <button aria-label="More actions" className="h-7 w-7 rounded-lg flex items-center justify-center text-slate-400 hover:text-slate-700 hover:bg-slate-100 transition-colors border border-slate-200">
                                   <MoreHorizontal className="h-3.5 w-3.5" />
                                 </button>
                               </DropdownMenuTrigger>
@@ -1435,7 +1451,7 @@ function TrackerPageInner() {
                               {/* Actions dropdown */}
                               <DropdownMenu>
                                 <DropdownMenuTrigger asChild>
-                                  <button className="h-7 w-7 rounded-lg flex items-center justify-center text-slate-400 hover:text-slate-700 hover:bg-slate-100 transition-colors border border-slate-200">
+                                  <button aria-label="More actions" className="h-7 w-7 rounded-lg flex items-center justify-center text-slate-400 hover:text-slate-700 hover:bg-slate-100 transition-colors border border-slate-200">
                                     <MoreHorizontal className="h-3.5 w-3.5" />
                                   </button>
                                 </DropdownMenuTrigger>
@@ -1737,14 +1753,14 @@ function TrackerPageInner() {
                               </Link>
                               {company.website && (
                                 <Link href={company.website} target="_blank">
-                                  <button className="h-7 w-7 rounded-lg flex items-center justify-center text-slate-300 hover:text-slate-600 hover:bg-slate-100 transition-colors">
+                                  <button aria-label="Visit website" className="h-7 w-7 rounded-lg flex items-center justify-center text-slate-300 hover:text-slate-600 hover:bg-slate-100 transition-colors">
                                     <Globe className="h-3.5 w-3.5" />
                                   </button>
                                 </Link>
                               )}
                               <DropdownMenu>
                                 <DropdownMenuTrigger asChild>
-                                  <button className="h-7 w-7 rounded-lg flex items-center justify-center text-slate-400 hover:text-slate-700 hover:bg-slate-100 transition-colors border border-slate-200">
+                                  <button aria-label="More actions" className="h-7 w-7 rounded-lg flex items-center justify-center text-slate-400 hover:text-slate-700 hover:bg-slate-100 transition-colors border border-slate-200">
                                     <MoreHorizontal className="h-3.5 w-3.5" />
                                   </button>
                                 </DropdownMenuTrigger>
@@ -1942,7 +1958,7 @@ function TrackerPageInner() {
                             </Link>
                             <DropdownMenu>
                               <DropdownMenuTrigger asChild>
-                                <button className="h-7 w-7 rounded-lg flex items-center justify-center text-slate-400 hover:text-slate-700 hover:bg-slate-100 transition-colors border border-slate-200">
+                                <button aria-label="More actions" className="h-7 w-7 rounded-lg flex items-center justify-center text-slate-400 hover:text-slate-700 hover:bg-slate-100 transition-colors border border-slate-200">
                                   <MoreHorizontal className="h-3.5 w-3.5" />
                                 </button>
                               </DropdownMenuTrigger>
@@ -2076,7 +2092,11 @@ function TrackerPageInner() {
           <DialogHeader>
             <DialogTitle className="text-lg font-bold">{viewingNotes?.company} · {viewingNotes?.role}</DialogTitle>
           </DialogHeader>
-          <p className="text-sm text-slate-600 whitespace-pre-wrap">{viewingNotes?.notes}</p>
+          {/* max-h + overflow-y-auto: notes can be up to 3000 chars (see
+              tracker/schemas.py's _NOTES_MAX_LENGTH) - the shared Dialog has
+              no scroll handling of its own, so a long note would otherwise
+              grow the dialog past the viewport with no way to see the rest. */}
+          <p className="text-sm text-slate-600 whitespace-pre-wrap max-h-[50vh] overflow-y-auto scrollbar-thin">{viewingNotes?.notes}</p>
           <DialogFooter>
             <Button type="button" variant="outline" onClick={() => setViewingNotes(null)} className="rounded-xl">Close</Button>
             <Button

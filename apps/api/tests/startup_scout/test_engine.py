@@ -318,6 +318,32 @@ def test_is_valid_person_name_rejects_more_than_five_words():
     assert engine._is_valid_person_name("A B C D E F") is False
 
 
+def test_is_valid_person_name_rejects_structured_data_field_labels():
+    """Regression guard: a crawl against a real company ('foom') produced
+    these two as 'contacts' - page field labels like "Primary Job Title:
+    Co-Founder" that are fully capitalized and weren't in the stopword
+    list, so they passed the name-shape check despite not being names."""
+    assert engine._is_valid_person_name("Primary Job Title") is False
+    assert engine._is_valid_person_name("Primary Organization Foom") is False
+
+
+def test_is_valid_person_name_rejects_job_title_words_in_name_slot():
+    """Folded in from _parse_linkedin_person's own separate, narrower regex
+    (director/manager/developer/vp/president/officer) - now covered by the
+    shared stopword list instead of a second copy of the same intent."""
+    assert engine._is_valid_person_name("John Director") is False
+    assert engine._is_valid_person_name("Jane Manager") is False
+
+
+def test_is_valid_person_name_allows_single_letter_word_when_opted_in():
+    """_parse_linkedin_person passes this - LinkedIn truncates a surname to
+    a privacy initial ("Selin K"), a real usable name despite looking like
+    the single-letter noise this check rejects by default (see the
+    opposite case: rejects_bare_single_letter_without_dot above)."""
+    assert engine._is_valid_person_name("Selin K", allow_single_letter_word=True) is True
+    assert engine._is_valid_person_name("Selin K", allow_single_letter_word=False) is False
+
+
 # ── _extract_names_from_snippet ────────────────────────────────────────────
 
 def test_extract_names_from_snippet_finds_name_and_role():

@@ -1,9 +1,11 @@
 # Startup Scout: Production Hardening Playbook
 
 **Status:** Production-Ready  
-**Last Audited:** 2026-08-28  
+**Last Audited:** 2026-08-28 (Phase A - discovery/search, this document's scope)
 
-This playbook documents operational hardening measures, DDG circuit breaker behavior, caching topology, and mobile responsive layout fixes for **Startup Scout**.
+This playbook documents operational hardening measures, DDG circuit breaker behavior, caching topology, and mobile responsive layout fixes for **Startup Scout**'s discovery/search flow (Phase A).
+
+Phase B (founder/contact crawl, reached from Tracker's Scout tab) was hardened separately on 2026-11-06 - see `production_hardening_notes.md`'s "Phase B hardening" section for the ARQ migration, race-condition fix, Apollo budget, and the other fixes made there. That phase's UI entry point is currently disabled by product decision (not because it's unreliable); the backend remains fully functional.
 
 ---
 
