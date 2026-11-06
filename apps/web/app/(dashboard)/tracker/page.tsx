@@ -1329,13 +1329,18 @@ function TrackerPageInner() {
                                         {(contact.name || '?')[0].toUpperCase()}
                                       </div>
 
-                                      {/* Name + verified tick */}
-                                      <div className="min-w-0 flex-1 flex items-center gap-1">
-                                        <p className="text-xs font-semibold text-slate-800 truncate">{contact.name}</p>
-                                        {contact.is_verified && (
-                                          <span title="Verified" className="flex-shrink-0">
-                                            <CheckCircle className="h-3 w-3 text-emerald-500" />
-                                          </span>
+                                      {/* Name + role + verified tick */}
+                                      <div className="min-w-0 flex-1">
+                                        <div className="flex items-center gap-1">
+                                          <p className="text-xs font-semibold text-slate-800 truncate">{contact.name}</p>
+                                          {contact.is_verified && (
+                                            <span title="Verified" className="flex-shrink-0">
+                                              <CheckCircle className="h-3 w-3 text-emerald-500" />
+                                            </span>
+                                          )}
+                                        </div>
+                                        {contact.title && (
+                                          <p className="text-[10px] text-slate-400 truncate">{contact.title}</p>
                                         )}
                                       </div>
 
