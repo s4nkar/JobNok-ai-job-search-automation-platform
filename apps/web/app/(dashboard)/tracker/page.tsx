@@ -581,6 +581,420 @@ function TrackerPageInner() {
     'job-search': jobSearchApplications.length,
   }
 
+  // ── Mobile card renderers ──────────────────────────────────────────────
+  // A table is a poor fit under ~640px (either every column squeezes/wraps,
+  // or the row scrolls horizontally out of view) - each tab gets a second,
+  // card-based layout here, shown via `sm:hidden` while the existing table
+  // goes `hidden sm:block`. Both stay mounted; CSS alone picks which one
+  // renders, matching this file's existing desktop-stat-card/mobile-pill-row
+  // pattern (see the Applications tab filter row above) rather than a JS
+  // media-query check. Same data, same handlers as the desktop table - only
+  // the markup differs, so there's no extra fetching or state involved.
+
+  function renderApplicationCard(app: JobApplication) {
+    const overdueRow = isOverdue(app.follow_up_date) && !['Rejected', 'Withdrawn'].includes(app.status)
+    const isUpdatingStatus = updatingAppId === app.id
+    const docCount = docCountFor(app.id, 'source_job_application_id')
+    return (
+      <div key={app.id} className={cn('bg-white rounded-xl border p-3.5 space-y-2.5', overdueRow ? 'border-red-200 bg-red-50/30' : 'border-slate-200')}>
+        <div className="flex items-start justify-between gap-2">
+          <div className="min-w-0 flex-1">
+            <div className="flex items-center gap-1.5">
+              <p className="text-sm font-semibold text-slate-800 truncate">{app.company}</p>
+              {app.notes && (
+                <button onClick={() => setViewingNotes(app)} className="text-slate-300 hover:text-indigo-500 transition-colors shrink-0">
+                  <StickyNote className="h-3.5 w-3.5" />
+                </button>
+              )}
+            </div>
+            <p className="text-xs text-slate-500 truncate">{app.role}</p>
+          </div>
+          <DropdownMenu>
+            <DropdownMenuTrigger asChild>
+              <button className="h-7 w-7 rounded-lg flex items-center justify-center text-slate-400 hover:text-slate-700 hover:bg-slate-100 transition-colors border border-slate-200 shrink-0">
+                <MoreHorizontal className="h-3.5 w-3.5" />
+              </button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="end" className="w-52">
+              <DropdownMenuItem onClick={() => openEdit(app)}>
+                <Pencil className="h-3.5 w-3.5 text-slate-500" /> Edit
+              </DropdownMenuItem>
+              {docCount > 0 && (
+                <DropdownMenuItem onClick={() => router.push(`/my-docs?q=${encodeURIComponent(`${app.role} at ${app.company}`)}`)}>
+                  <FolderOpen className="h-3.5 w-3.5 text-slate-500" /> View Docs ({docCount})
+                </DropdownMenuItem>
+              )}
+              <DropdownMenuSeparator />
+              <DropdownMenuLabel>Use with tools</DropdownMenuLabel>
+              <DropdownMenuItem onClick={() => router.push(`/resume-tailor?job_application_id=${app.id}&company=${encodeURIComponent(app.company)}&role=${encodeURIComponent(app.role)}`)}>
+                <FileSearch className="h-3.5 w-3.5 text-slate-500" /> Resume Tailor
+              </DropdownMenuItem>
+              <DropdownMenuItem onClick={() => router.push(`/cover-letter?job_application_id=${app.id}&company=${encodeURIComponent(app.company)}&role=${encodeURIComponent(app.role)}`)}>
+                <PenLine className="h-3.5 w-3.5 text-slate-500" /> Cover Letter
+              </DropdownMenuItem>
+              <DropdownMenuItem onClick={() => router.push(`/interview-prep?job_application_id=${app.id}&company=${encodeURIComponent(app.company)}&role=${encodeURIComponent(app.role)}`)}>
+                <MessageSquare className="h-3.5 w-3.5 text-slate-500" /> Interview Prep
+              </DropdownMenuItem>
+              <DropdownMenuSeparator />
+              <DropdownMenuItem onClick={() => deleteApp(app.id)} className="text-red-600 focus:text-red-600 focus:bg-red-50">
+                <Trash2 className="h-3.5 w-3.5" /> Remove Application
+              </DropdownMenuItem>
+            </DropdownMenuContent>
+          </DropdownMenu>
+        </div>
+
+        <div className="flex items-center justify-between gap-2 flex-wrap">
+          <Select value={app.status} onValueChange={(v) => updateApplicationStatus(app, v as ApplicationStatus)} disabled={isUpdatingStatus}>
+            <SelectTrigger className={cn('h-7 text-xs rounded-full border-0 px-2.5 py-0.5 font-semibold w-auto gap-1', STATUS_COLORS[app.status])}>
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              {APPLICATION_STATUSES.map((s) => <SelectItem key={s} value={s} className="text-xs">{s}</SelectItem>)}
+            </SelectContent>
+          </Select>
+          {app.follow_up_date && (
+            <span className={cn('flex items-center gap-1 text-[11px] whitespace-nowrap', overdueRow ? 'text-red-600 font-medium' : 'text-slate-400')}>
+              {overdueRow && <Clock className="h-3 w-3" />}
+              Follow-up {formatDate(app.follow_up_date)}
+            </span>
+          )}
+        </div>
+
+        <div className="flex items-center justify-between text-[11px] text-slate-400">
+          <span>Applied {formatDate(app.applied_at)}</span>
+          {app.salary_min && app.salary_max && (
+            <span>{formatCurrency(app.salary_min)}–{formatCurrency(app.salary_max)}</span>
+          )}
+        </div>
+      </div>
+    )
+  }
+
+  function renderLeadCard(lead: StartupHuntSavedOpportunity) {
+    const applyUrl = lead.direct_apply_url || lead.company_careers_url || lead.portal_job_url || lead.company_website_url
+    const isUpdating = updatingLeadId === lead.id
+    const docCount = docCountFor(lead.id, 'source_opportunity_id')
+    return (
+      <div key={lead.id} className="bg-white rounded-xl border border-slate-200 p-3.5 space-y-2.5">
+        <div className="flex items-start justify-between gap-2">
+          <div className="min-w-0 flex-1">
+            {lead.company_website_url ? (
+              <Link href={lead.company_website_url} target="_blank" className="text-sm font-semibold text-slate-800 hover:text-indigo-600 hover:underline transition-colors truncate block">
+                {lead.company_name}
+              </Link>
+            ) : (
+              <p className="text-sm font-semibold text-slate-800 truncate">{lead.company_name}</p>
+            )}
+            <p className="text-xs text-slate-500 truncate">{lead.role_title}</p>
+          </div>
+          <DropdownMenu>
+            <DropdownMenuTrigger asChild>
+              <button className="h-7 w-7 rounded-lg flex items-center justify-center text-slate-400 hover:text-slate-700 hover:bg-slate-100 transition-colors border border-slate-200 shrink-0">
+                <MoreHorizontal className="h-3.5 w-3.5" />
+              </button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="end" className="w-52">
+              {applyUrl && (
+                <DropdownMenuItem onClick={() => window.open(applyUrl, '_blank')}>
+                  <ExternalLink className="h-3.5 w-3.5 text-slate-500" /> {lead.direct_apply_url ? 'Apply' : lead.company_careers_url ? 'Careers' : 'Open'}
+                </DropdownMenuItem>
+              )}
+              {docCount > 0 && (
+                <DropdownMenuItem onClick={() => router.push(`/my-docs?q=${encodeURIComponent(`${lead.role_title} at ${lead.company_name}`)}`)}>
+                  <FolderOpen className="h-3.5 w-3.5 text-slate-500" /> View Docs ({docCount})
+                </DropdownMenuItem>
+              )}
+              <DropdownMenuSeparator />
+              <DropdownMenuLabel>Use with tools</DropdownMenuLabel>
+              <DropdownMenuItem onClick={() => router.push(`/resume-tailor?opportunity_id=${lead.id}`)}>
+                <FileSearch className="h-3.5 w-3.5 text-slate-500" /> Resume Tailor
+              </DropdownMenuItem>
+              <DropdownMenuItem onClick={() => router.push(`/cover-letter?opportunity_id=${lead.id}`)}>
+                <PenLine className="h-3.5 w-3.5 text-slate-500" /> Cover Letter
+              </DropdownMenuItem>
+              <DropdownMenuItem onClick={() => router.push(`/interview-prep?opportunity_id=${lead.id}`)}>
+                <MessageSquare className="h-3.5 w-3.5 text-slate-500" /> Interview Prep
+              </DropdownMenuItem>
+              <DropdownMenuSeparator />
+              {lead.opportunity_kind === 'outreach_lead' && (
+                <DropdownMenuItem onClick={() => updateLeadStatus(lead, 'contacted')} disabled={lead.opportunity_status === 'contacted'}>
+                  <Mail className="h-3.5 w-3.5 text-indigo-500" /> Mark Contacted
+                </DropdownMenuItem>
+              )}
+              <DropdownMenuItem onClick={() => deleteLead(lead.id)} className="text-red-600 focus:text-red-600 focus:bg-red-50">
+                <Trash2 className="h-3.5 w-3.5" /> Remove Lead
+              </DropdownMenuItem>
+            </DropdownMenuContent>
+          </DropdownMenu>
+        </div>
+
+        <div className="flex items-center justify-between gap-2 flex-wrap">
+          <Select value={lead.opportunity_status} onValueChange={(v) => updateLeadStatus(lead, v as StartupHuntOpportunityStatus)} disabled={isUpdating}>
+            <SelectTrigger className={cn('h-7 text-xs rounded-full border-0 px-2.5 py-0.5 font-semibold w-auto gap-1', STARTUP_STATUS_META[lead.opportunity_status].classes)}>
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              {LEAD_STATUS_ORDER.map((s) => <SelectItem key={s} value={s} className="text-xs">{STARTUP_STATUS_META[s].label}</SelectItem>)}
+            </SelectContent>
+          </Select>
+          <span className="text-xs font-semibold text-indigo-600">{lead.score_total.toFixed(1)}%</span>
+        </div>
+
+        <div className="flex items-center justify-between gap-2 text-[11px] text-slate-400">
+          <span className="flex items-center gap-1 truncate">
+            <MapPin className="h-3 w-3 flex-shrink-0" />{lead.location}
+          </span>
+          <span className="inline-flex items-center px-1.5 py-0.5 rounded-md text-[10px] font-semibold bg-slate-100 text-slate-600 border border-slate-200 whitespace-nowrap shrink-0">
+            {lead.source_name}
+          </span>
+        </div>
+      </div>
+    )
+  }
+
+  function renderJobSearchCard(app: JobSearchApplication) {
+    const isUpdating = updatingJobSearchId === app.id
+    const docCount = docCountFor(app.id, 'source_application_id')
+    return (
+      <div key={app.id} className="bg-white rounded-xl border border-slate-200 p-3.5 space-y-2.5">
+        <div className="flex items-start justify-between gap-2">
+          <div className="min-w-0 flex-1">
+            <p className="text-sm font-semibold text-slate-800 truncate">{app.role}</p>
+            <p className="text-xs text-slate-500 truncate">{app.company}</p>
+          </div>
+          <DropdownMenu>
+            <DropdownMenuTrigger asChild>
+              <button className="h-7 w-7 rounded-lg flex items-center justify-center text-slate-400 hover:text-slate-700 hover:bg-slate-100 transition-colors border border-slate-200 shrink-0">
+                <MoreHorizontal className="h-3.5 w-3.5" />
+              </button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="end" className="w-52">
+              <DropdownMenuItem onClick={() => window.open(app.job_url, '_blank')}>
+                <ExternalLink className="h-3.5 w-3.5 text-slate-500" /> Open
+              </DropdownMenuItem>
+              {docCount > 0 && (
+                <DropdownMenuItem onClick={() => router.push(`/my-docs?q=${encodeURIComponent(`${app.role} at ${app.company}`)}`)}>
+                  <FolderOpen className="h-3.5 w-3.5 text-slate-500" /> View Docs ({docCount})
+                </DropdownMenuItem>
+              )}
+              <DropdownMenuSeparator />
+              <DropdownMenuLabel>Use with tools</DropdownMenuLabel>
+              <DropdownMenuItem onClick={() => router.push(`/resume-tailor?job_search_application_id=${app.id}&company=${encodeURIComponent(app.company)}&role=${encodeURIComponent(app.role)}`)}>
+                <FileSearch className="h-3.5 w-3.5 text-slate-500" /> Resume Tailor
+              </DropdownMenuItem>
+              <DropdownMenuItem onClick={() => router.push(`/cover-letter?job_search_application_id=${app.id}&company=${encodeURIComponent(app.company)}&role=${encodeURIComponent(app.role)}`)}>
+                <PenLine className="h-3.5 w-3.5 text-slate-500" /> Cover Letter
+              </DropdownMenuItem>
+              <DropdownMenuItem onClick={() => router.push(`/interview-prep?job_search_application_id=${app.id}&company=${encodeURIComponent(app.company)}&role=${encodeURIComponent(app.role)}`)}>
+                <MessageSquare className="h-3.5 w-3.5 text-slate-500" /> Interview Prep
+              </DropdownMenuItem>
+              <DropdownMenuSeparator />
+              <DropdownMenuItem onClick={() => deleteJobSearchApplication(app.id)} className="text-red-600 focus:text-red-600 focus:bg-red-50">
+                <Trash2 className="h-3.5 w-3.5" /> Remove from Tracker
+              </DropdownMenuItem>
+            </DropdownMenuContent>
+          </DropdownMenu>
+        </div>
+
+        <Select value={app.application_status} onValueChange={(v) => updateJobSearchStatus(app, v as JobSearchApplicationStatus)} disabled={isUpdating}>
+          <SelectTrigger className={cn('h-7 text-xs rounded-full border-0 px-2.5 py-0.5 font-semibold w-auto gap-1', JOB_SEARCH_STATUS_META[app.application_status].classes)}>
+            <SelectValue />
+          </SelectTrigger>
+          <SelectContent>
+            {JOB_SEARCH_STATUS_ORDER.map((s) => <SelectItem key={s} value={s} className="text-xs">{JOB_SEARCH_STATUS_META[s].label}</SelectItem>)}
+          </SelectContent>
+        </Select>
+
+        <div className="flex items-center justify-between gap-2 text-[11px] text-slate-400">
+          <span className="flex items-center gap-1 truncate">
+            <MapPin className="h-3 w-3 flex-shrink-0" />{app.location}
+          </span>
+          <span className="inline-flex items-center px-1.5 py-0.5 rounded-md text-[10px] font-semibold bg-slate-100 text-slate-600 border border-slate-200 whitespace-nowrap shrink-0">
+            {app.source_name}
+          </span>
+        </div>
+      </div>
+    )
+  }
+
+  // Shared by the Scout tab's desktop <tr>/<td> expand row AND its mobile
+  // card's expand section below - same loading/empty/contact-list content
+  // either way, only the wrapping element differs (table cell vs plain div).
+  function renderContactsPanelBody(company: ScoutCompany, contacts: ScoutContact[], contactsAreLoading: boolean, canCrawl: boolean) {
+    if (contactsAreLoading) {
+      return (
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-2">
+          {Array.from({ length: 4 }).map((_, i) => (
+            <div key={i} className="bg-white rounded-lg border border-slate-200 px-3 py-2 flex items-center gap-2.5 animate-pulse">
+              <div className="w-7 h-7 rounded-full bg-slate-100 flex-shrink-0" />
+              <div className="flex-1 space-y-1.5">
+                <div className="h-2.5 w-20 bg-slate-100 rounded-full" />
+              </div>
+              <div className="w-6 h-6 rounded-md bg-slate-100 flex-shrink-0" />
+            </div>
+          ))}
+        </div>
+      )
+    }
+    if (contacts.length === 0) {
+      return (
+        <div className="flex flex-col items-center justify-center py-6 text-center">
+          <p className="text-sm font-semibold text-slate-500">No contacts found</p>
+          <p className="text-xs text-slate-400 mt-0.5">Try re-crawling — DDG results vary per session.</p>
+          {canCrawl && (
+            <button
+              onClick={() => startCrawl(company)}
+              className="mt-3 h-7 px-3 rounded-lg flex items-center gap-1.5 whitespace-nowrap text-xs font-semibold text-indigo-700 bg-indigo-50 hover:bg-indigo-100 border border-indigo-200 transition-colors"
+            >
+              <Radar className="h-3 w-3" /> Re-crawl now
+            </button>
+          )}
+        </div>
+      )
+    }
+    return (
+      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-2">
+        {contacts.map((contact) => (
+          <div key={contact.id} className="bg-white rounded-lg border border-slate-200 px-3 py-2 flex items-center gap-2.5">
+            <div className="w-7 h-7 rounded-full bg-indigo-100 flex items-center justify-center flex-shrink-0 text-[11px] font-bold text-indigo-700">
+              {(contact.name || '?')[0].toUpperCase()}
+            </div>
+            <div className="min-w-0 flex-1">
+              <div className="flex items-center gap-1">
+                <p className="text-xs font-semibold text-slate-800 truncate">{contact.name}</p>
+                {contact.is_verified && (
+                  <span title="Verified" className="flex-shrink-0">
+                    <CheckCircle className="h-3 w-3 text-emerald-500" />
+                  </span>
+                )}
+              </div>
+              {contact.title && (
+                <p className="text-[10px] text-slate-400 truncate">{contact.title}</p>
+              )}
+            </div>
+            <div className="flex items-center gap-0.5 flex-shrink-0">
+              {contact.linkedin_url && (
+                <Link href={contact.linkedin_url} target="_blank" title="LinkedIn" className="w-6 h-6 rounded-md flex items-center justify-center text-blue-600 hover:bg-blue-50 transition-colors">
+                  <Linkedin className="h-3.5 w-3.5" />
+                </Link>
+              )}
+              {contact.email && (
+                <a href={`mailto:${contact.email}`} title={contact.email} className="w-6 h-6 rounded-md flex items-center justify-center text-indigo-600 hover:bg-indigo-50 transition-colors">
+                  <Mail className="h-3.5 w-3.5" />
+                </a>
+              )}
+            </div>
+          </div>
+        ))}
+      </div>
+    )
+  }
+
+  function renderScoutCard(company: ScoutCompany) {
+    const statusMeta = SCOUT_STATUS_META[company.crawl_status]
+    const stagePill = SCOUT_STAGE_PILL[company.funding_stage ?? ''] ?? ''
+    const isCrawling = company.crawl_status === 'crawling' || crawlingIds.has(company.id)
+    const isStopping = stoppingIds.has(company.id)
+    const canCrawl = ['pending', 'partial', 'failed'].includes(company.crawl_status) && !crawlingIds.has(company.id)
+    const contactsOpen = Boolean(expandedContacts[company.id])
+    const contacts = contactsCache[company.id] || []
+    const contactsAreLoading = contactsLoading[company.id]
+    const hasContacts = company.crawl_status === 'enriched' || company.crawl_status === 'partial'
+
+    return (
+      <div key={company.id} className="bg-white rounded-xl border border-slate-200 p-3.5 space-y-2.5">
+        <div className="flex items-start justify-between gap-2">
+          <div className="flex items-start gap-2.5 min-w-0 flex-1">
+            <div className="w-8 h-8 rounded-xl bg-indigo-50 border border-indigo-100 flex items-center justify-center flex-shrink-0">
+              <Building2 className="h-4 w-4 text-indigo-500" />
+            </div>
+            <div className="min-w-0">
+              {company.website ? (
+                <Link href={company.website} target="_blank" className="text-sm font-semibold text-slate-800 hover:text-indigo-600 hover:underline transition-colors truncate block">
+                  {company.name}
+                </Link>
+              ) : (
+                <p className="text-sm font-semibold text-slate-800 truncate">{company.name}</p>
+              )}
+              {company.description && (
+                <p className="text-[11px] text-slate-400 mt-0.5 line-clamp-1">{company.description}</p>
+              )}
+            </div>
+          </div>
+          <button
+            onClick={() => deleteScoutCompany(company.id)}
+            className="h-7 w-7 rounded-lg flex items-center justify-center text-slate-300 hover:text-red-500 hover:bg-red-50 transition-colors shrink-0"
+          >
+            <Trash2 className="h-3.5 w-3.5" />
+          </button>
+        </div>
+
+        <div className="flex items-center gap-1.5 flex-wrap">
+          {company.funding_stage && (
+            <span className={cn('inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-semibold ring-1 whitespace-nowrap',
+              stagePill || 'bg-slate-50 text-slate-500 ring-slate-200')}>
+              {company.funding_stage}
+            </span>
+          )}
+          {company.location && (
+            <span className="flex items-center gap-1 text-[11px] text-slate-500 whitespace-nowrap">
+              <MapPin className="h-3 w-3 flex-shrink-0 text-slate-300" />{company.location}
+            </span>
+          )}
+          <span className={cn('inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full text-[10px] font-semibold ring-1 ring-inset ml-auto whitespace-nowrap',
+            statusMeta.classes,
+          )}>
+            {isCrawling && <Loader2 className="h-2.5 w-2.5 animate-spin" />}
+            {statusMeta.label}
+          </span>
+        </div>
+
+        <div className="flex items-center gap-1.5 flex-wrap pt-2 border-t border-slate-100">
+          {hasContacts ? (
+            <button
+              onClick={() => toggleContacts(company.id)}
+              className={cn('flex items-center gap-1 px-2 py-1 rounded-full text-[11px] font-semibold border transition-colors whitespace-nowrap',
+                contactsOpen ? 'bg-indigo-50 text-indigo-700 border-indigo-200' : 'bg-slate-50 text-slate-500 border-slate-200')}
+            >
+              <Users className="h-3 w-3" />
+              {contactsOpen ? 'Hide contacts' : 'View contacts'}
+              {contactsOpen ? <ChevronUp className="h-3 w-3" /> : <ChevronDown className="h-3 w-3" />}
+            </button>
+          ) : (
+            <span className="text-slate-300 text-[11px]">Not crawled</span>
+          )}
+          <div className="flex gap-1 ml-auto">
+            {isCrawling && (
+              <button
+                onClick={() => stopCrawl(company)}
+                disabled={isStopping}
+                className="h-7 px-2 rounded-lg flex items-center gap-1 whitespace-nowrap text-xs font-semibold text-red-700 bg-red-50 border border-red-200 disabled:opacity-50"
+              >
+                {isStopping ? <Loader2 className="h-3 w-3 animate-spin" /> : <StopCircle className="h-3 w-3" />}
+                {isStopping ? 'Stopping…' : 'Stop'}
+              </button>
+            )}
+            {canCrawl && (
+              <button
+                onClick={() => startCrawl(company)}
+                className="h-7 px-2 rounded-lg flex items-center gap-1 whitespace-nowrap text-xs font-semibold text-indigo-700 bg-indigo-50 border border-indigo-200"
+              >
+                <Radar className="h-3 w-3" />
+                {company.crawl_status === 'pending' ? 'Start Crawl' : 'Re-crawl'}
+              </button>
+            )}
+          </div>
+        </div>
+
+        {contactsOpen && (
+          <div className="pt-2 border-t border-slate-100">
+            {renderContactsPanelBody(company, contacts, contactsAreLoading, canCrawl)}
+          </div>
+        )}
+      </div>
+    )
+  }
+
   return (
     <div className="animate-fade-in">
       <div className="flex items-center gap-4 mb-6">
@@ -705,7 +1119,7 @@ function TrackerPageInner() {
             </button>
           </div>
 
-          <div className="bg-white rounded-2xl border border-slate-100 shadow-sm overflow-hidden">
+          <div className="bg-white rounded-2xl border border-slate-100 shadow-sm overflow-hidden hidden sm:block">
             {appsLoading ? (
               <div className="flex items-center justify-center h-48">
                 <div className="flex flex-col items-center gap-3">
@@ -839,6 +1253,30 @@ function TrackerPageInner() {
             )}
             <LoadMoreRow hasMore={hasMoreApplications} loading={loadingMoreApplications} onClick={loadMoreApplications} />
           </div>
+
+          {/* Mobile card list - see the "Mobile card renderers" comment above */}
+          <div className="sm:hidden">
+            {appsLoading ? (
+              <div className="flex flex-col items-center justify-center h-48 gap-3">
+                <Loader2 className="h-7 w-7 animate-spin text-indigo-400" />
+                <p className="text-sm text-slate-400">Loading applications…</p>
+              </div>
+            ) : filteredApplications.length === 0 ? (
+              <div className="flex flex-col items-center justify-center h-48 text-center bg-white rounded-2xl border border-slate-100">
+                <p className="font-semibold text-slate-500 text-sm">
+                  {applicationsFilter === 'all' ? 'No applications yet' : `No ${applicationsFilter} applications`}
+                </p>
+                <p className="text-xs text-slate-400 mt-1 px-4">
+                  {applicationsFilter === 'all' ? 'Add your first one or track a lead from Startup Hunt' : 'Try a different filter.'}
+                </p>
+              </div>
+            ) : (
+              <div className="space-y-2">
+                {filteredApplications.map(renderApplicationCard)}
+                <LoadMoreRow hasMore={hasMoreApplications} loading={loadingMoreApplications} onClick={loadMoreApplications} />
+              </div>
+            )}
+          </div>
         </>
       )}
 
@@ -893,7 +1331,7 @@ function TrackerPageInner() {
             ))}
           </div>
 
-          <div className="bg-white rounded-2xl border border-slate-100 shadow-sm overflow-hidden">
+          <div className="bg-white rounded-2xl border border-slate-100 shadow-sm overflow-hidden hidden sm:block">
             {leadsLoading ? (
               <div className="flex items-center justify-center h-48">
                 <div className="flex flex-col items-center gap-3">
@@ -1022,6 +1460,28 @@ function TrackerPageInner() {
             )}
             <LoadMoreRow hasMore={hasMoreLeads} loading={loadingMoreLeads} onClick={loadMoreLeads} />
           </div>
+
+          {/* Mobile card list */}
+          <div className="sm:hidden">
+            {leadsLoading ? (
+              <div className="flex flex-col items-center justify-center h-48 gap-3">
+                <Loader2 className="h-7 w-7 animate-spin text-indigo-400" />
+                <p className="text-sm text-slate-400">Loading startup leads…</p>
+              </div>
+            ) : filteredLeads.length === 0 ? (
+              <div className="flex flex-col items-center justify-center h-48 text-center bg-white rounded-2xl border border-slate-100">
+                <p className="font-semibold text-slate-500 text-sm">No leads here yet</p>
+                <p className="text-xs text-slate-400 mt-1 px-4">
+                  {leadStatusFilter === 'all' ? 'Save opportunities from Startup Hunt to see them here' : `No ${leadStatusFilter} leads.`}
+                </p>
+              </div>
+            ) : (
+              <div className="space-y-2">
+                {filteredLeads.map(renderLeadCard)}
+                <LoadMoreRow hasMore={hasMoreLeads} loading={loadingMoreLeads} onClick={loadMoreLeads} />
+              </div>
+            )}
+          </div>
         </>
       )}
 
@@ -1096,7 +1556,7 @@ function TrackerPageInner() {
           </div>
 
           {/* ── Company list ─────────────────────────────────────────────────── */}
-          <div className="bg-white rounded-2xl border border-slate-100 shadow-sm overflow-hidden">
+          <div className="bg-white rounded-2xl border border-slate-100 shadow-sm overflow-hidden hidden sm:block">
 
             {/* Loading skeleton */}
             {scoutLoading ? (
@@ -1293,83 +1753,7 @@ function TrackerPageInner() {
                         {contactsOpen && (
                           <tr key={`${company.id}-contacts`} className="bg-slate-50/50 border-b border-slate-100">
                             <td colSpan={7} className="px-5 py-5">
-                              {contactsAreLoading ? (
-                                /* Contacts skeleton */
-                                <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-2">
-                                  {Array.from({ length: 4 }).map((_, i) => (
-                                    <div key={i} className="bg-white rounded-lg border border-slate-200 px-3 py-2 flex items-center gap-2.5 animate-pulse">
-                                      <div className="w-7 h-7 rounded-full bg-slate-100 flex-shrink-0" />
-                                      <div className="flex-1 space-y-1.5">
-                                        <div className="h-2.5 w-20 bg-slate-100 rounded-full" />
-                                      </div>
-                                      <div className="w-6 h-6 rounded-md bg-slate-100 flex-shrink-0" />
-                                    </div>
-                                  ))}
-                                </div>
-                              ) : contacts.length === 0 ? (
-                                /* No contacts empty state */
-                                <div className="flex flex-col items-center justify-center py-6 text-center">
-                                  <p className="text-sm font-semibold text-slate-500">No contacts found</p>
-                                  <p className="text-xs text-slate-400 mt-0.5">Try re-crawling — DDG results vary per session.</p>
-                                  {canCrawl && (
-                                    <button
-                                      onClick={() => startCrawl(company)}
-                                      className="mt-3 h-7 px-3 rounded-lg flex items-center gap-1.5 whitespace-nowrap text-xs font-semibold text-indigo-700 bg-indigo-50 hover:bg-indigo-100 border border-indigo-200 transition-colors"
-                                    >
-                                      <Radar className="h-3 w-3" /> Re-crawl now
-                                    </button>
-                                  )}
-                                </div>
-                              ) : (
-                                <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-2">
-                                  {contacts.map((contact) => (
-                                    <div key={contact.id} className="bg-white rounded-lg border border-slate-200 px-3 py-2 flex items-center gap-2.5">
-                                      {/* Avatar */}
-                                      <div className="w-7 h-7 rounded-full bg-indigo-100 flex items-center justify-center flex-shrink-0 text-[11px] font-bold text-indigo-700">
-                                        {(contact.name || '?')[0].toUpperCase()}
-                                      </div>
-
-                                      {/* Name + role + verified tick */}
-                                      <div className="min-w-0 flex-1">
-                                        <div className="flex items-center gap-1">
-                                          <p className="text-xs font-semibold text-slate-800 truncate">{contact.name}</p>
-                                          {contact.is_verified && (
-                                            <span title="Verified" className="flex-shrink-0">
-                                              <CheckCircle className="h-3 w-3 text-emerald-500" />
-                                            </span>
-                                          )}
-                                        </div>
-                                        {contact.title && (
-                                          <p className="text-[10px] text-slate-400 truncate">{contact.title}</p>
-                                        )}
-                                      </div>
-
-                                      {/* Contact links — whatever's available, icon-only */}
-                                      <div className="flex items-center gap-0.5 flex-shrink-0">
-                                        {contact.linkedin_url && (
-                                          <Link
-                                            href={contact.linkedin_url}
-                                            target="_blank"
-                                            title="LinkedIn"
-                                            className="w-6 h-6 rounded-md flex items-center justify-center text-blue-600 hover:bg-blue-50 transition-colors"
-                                          >
-                                            <Linkedin className="h-3.5 w-3.5" />
-                                          </Link>
-                                        )}
-                                        {contact.email && (
-                                          <a
-                                            href={`mailto:${contact.email}`}
-                                            title={contact.email}
-                                            className="w-6 h-6 rounded-md flex items-center justify-center text-indigo-600 hover:bg-indigo-50 transition-colors"
-                                          >
-                                            <Mail className="h-3.5 w-3.5" />
-                                          </a>
-                                        )}
-                                      </div>
-                                    </div>
-                                  ))}
-                                </div>
-                              )}
+                              {renderContactsPanelBody(company, contacts, contactsAreLoading, canCrawl)}
                             </td>
                           </tr>
                         )}
@@ -1380,6 +1764,37 @@ function TrackerPageInner() {
               </Table>
             )}
             <LoadMoreRow hasMore={hasMoreScout} loading={loadingMoreScout} onClick={loadMoreScout} />
+          </div>
+
+          {/* Mobile card list */}
+          <div className="sm:hidden">
+            {scoutLoading ? (
+              <div className="flex flex-col items-center justify-center h-48 gap-3">
+                <Loader2 className="h-7 w-7 animate-spin text-indigo-400" />
+                <p className="text-sm text-slate-400">Loading scout companies…</p>
+              </div>
+            ) : scoutCompanies.length === 0 ? (
+              <div className="flex flex-col items-center justify-center h-48 text-center bg-white rounded-2xl border border-slate-100 px-4">
+                <p className="font-semibold text-slate-500 text-sm">No companies saved yet</p>
+                <p className="text-xs text-slate-400 mt-1 leading-relaxed">
+                  Discover startups in{' '}
+                  <button onClick={() => router.push('/startup-scout')} className="text-indigo-600 hover:underline font-medium">
+                    Startup Scout
+                  </button>
+                  , then save them here to crawl for founder contacts.
+                </p>
+              </div>
+            ) : filteredScoutCompanies.length === 0 ? (
+              <div className="flex flex-col items-center justify-center h-48 text-center bg-white rounded-2xl border border-slate-100">
+                <p className="font-semibold text-slate-500 text-sm">No matching companies</p>
+                <p className="text-xs text-slate-400 mt-1">Try a different filter.</p>
+              </div>
+            ) : (
+              <div className="space-y-2">
+                {filteredScoutCompanies.map(renderScoutCard)}
+                <LoadMoreRow hasMore={hasMoreScout} loading={loadingMoreScout} onClick={loadMoreScout} />
+              </div>
+            )}
           </div>
         </>
       )}
@@ -1427,7 +1842,7 @@ function TrackerPageInner() {
             ))}
           </div>
 
-          <div className="bg-white rounded-2xl border border-slate-100 shadow-sm overflow-hidden">
+          <div className="bg-white rounded-2xl border border-slate-100 shadow-sm overflow-hidden hidden sm:block">
             {jobSearchLoading ? (
               <div className="flex items-center justify-center h-48">
                 <div className="flex flex-col items-center gap-3">
@@ -1536,6 +1951,28 @@ function TrackerPageInner() {
               </Table>
             )}
             <LoadMoreRow hasMore={hasMoreJobSearch} loading={loadingMoreJobSearch} onClick={loadMoreJobSearch} />
+          </div>
+
+          {/* Mobile card list */}
+          <div className="sm:hidden">
+            {jobSearchLoading ? (
+              <div className="flex flex-col items-center justify-center h-48 gap-3">
+                <Loader2 className="h-7 w-7 animate-spin text-indigo-400" />
+                <p className="text-sm text-slate-400">Loading tracked jobs…</p>
+              </div>
+            ) : filteredJobSearchApplications.length === 0 ? (
+              <div className="flex flex-col items-center justify-center h-48 text-center bg-white rounded-2xl border border-slate-100">
+                <p className="font-semibold text-slate-500 text-sm">No tracked jobs here yet</p>
+                <p className="text-xs text-slate-400 mt-1 px-4">
+                  {jobSearchStatusFilter === 'all' ? 'Mark a result as applied in Recent Job Search to see it here' : `No ${jobSearchStatusFilter} jobs.`}
+                </p>
+              </div>
+            ) : (
+              <div className="space-y-2">
+                {filteredJobSearchApplications.map(renderJobSearchCard)}
+                <LoadMoreRow hasMore={hasMoreJobSearch} loading={loadingMoreJobSearch} onClick={loadMoreJobSearch} />
+              </div>
+            )}
           </div>
         </>
       )}
