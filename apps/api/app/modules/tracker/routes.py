@@ -8,7 +8,7 @@ same reasoning applied there). Creation additionally has a generous daily
 quota as a storage-abuse ceiling.
 """
 
-from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import settings
@@ -35,10 +35,19 @@ async def _enforce_burst(user_id: str, bucket: str) -> None:
 
 
 @router.get("")
-async def list_applications(request: Request, db: AsyncSession = Depends(get_db)):
+async def list_applications(
+    request: Request,
+    response: Response,
+    limit: int | None = Query(None, ge=1, le=200),
+    cursor: str | None = Query(None),
+    db: AsyncSession = Depends(get_db),
+):
     user_id = await get_current_user_id(request, db)
     await _enforce_burst(user_id, "tracker_list")
-    return await service.list_applications(db, user_id)
+    items, next_cursor = await service.list_applications(db, user_id, limit=limit, cursor=cursor)
+    if next_cursor:
+        response.headers["X-Next-Cursor"] = next_cursor
+    return items
 
 
 @router.post("", status_code=201)

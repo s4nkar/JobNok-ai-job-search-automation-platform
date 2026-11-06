@@ -602,9 +602,16 @@ async def search_startup_hunt_opportunities(db: AsyncSession, user_id: str, body
     return response
 
 
-async def list_startup_hunt_opportunities(db: AsyncSession, user_id: str) -> list[dict]:
-    rows = await OpportunityRepository(db).list(user_id, order_by=StartupHuntOpportunity.created_at.desc())
-    return [row_to_dict(r) for r in rows]
+async def list_startup_hunt_opportunities(
+    db: AsyncSession, user_id: str, *, limit: int | None = None, cursor: str | None = None,
+) -> tuple[list[dict], str | None]:
+    """Unpaginated (limit=None) by default - see tracker/service.py's
+    list_applications for the same opt-in cursor-pagination pattern."""
+    if limit is None:
+        rows = await OpportunityRepository(db).list(user_id, order_by=StartupHuntOpportunity.created_at.desc())
+        return [row_to_dict(r) for r in rows], None
+    rows, next_cursor = await OpportunityRepository(db).list_page(user_id, limit=limit, cursor=cursor)
+    return [row_to_dict(r) for r in rows], next_cursor
 
 
 async def get_startup_hunt_opportunity(db: AsyncSession, user_id: str, opportunity_id: str) -> dict:

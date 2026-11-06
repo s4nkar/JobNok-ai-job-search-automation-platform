@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import json
 
-from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Request
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query, Request, Response
 from fastapi.responses import StreamingResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -104,10 +104,19 @@ async def save_company(req: SaveCompanyRequest, request: Request, db: AsyncSessi
 
 
 @router.get("/companies")
-async def list_companies(request: Request, db: AsyncSession = Depends(get_db)):
+async def list_companies(
+    request: Request,
+    response: Response,
+    limit: int | None = Query(None, ge=1, le=200),
+    cursor: str | None = Query(None),
+    db: AsyncSession = Depends(get_db),
+):
     """List all saved Startup Scout companies for the current user."""
     user_id = await get_current_user_id(request, db)
-    return await service.list_companies(db, user_id)
+    items, next_cursor = await service.list_companies(db, user_id, limit=limit, cursor=cursor)
+    if next_cursor:
+        response.headers["X-Next-Cursor"] = next_cursor
+    return items
 
 
 @router.get("/companies/{company_id}")

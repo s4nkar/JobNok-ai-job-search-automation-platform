@@ -16,7 +16,7 @@ import uuid
 from datetime import datetime, timedelta, timezone
 
 from fastapi import HTTPException
-from sqlalchemy import select
+from sqlalchemy import select, tuple_
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -553,20 +553,43 @@ async def get_job_search_application(db: AsyncSession, user_id: str, application
 
 
 async def list_job_search_applications(
-    db: AsyncSession, user_id: str, *, limit: int | None = None, offset: int = 0
-) -> list[dict]:
+    db: AsyncSession, user_id: str, *, limit: int | None = None, offset: int = 0, cursor: str | None = None,
+) -> tuple[list[dict], str | None]:
+    """No caller passes a nonzero offset in practice (recent-job-search's own
+    page always uses the default 0) - so offset=0 always takes the keyset
+    path below, which computes next_cursor regardless of whether a cursor
+    was given (needed for a FIRST page request, which never has one yet).
+    A genuinely nonzero offset falls back to plain OFFSET pagination with no
+    next_cursor - it has no well-defined keyset anchor to resume from, and
+    nothing currently relies on that combination."""
     page_size = min(limit or settings.job_search_applications_page_size_default,
                      settings.job_search_applications_page_size_max)
-    rows = (
-        await db.execute(
-            select(JobSearchApplication)
-            .where(JobSearchApplication.user_id == user_id)
-            .order_by(JobSearchApplication.created_at.desc())
-            .limit(page_size)
-            .offset(max(0, offset))
-        )
-    ).scalars().all()
-    return [row_to_dict(r) for r in rows]
+    stmt = select(JobSearchApplication).where(JobSearchApplication.user_id == user_id)
+
+    if offset:
+        stmt = stmt.order_by(JobSearchApplication.created_at.desc()).limit(page_size).offset(max(0, offset))
+        rows = (await db.execute(stmt)).scalars().all()
+        return [row_to_dict(r) for r in rows], None
+
+    if cursor:
+        created_at_str, _, id_str = cursor.partition("_")
+        try:
+            cursor_created_at = datetime.fromisoformat(created_at_str)
+            cursor_id = uuid.UUID(id_str)
+        except ValueError:
+            cursor_created_at = cursor_id = None
+        if cursor_created_at is not None and cursor_id is not None:
+            stmt = stmt.where(
+                tuple_(JobSearchApplication.created_at, JobSearchApplication.id) < tuple_(cursor_created_at, cursor_id)
+            )
+    stmt = stmt.order_by(JobSearchApplication.created_at.desc(), JobSearchApplication.id.desc()).limit(page_size + 1)
+    rows = (await db.execute(stmt)).scalars().all()
+    next_cursor = None
+    if len(rows) > page_size:
+        rows = rows[:page_size]
+        last = rows[-1]
+        next_cursor = f"{last.created_at.isoformat()}_{last.id}"
+    return [row_to_dict(r) for r in rows], next_cursor
 
 
 async def _find_job_id(

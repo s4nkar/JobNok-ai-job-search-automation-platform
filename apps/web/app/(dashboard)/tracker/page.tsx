@@ -3,8 +3,8 @@
 import React, { Suspense } from 'react'
 import Link from 'next/link'
 import { useRouter, useSearchParams } from 'next/navigation'
-import { useRef, useState } from 'react'
-import { useQuery, useQueryClient } from '@tanstack/react-query'
+import { useCallback, useEffect, useRef, useState } from 'react'
+import { useQuery } from '@tanstack/react-query'
 import { useForm } from 'react-hook-form'
 import { zodResolver } from '@hookform/resolvers/zod'
 import { z } from 'zod'
@@ -161,28 +161,91 @@ function initialTrackerTab(searchParams: URLSearchParams): TrackerTab {
   return requested === 'leads' || requested === 'scout' || requested === 'job-search' ? requested : 'applications'
 }
 
+const TRACKER_PAGE_SIZE = 50
+
+// Cursor ("keyset") pagination for one tab's list - deliberately local
+// component state, not a react-query cache entry. queryKeys.tracker/
+// startupHuntOpportunities/startupScoutCompanies/jobSearchApplications are
+// shared with Dashboard, Startup Hunt, Startup Scout, and Recent Job
+// Search's own pages, all of which expect the FULL unpaginated array under
+// those keys - caching only "the first N loaded here" under the same key
+// would corrupt what those other pages read. Backend: GET .../tracker etc.
+// accept optional limit/cursor and, when given, echo the next page's cursor
+// back via an X-Next-Cursor response header (see shared/repository.py::list_page).
+function usePaginatedList<T>(baseUrl: string) {
+  const [items, setItems] = useState<T[]>([])
+  const [cursor, setCursor] = useState<string | null>(null)
+  const [loading, setLoading] = useState(true)
+  const [loadingMore, setLoadingMore] = useState(false)
+
+  const pageUrl = useCallback((cur?: string | null) => {
+    const sep = baseUrl.includes('?') ? '&' : '?'
+    return cur
+      ? `${baseUrl}${sep}limit=${TRACKER_PAGE_SIZE}&cursor=${encodeURIComponent(cur)}`
+      : `${baseUrl}${sep}limit=${TRACKER_PAGE_SIZE}`
+  }, [baseUrl])
+
+  const reload = useCallback(async () => {
+    setLoading(true)
+    const res = await apiFetch(pageUrl())
+    const data: T[] = res.ok ? await res.json() : []
+    setItems(data)
+    setCursor(res.headers.get('X-Next-Cursor'))
+    setLoading(false)
+  }, [pageUrl])
+
+  const loadMore = useCallback(async () => {
+    if (!cursor || loadingMore) return
+    setLoadingMore(true)
+    const res = await apiFetch(pageUrl(cursor))
+    const data: T[] = res.ok ? await res.json() : []
+    setItems((prev) => [...prev, ...data])
+    setCursor(res.headers.get('X-Next-Cursor'))
+    setLoadingMore(false)
+  }, [cursor, loadingMore, pageUrl])
+
+  useEffect(() => { reload() }, [reload])
+
+  return { items, setItems, loading, loadingMore, hasMore: cursor !== null, loadMore, reload }
+}
+
+function LoadMoreRow({ hasMore, loading, onClick }: { hasMore: boolean; loading: boolean; onClick: () => void }) {
+  if (!hasMore) return null
+  return (
+    <div className="flex justify-center py-3 border-t border-slate-100">
+      <button
+        onClick={onClick}
+        disabled={loading}
+        className="flex items-center gap-1.5 px-4 py-1.5 rounded-lg text-xs font-semibold text-indigo-600 hover:bg-indigo-50 transition-colors disabled:opacity-50"
+      >
+        {loading && <Loader2 className="h-3 w-3 animate-spin" />}
+        {loading ? 'Loading…' : 'Load more'}
+      </button>
+    </div>
+  )
+}
+
 function TrackerPageInner() {
   const router = useRouter()
   const searchParams = useSearchParams()
-  const queryClient = useQueryClient()
   const [tab, setTab] = useState<TrackerTab>(() => initialTrackerTab(searchParams))
 
-  const { data: applications = [], isLoading: appsLoading } = useQuery({
-    queryKey: queryKeys.tracker,
-    queryFn: () => apiGet<JobApplication[]>('/api/tracker'),
-  })
-  const { data: jobSearchApplications = [], isLoading: jobSearchLoading } = useQuery({
-    queryKey: queryKeys.jobSearchApplications,
-    queryFn: () => apiGet<JobSearchApplication[]>('/api/job-search/applications?limit=200'),
-  })
-  const { data: leads = [], isLoading: leadsLoading } = useQuery({
-    queryKey: queryKeys.startupHuntOpportunities,
-    queryFn: () => apiGet<StartupHuntSavedOpportunity[]>('/api/startup-hunt/opportunities'),
-  })
-  const { data: scoutCompanies = [], isLoading: scoutLoading } = useQuery({
-    queryKey: queryKeys.startupScoutCompanies,
-    queryFn: () => apiGet<ScoutCompany[]>('/api/startup-scout/companies'),
-  })
+  const {
+    items: applications, setItems: setApplicationsState, loading: appsLoading,
+    hasMore: hasMoreApplications, loadingMore: loadingMoreApplications, loadMore: loadMoreApplications, reload: reloadApplications,
+  } = usePaginatedList<JobApplication>('/api/tracker')
+  const {
+    items: jobSearchApplications, setItems: setJobSearchApplicationsState, loading: jobSearchLoading,
+    hasMore: hasMoreJobSearch, loadingMore: loadingMoreJobSearch, loadMore: loadMoreJobSearch,
+  } = usePaginatedList<JobSearchApplication>('/api/job-search/applications')
+  const {
+    items: leads, setItems: setLeadsState, loading: leadsLoading,
+    hasMore: hasMoreLeads, loadingMore: loadingMoreLeads, loadMore: loadMoreLeads,
+  } = usePaginatedList<StartupHuntSavedOpportunity>('/api/startup-hunt/opportunities')
+  const {
+    items: scoutCompanies, setItems: setScoutCompaniesState, loading: scoutLoading,
+    hasMore: hasMoreScout, loadingMore: loadingMoreScout, loadMore: loadMoreScout,
+  } = usePaginatedList<ScoutCompany>('/api/startup-scout/companies')
   // Same queries/cache keys My Docs itself uses - just for a per-row doc
   // count + "View docs" deep link here, not full session detail. Shares
   // react-query's cache with My Docs, so visiting either page warms the
@@ -246,16 +309,16 @@ function TrackerPageInner() {
   const watchStatus = watch('status')
 
   function setScoutCompanies(updater: (prev: ScoutCompany[]) => ScoutCompany[]) {
-    queryClient.setQueryData<ScoutCompany[]>(queryKeys.startupScoutCompanies, (prev) => updater(prev || []))
+    setScoutCompaniesState(updater)
   }
   function setApplications(updater: (prev: JobApplication[]) => JobApplication[]) {
-    queryClient.setQueryData<JobApplication[]>(queryKeys.tracker, (prev) => updater(prev || []))
+    setApplicationsState(updater)
   }
   function setLeads(updater: (prev: StartupHuntSavedOpportunity[]) => StartupHuntSavedOpportunity[]) {
-    queryClient.setQueryData<StartupHuntSavedOpportunity[]>(queryKeys.startupHuntOpportunities, (prev) => updater(prev || []))
+    setLeadsState(updater)
   }
   function setJobSearchApplications(updater: (prev: JobSearchApplication[]) => JobSearchApplication[]) {
-    queryClient.setQueryData<JobSearchApplication[]>(queryKeys.jobSearchApplications, (prev) => updater(prev || []))
+    setJobSearchApplicationsState(updater)
   }
 
   function _clearCrawlInterval(id: string) {
@@ -369,7 +432,7 @@ function TrackerPageInner() {
     const url = editing ? `/api/tracker/${editing.id}` : '/api/tracker'
     const res = await apiFetch(url, { method, headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(data) })
     if (res.ok) {
-      await queryClient.invalidateQueries({ queryKey: queryKeys.tracker })
+      await reloadApplications()
       setShowForm(false)
       toast({ title: editing ? 'Application updated' : 'Application added' })
     } else {
@@ -774,6 +837,7 @@ function TrackerPageInner() {
                 </TableBody>
               </Table>
             )}
+            <LoadMoreRow hasMore={hasMoreApplications} loading={loadingMoreApplications} onClick={loadMoreApplications} />
           </div>
         </>
       )}
@@ -956,6 +1020,7 @@ function TrackerPageInner() {
                 </TableBody>
               </Table>
             )}
+            <LoadMoreRow hasMore={hasMoreLeads} loading={loadingMoreLeads} onClick={loadMoreLeads} />
           </div>
         </>
       )}
@@ -1369,6 +1434,7 @@ function TrackerPageInner() {
                 </TableBody>
               </Table>
             )}
+            <LoadMoreRow hasMore={hasMoreScout} loading={loadingMoreScout} onClick={loadMoreScout} />
           </div>
         </>
       )}
@@ -1524,6 +1590,7 @@ function TrackerPageInner() {
                 </TableBody>
               </Table>
             )}
+            <LoadMoreRow hasMore={hasMoreJobSearch} loading={loadingMoreJobSearch} onClick={loadMoreJobSearch} />
           </div>
         </>
       )}

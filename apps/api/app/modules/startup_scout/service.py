@@ -378,9 +378,16 @@ async def search_startups_stream(
         yield {"type": "done", **result}
 
 
-async def list_companies(db: AsyncSession, user_id: str) -> list[dict]:
-    rows = await CompanyRepository(db).list(user_id, order_by=StartupScoutCompany.created_at.desc())
-    return [row_to_dict(r) for r in rows]
+async def list_companies(
+    db: AsyncSession, user_id: str, *, limit: int | None = None, cursor: str | None = None,
+) -> tuple[list[dict], str | None]:
+    """Unpaginated (limit=None) by default - see tracker/service.py's
+    list_applications for the same opt-in cursor-pagination pattern."""
+    if limit is None:
+        rows = await CompanyRepository(db).list(user_id, order_by=StartupScoutCompany.created_at.desc())
+        return [row_to_dict(r) for r in rows], None
+    rows, next_cursor = await CompanyRepository(db).list_page(user_id, limit=limit, cursor=cursor)
+    return [row_to_dict(r) for r in rows], next_cursor
 
 
 async def get_company_or_404(db: AsyncSession, user_id: str, company_id: str) -> dict:
