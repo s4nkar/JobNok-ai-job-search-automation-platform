@@ -63,8 +63,16 @@
     scrollbar-width: thin;
     scrollbar-color: hsl(220 13% 90%) transparent;
   }
+  /* width thins a vertical scrollbar, height thins a horizontal one - WebKit
+     treats them as two independent properties on the same pseudo-element,
+     unlike the standard scrollbar-width above which already covers both
+     axes in one declaration (Firefox). Without `height` here, a
+     horizontally-scrolling container (e.g. Table's mobile overflow) still
+     rendered its native-thickness scrollbar in Chrome/Safari/Edge despite
+     this class being applied. */
   .scrollbar-thin::-webkit-scrollbar {
     width: 4px;
+    height: 4px;
   }
   .scrollbar-thin::-webkit-scrollbar-track {
     background: transparent;
