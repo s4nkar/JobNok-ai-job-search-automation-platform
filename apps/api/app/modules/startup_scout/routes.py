@@ -4,7 +4,8 @@ from __future__ import annotations
 
 import json
 
-from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query, Request, Response
+from arq.connections import ArqRedis
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response
 from fastapi.responses import StreamingResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -16,11 +17,9 @@ from app.modules.startup_scout.schemas import ScoutSearchRequest, SaveCompanyReq
 from app.modules.startup_scout import service
 from app.modules.usage.service import record_event as record_tool_usage
 from app.shared import funding_stages
+from app.workers.arq_worker import get_arq_pool
 
 router = APIRouter()
-
-RATE_LIMIT_SCOUT_SEARCH_PER_DAY = 20
-RATE_LIMIT_SCOUT_CRAWL_PER_DAY = 30
 
 
 async def _rate_check(user_id: str, action: str, limit: int) -> None:
@@ -68,7 +67,7 @@ async def scout_search(req: ScoutSearchRequest, request: Request, db: AsyncSessi
     """
     user_id = await get_current_user_id(request, db)
     await _burst_check(user_id, "startup_scout_search")
-    await _rate_check(user_id, "startup_scout_search", RATE_LIMIT_SCOUT_SEARCH_PER_DAY)
+    await _rate_check(user_id, "startup_scout_search", settings.rate_limit_startup_scout_search_per_day)
     await record_tool_usage(db, user_id, "startup-scout")
 
     if not req.location.strip():
@@ -138,16 +137,28 @@ async def delete_company(company_id: str, request: Request, db: AsyncSession = D
 async def start_crawl(
     company_id: str,
     request: Request,
-    background_tasks: BackgroundTasks,
     db: AsyncSession = Depends(get_db),
+    arq_pool: ArqRedis = Depends(get_arq_pool),
 ):
-    """Trigger Phase B: crawl contacts for a saved company."""
+    """Trigger Phase B: crawl contacts for a saved company.
+
+    Runs as a real ARQ job, not a FastAPI BackgroundTask - this is genuinely
+    heavy work (a company's crawl is sequential DDG/Apollo calls with
+    deliberate pacing sleeps between each, often 30s-2min+ total), and an
+    in-process BackgroundTask dies with the process - no retry, no durable
+    cancel signal, and a crash mid-crawl leaves the row stuck on
+    'crawling' forever (see sweep_stuck_scout_crawls for the backstop on
+    that last case). service.start_crawl flips crawl_status to 'crawling'
+    and commits BEFORE this returns, so a second rapid click sees the
+    committed status and gets a clean 409 instead of racing a second crawl
+    for the same company.
+    """
     user_id = await get_current_user_id(request, db)
-    await _rate_check(user_id, "startup_scout_crawl", RATE_LIMIT_SCOUT_CRAWL_PER_DAY)
+    await _rate_check(user_id, "startup_scout_crawl", settings.rate_limit_startup_scout_crawl_per_day)
 
     company = await service.start_crawl(db, user_id, company_id)
 
-    background_tasks.add_task(service.run_crawl, company_id, user_id, company["name"])
+    await arq_pool.enqueue_job("run_crawl", company_id=company_id, user_id=user_id, company_name=company["name"])
     return {"status": "crawl_started", "company_id": company_id}
 
 

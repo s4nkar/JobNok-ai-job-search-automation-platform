@@ -26,7 +26,7 @@ except ImportError:
     from duckduckgo_search import DDGS  # duckduckgo-search < 9.x fallback
 
 from app.core.config import settings
-from app.services.cache import circuit_is_open, record_provider_result
+from app.services.cache import check_tool_budget, circuit_is_open, record_provider_result
 from app.shared import funding_stages
 from app.shared.utils import clean_truncated_text
 
@@ -1128,6 +1128,16 @@ _NAME_STOPWORDS: frozenset[str] = frozenset({
     "techcrunch", "bloomberg", "reuters", "forbes", "wired",
     # UI labels that appear as snippet prefixes (e.g. "Profile Duncan Blythe")
     "profile", "overview", "about", "bio", "page", "team",
+    # Structured-data field labels (e.g. a page rendering "Primary Job
+    # Title: Co-Founder" / "Primary Organization: Foom") - these are fully
+    # capitalized like a real name and weren't caught by anything above,
+    # so they passed straight through as a "contact".
+    "primary", "job", "title", "organization", "company", "position", "employer",
+    # Job-title words that can appear standalone in a name slot (previously
+    # only checked by _parse_linkedin_person's own separate regex - folded
+    # in here so every extraction path gets the same rejection instead of
+    # each maintaining its own partial copy).
+    "manager", "director", "developer", "vp", "president", "officer",
 })
 
 # Lowercase name particles that are valid mid-word in European names.
@@ -1139,7 +1149,7 @@ _NAME_PARTICLES: frozenset[str] = frozenset({
 })
 
 
-def _is_valid_person_name(name: str) -> bool:
+def _is_valid_person_name(name: str, *, allow_single_letter_word: bool = False) -> bool:
     """Return True only if *name* looks like a real person name.
 
     Rules:
@@ -1147,7 +1157,13 @@ def _is_valid_person_name(name: str) -> bool:
     - First and last word must start with uppercase
     - Middle words may be lowercase particles (van, de, von, …)
     - No word may be a known stopword / generic role word
-    - No bare single letter (initials with dot like "J." are allowed)
+    - No bare single letter (initials with dot like "J." are allowed),
+      UNLESS allow_single_letter_word=True - LinkedIn often truncates a
+      surname to a privacy initial with no dot ("Selin K"), which is a
+      real, usable name despite looking identical to the single-letter
+      noise this rule exists to catch in less structured sources (a
+      snippet fragment, a mis-parsed label). _parse_linkedin_person passes
+      True for exactly this reason; nothing else should need to.
     """
     words = name.split()
     if not (2 <= len(words) <= 5):
@@ -1162,7 +1178,7 @@ def _is_valid_person_name(name: str) -> bool:
             continue
         if w in _NAME_STOPWORDS:
             return False
-        if len(word) == 1:
+        if len(word) == 1 and not allow_single_letter_word:
             return False
     return True
 
@@ -1260,12 +1276,15 @@ def _parse_linkedin_person(
     if company_lower and role.lower() == company_lower:
         role = ""
 
-    # Minimal name validation: 2+ words, first word starts uppercase
-    name_words = name.split()
-    if len(name_words) < 2 or not name_words[0][0].isupper():
-        return None
-    # Reject if the "name" is actually a job title
-    if re.search(r"\b(engineer|developer|manager|director|head|vp|lead|president|officer)\b", name, re.I):
+    # Same validation every other extraction path uses (_is_valid_person_name)
+    # - this used to be its own, weaker, separately-maintained check here
+    # (just "2+ words, first word capitalized" plus a narrower job-title
+    # regex), missing the full stopword list (so page-label fragments like
+    # "Primary Job Title" slipped through). allow_single_letter_word=True
+    # because LinkedIn legitimately truncates a surname to a privacy
+    # initial ("Selin K") - unlike a snippet-extracted single letter, that's
+    # real, usable data, not noise.
+    if not _is_valid_person_name(name, allow_single_letter_word=True):
         return None
 
     # Guard B: title-first relevance check for short company names.
@@ -1544,8 +1563,19 @@ async def enrich_linkedin_url(contact_name: str, company_name: str) -> str | Non
 
 
 async def apollo_search_contacts(company_name: str) -> list[dict[str, Any]]:
-    """Phase B step 2 — Apollo People Search API fallback."""
+    """Phase B step 2 — Apollo People Search API fallback.
+
+    Apollo is a paid per-call API (unlike the DDG search above), so this is
+    gated by a whole-tool daily budget shared across every user - the
+    per-user rate_limit_startup_scout_crawl_per_day caps one user's call
+    *rate*, not the deployment's total metered spend. Fails open only on a
+    Redis error (check_tool_budget's own contract); an exhausted budget
+    fails closed (returns no contacts) since this call costs real money.
+    """
     if not settings.apollo_api_key:
+        return []
+    if not await check_tool_budget("startup_scout_apollo", settings.apollo_daily_call_budget):
+        log.warning("apollo_search_contacts: daily Apollo budget exhausted, skipping for %r", company_name)
         return []
     payload = {
         "organization_names": [company_name],
