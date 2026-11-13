@@ -9,6 +9,7 @@ their models for ownership checks, never their service functions).
 from __future__ import annotations
 
 from sqlalchemy import select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.modules.cover_letter.models import CoverLetterSession
@@ -105,14 +106,34 @@ async def resolve_session(db: AsyncSession, user_id: str, body: CoverLetterReque
             resume_text=body.resume_text, content="",
         )
     else:
-        session = await repo.create_session(
-            user_id,
-            company=body.company, role=body.role, selling_points=body.selling_points,
-            resume_text=body.resume_text, content="",
-            source_opportunity_id=source_opportunity_id,
-            source_application_id=source_application_id,
-            source_job_application_id=source_job_application_id,
-        )
+        try:
+            async with db.begin_nested():
+                session = await repo.create_session(
+                    user_id,
+                    company=body.company, role=body.role, selling_points=body.selling_points,
+                    resume_text=body.resume_text, content="",
+                    source_opportunity_id=source_opportunity_id,
+                    source_application_id=source_application_id,
+                    source_job_application_id=source_job_application_id,
+                )
+        except IntegrityError:
+            # Lost a race: a concurrent request for the same job-linked
+            # session won the INSERT first and tripped the partial unique
+            # index (see models.py) - fall back to updating that row
+            # instead of erroring the user's request.
+            existing = await repo.get_by_source(
+                user_id,
+                source_opportunity_id=source_opportunity_id,
+                source_application_id=source_application_id,
+                source_job_application_id=source_job_application_id,
+            )
+            if existing is None:
+                raise
+            session = await repo.update(
+                user_id, str(existing.id),
+                company=body.company, role=body.role, selling_points=body.selling_points,
+                resume_text=body.resume_text, content="",
+            )
     await db.commit()
     return session
 

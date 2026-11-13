@@ -69,6 +69,15 @@ async def list_cover_letter_sessions(request: Request, db: AsyncSession = Depend
 @router.get("/cover-letter/sessions/{session_id}", response_model=CoverLetterSessionDetail)
 async def get_cover_letter_session(session_id: str, request: Request, db: AsyncSession = Depends(get_db)):
     user_id = await get_current_user_id(request, db)
+    try:
+        burst_ok = await check_burst_limit(
+            user_id, "cover_letter_sessions_detail", settings.rate_limit_burst_limit, settings.rate_limit_burst_window_seconds,
+        )
+    except Exception:
+        burst_ok = True
+    if not burst_ok:
+        raise HTTPException(status_code=429, detail="Too many requests, please wait a few seconds and try again.")
+
     session = await CoverLetterSessionRepository(db).get(user_id, session_id)
     if session is None:
         raise HTTPException(status_code=404, detail="Saved cover letter not found.")

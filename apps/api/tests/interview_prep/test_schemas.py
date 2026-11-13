@@ -6,6 +6,7 @@ from pydantic import ValidationError
 
 from app.modules.interview_prep.schemas import (
     InterviewPrepRequest,
+    InterviewPrepTitleUpdateRequest,
     InterviewRegenerateRequest,
     validate_interview_response,
     validate_regenerate_response,
@@ -147,3 +148,14 @@ def test_interview_regenerate_request_accepts_session_id_and_question_index():
 def test_interview_regenerate_request_rejects_negative_question_index():
     with pytest.raises(ValidationError):
         InterviewRegenerateRequest(job_description="A" * 50, question="x", question_index=-1)
+
+
+def test_interview_prep_title_update_request_accepts_valid_title():
+    req = InterviewPrepTitleUpdateRequest(title="My Google Interview Kit")
+    assert req.title == "My Google Interview Kit"
+
+
+def test_interview_prep_title_update_request_enforces_max_length():
+    with pytest.raises(ValidationError):
+        InterviewPrepTitleUpdateRequest(title="x" * 201)
+    InterviewPrepTitleUpdateRequest(title="x" * 200)

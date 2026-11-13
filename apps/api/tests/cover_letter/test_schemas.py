@@ -6,7 +6,7 @@ fix closed."""
 import pytest
 from pydantic import ValidationError
 
-from app.modules.cover_letter.schemas import CoverLetterPdfRequest, CoverLetterRequest
+from app.modules.cover_letter.schemas import CoverLetterPdfRequest, CoverLetterRequest, CoverLetterTitleUpdateRequest
 
 
 def _valid_request_kwargs(**overrides):
@@ -90,3 +90,14 @@ def test_cover_letter_pdf_request_enforces_max_length():
     with pytest.raises(ValidationError):
         CoverLetterPdfRequest(content="x" * 5001)
     CoverLetterPdfRequest(content="x" * 5000)
+
+
+def test_cover_letter_title_update_request_accepts_valid_title():
+    req = CoverLetterTitleUpdateRequest(title="My Google Letter")
+    assert req.title == "My Google Letter"
+
+
+def test_cover_letter_title_update_request_enforces_max_length():
+    with pytest.raises(ValidationError):
+        CoverLetterTitleUpdateRequest(title="x" * 201)
+    CoverLetterTitleUpdateRequest(title="x" * 200)

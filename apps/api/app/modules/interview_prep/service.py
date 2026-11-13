@@ -11,6 +11,7 @@ from __future__ import annotations
 from typing import Any
 
 from sqlalchemy import select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.modules.interview_prep.models import InterviewPrepSession
@@ -101,13 +102,33 @@ async def resolve_session(
             user_id, str(existing.id),
             job_description=body.job_description, company=body.company, role=body.role, result=result,
         )
-    return await repo.create_session(
-        user_id,
-        job_description=body.job_description, company=body.company, role=body.role, result=result,
-        source_opportunity_id=source_opportunity_id,
-        source_application_id=source_application_id,
-        source_job_application_id=source_job_application_id,
-    )
+
+    try:
+        async with db.begin_nested():
+            return await repo.create_session(
+                user_id,
+                job_description=body.job_description, company=body.company, role=body.role, result=result,
+                source_opportunity_id=source_opportunity_id,
+                source_application_id=source_application_id,
+                source_job_application_id=source_job_application_id,
+            )
+    except IntegrityError:
+        # Lost a race: a concurrent request for the same job-linked session
+        # won the INSERT first and tripped the partial unique index (see
+        # models.py) - fall back to updating that row instead of erroring
+        # the user's request.
+        existing = await repo.get_by_source(
+            user_id,
+            source_opportunity_id=source_opportunity_id,
+            source_application_id=source_application_id,
+            source_job_application_id=source_job_application_id,
+        )
+        if existing is None:
+            raise
+        return await repo.update(
+            user_id, str(existing.id),
+            job_description=body.job_description, company=body.company, role=body.role, result=result,
+        )
 
 
 async def apply_regenerated_answer(

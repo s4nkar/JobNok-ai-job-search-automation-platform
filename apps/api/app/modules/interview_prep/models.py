@@ -12,7 +12,7 @@ from __future__ import annotations
 
 import uuid
 
-from sqlalchemy import CheckConstraint, ForeignKey
+from sqlalchemy import CheckConstraint, ForeignKey, Index, text
 from sqlalchemy.dialects.postgresql import JSONB, UUID as PG_UUID
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -29,6 +29,22 @@ class InterviewPrepSession(Base, UUIDPKMixin, CreatedAtMixin):
         CheckConstraint("company is null or char_length(company) <= 200", name="interview_prep_sessions_company_length_check"),
         CheckConstraint("role is null or char_length(role) <= 200", name="interview_prep_sessions_role_length_check"),
         CheckConstraint("title is null or char_length(title) <= 200", name="interview_prep_sessions_title_length_check"),
+        # Same race-condition backstop as cover_letter_sessions (see its
+        # models.py comment) - "at most one saved interview kit per linked
+        # job", enforced at the DB layer since the per-user Redis
+        # single-flight lock in routes.py fails open if Redis is down.
+        Index(
+            "interview_prep_sessions_user_opportunity_key", "user_id", "source_opportunity_id", unique=True,
+            postgresql_where=text("source_opportunity_id IS NOT NULL"),
+        ),
+        Index(
+            "interview_prep_sessions_user_application_key", "user_id", "source_application_id", unique=True,
+            postgresql_where=text("source_application_id IS NOT NULL"),
+        ),
+        Index(
+            "interview_prep_sessions_user_job_application_key", "user_id", "source_job_application_id", unique=True,
+            postgresql_where=text("source_job_application_id IS NOT NULL"),
+        ),
     )
 
     user_id: Mapped[uuid.UUID] = mapped_column(

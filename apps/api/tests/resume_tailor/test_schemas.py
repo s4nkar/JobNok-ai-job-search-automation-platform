@@ -1,7 +1,10 @@
 """Unit tests for resume_tailor.schemas.validate_cv_data — the field-by-field
 lenient validator that guards generate_base_cv_data's untrusted LLM output."""
 
-from app.modules.resume_tailor.schemas import validate_cv_data
+import pytest
+from pydantic import ValidationError
+
+from app.modules.resume_tailor.schemas import TitleUpdateRequest, validate_cv_data
 
 
 def test_validate_cv_data_passes_through_well_formed_input():
@@ -89,3 +92,14 @@ def test_validate_cv_data_rejects_unknown_section_key():
     })
 
     assert result["section_order"] == []
+
+
+def test_title_update_request_accepts_valid_title():
+    req = TitleUpdateRequest(title="My Google Resume")
+    assert req.title == "My Google Resume"
+
+
+def test_title_update_request_enforces_max_length():
+    with pytest.raises(ValidationError):
+        TitleUpdateRequest(title="x" * 201)
+    TitleUpdateRequest(title="x" * 200)

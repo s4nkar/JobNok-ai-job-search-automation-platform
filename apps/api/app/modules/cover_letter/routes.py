@@ -83,7 +83,15 @@ async def generate_cover_letter(request: Request, body: CoverLetterRequest, db: 
     if not burst_ok:
         raise HTTPException(status_code=429, detail="Generating too quickly - please wait a few seconds and try again.")
 
-    lock_key = f"cover_letter_gen:{user_id}:lock"
+    # Job-scoped when a linkage id is known (matches resume_tailor's
+    # tailor_job:... lock) so generating for two different jobs can proceed
+    # in parallel - only a genuinely ad-hoc generation (no job to key off
+    # of) falls back to a per-user lock. Keyed on the raw, not-yet-
+    # ownership-verified id - safe either way since this is a concurrency
+    # guard, not a security boundary (resolve_session below re-verifies
+    # ownership before trusting any of these ids as a source_*_id).
+    job_id = body.opportunity_id or body.job_search_application_id or body.job_application_id
+    lock_key = f"cover_letter_gen:{user_id}:{job_id}:lock" if job_id else f"cover_letter_gen:{user_id}:lock"
     try:
         acquired = await acquire_lock(lock_key, _GENERATION_LOCK_TTL_SECONDS)
     except Exception:
