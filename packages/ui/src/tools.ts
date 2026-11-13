@@ -108,7 +108,7 @@ export const tools: Tool[] = [
     slug: 'recent-job-search',
     href: '/recent-job-search',
     label: 'Recent Job Search',
-    description: 'General-market job search across Germany, the UK, and more — any company, any role, powered by Adzuna.',
+    description: 'General-market job search across Germany, the UK, and more, any company, any role, powered by Adzuna.',
     icon: Search,
     color: 'indigo',
   },

@@ -19,7 +19,7 @@ import {
   Mail, Plus, Upload, Play, Pause, Loader2, CheckCircle, XCircle,
   Clock, Send, RefreshCw, Info, SlidersHorizontal,
 } from 'lucide-react'
-import { apiFetch, apiGet } from '@/lib/api'
+import { apiFetch, apiGet, describeApiError } from '@/lib/api'
 
 const STATUS_BADGE: Record<string, JSX.Element> = {
   queued:    <Badge variant="secondary"><Clock className="h-3 w-3 mr-1" />Queued</Badge>,
@@ -125,8 +125,8 @@ export default function BulkEmailPage() {
       setName(''); setSubject(''); setBody(''); setCsvRows([])
       openCampaign(campaign)
     } else {
-      const json = await res.json()
-      toast({ title: 'Error', description: json.detail, variant: 'destructive' })
+      const json = await res.json().catch(() => null)
+      toast({ title: 'Error', description: describeApiError(json, 'Could not launch campaign.'), variant: 'destructive' })
     }
     setCreating(false)
   }
@@ -152,7 +152,7 @@ export default function BulkEmailPage() {
         <div>
           <h1 className="text-2xl font-bold text-slate-900 tracking-tight">Bulk Email Sender</h1>
           <p className="text-slate-500 text-sm mt-0.5">
-            Send personalized campaigns with rate control — {config.rateLimits.bulkEmailPerMonth.toLocaleString()} emails/month free
+            Send personalized campaigns with rate control, {config.rateLimits.bulkEmailPerMonth.toLocaleString()} emails/month free
           </p>
         </div>
       </div>
@@ -383,7 +383,7 @@ export default function BulkEmailPage() {
                               <TableCell className="text-slate-500 text-sm">{r.email}</TableCell>
                               <TableCell>{STATUS_BADGE[r.status] || r.status}</TableCell>
                               <TableCell className="text-sm text-slate-400">
-                                {r.sent_at ? new Date(r.sent_at).toLocaleTimeString() : '—'}
+                                {r.sent_at ? new Date(r.sent_at).toLocaleTimeString() : ''}
                               </TableCell>
                             </TableRow>
                           ))}

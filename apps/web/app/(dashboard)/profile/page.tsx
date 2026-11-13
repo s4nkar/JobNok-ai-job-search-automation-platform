@@ -9,7 +9,7 @@ import { Input } from '@jobnok/ui'
 import { Textarea } from '@jobnok/ui'
 import { Label } from '@jobnok/ui'
 import { useToast } from '@jobnok/ui'
-import { apiFetch, apiGet } from '@/lib/api'
+import { apiFetch, apiGet, describeApiError } from '@/lib/api'
 import { queryKeys } from '@/lib/queryKeys'
 import { UserProfile } from '@/lib/types'
 import { MyResumes } from './my-resumes'
@@ -64,7 +64,7 @@ export default function ProfilePage() {
     try {
       const res = await apiFetch('/api/profile/photo', { method: 'POST', body: form })
       const data = await res.json()
-      if (!res.ok) throw new Error(data.detail || 'Upload failed')
+      if (!res.ok) throw new Error(describeApiError(data, 'Upload failed'))
       setProfile(prev => prev ? { ...prev, cv_photo_url: data.cv_photo_url } : prev)
       queryClient.setQueryData<UserProfile>(queryKeys.profile, (prev) => prev ? { ...prev, cv_photo_url: data.cv_photo_url } : prev)
       toast({ title: 'Photo uploaded!' })
@@ -168,7 +168,7 @@ export default function ProfilePage() {
           : <Camera className="h-4 w-4 text-amber-500 flex-shrink-0" />
         }
         {classicReady
-          ? 'Profile complete — Classic 2-column template is unlocked.'
+          ? 'Profile complete - Classic 2-column template is unlocked.'
           : `Complete the following to unlock the Classic template: ${[
               !profile?.cv_photo_url && 'profile photo',
               !profile?.full_name && 'full name',
@@ -225,7 +225,7 @@ export default function ProfilePage() {
                   placeholder={profile?.email || 's4nkar.connect@gmail.com'}
                   className="rounded-xl border-slate-200"
                 />
-                <p className="text-[11px] text-slate-400">Shown on your CV — can differ from your login email ({profile?.email})</p>
+                <p className="text-[11px] text-slate-400">Shown on your CV, can differ from your login email ({profile?.email})</p>
               </div>
               <Field label="Phone" value={profile?.phone || ''} onChange={v => handleField('phone', v)} placeholder="+44 7460 054747" />
               <Field label="Date of Birth" value={profile?.date_of_birth || ''} onChange={v => handleField('date_of_birth', v)} placeholder="1999-06-15" type="date" />
@@ -242,7 +242,7 @@ export default function ProfilePage() {
               touching this saved default. */}
           <div className="bg-white rounded-2xl border border-slate-100 shadow-card p-5">
             <p className="text-xs font-bold text-slate-500 uppercase tracking-widest mb-1">Default Selling Points</p>
-            <p className="text-xs text-slate-400 mb-4">Pre-fills the Cover Letter tool — edit per application anytime without changing this default.</p>
+            <p className="text-xs text-slate-400 mb-4">Pre-fills the Cover Letter tool, edit per application anytime without changing this default.</p>
             <Textarea
               value={profile?.key_selling_points || ''}
               onChange={e => handleField('key_selling_points', e.target.value)}

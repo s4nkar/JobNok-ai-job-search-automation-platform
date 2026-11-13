@@ -11,7 +11,7 @@ import { Label } from '@jobnok/ui'
 import { Markdown } from '@jobnok/ui'
 import { useToast } from '@jobnok/ui'
 import { DollarSign, Loader2, TrendingUp, Info, MessageSquare, SlidersHorizontal } from 'lucide-react'
-import { apiFetch } from '@/lib/api'
+import { apiFetch, describeApiError } from '@/lib/api'
 
 const schema = z.object({
   job_title: z.string().min(2, 'Enter a job title'),
@@ -42,8 +42,8 @@ export default function SalaryPage() {
       })
 
       if (!res.ok) {
-        const json = await res.json()
-        setError(json.detail || 'Research failed. Try again.')
+        const json = await res.json().catch(() => null)
+        setError(describeApiError(json, 'Research failed. Try again.'))
         setLoading(false)
         return
       }

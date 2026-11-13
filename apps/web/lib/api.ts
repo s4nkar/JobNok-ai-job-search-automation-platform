@@ -29,6 +29,32 @@ export async function apiFetch(input: string, init: RequestInit = {}): Promise<R
 }
 
 /**
+ * Turns a FastAPI error response body into a safe-to-render string.
+ * `detail` is either a plain string (our own raised HTTPExceptions) or a
+ * list of Pydantic error objects ({type, loc, msg, input, ctx} - a 422
+ * schema-validation failure) - passing the latter straight into a React
+ * child (`{error}`) or `new Error(detail)` throws "Objects are not valid
+ * as a React child" / stringifies to a useless "[object Object]". Used by
+ * apiGet below and by every tool page's own generate-request error
+ * handling (resume-tailor, cover-letter, interview-prep) - same bug
+ * shape, same fix, one place instead of three copies.
+ */
+export function describeApiError(body: unknown, fallback: string): string {
+  const detail = body && typeof body === 'object' && 'detail' in body
+    ? (body as { detail: unknown }).detail
+    : undefined
+  if (typeof detail === 'string' && detail.trim()) return detail
+  if (Array.isArray(detail) && detail.length > 0) {
+    const first = detail[0] as { msg?: string; loc?: unknown[] }
+    if (first && typeof first.msg === 'string') {
+      const field = Array.isArray(first.loc) ? first.loc[first.loc.length - 1] : undefined
+      return typeof field === 'string' ? `${field}: ${first.msg}` : first.msg
+    }
+  }
+  return fallback
+}
+
+/**
  * GET + parse-JSON in one call, throwing on a non-2xx response. Built for
  * react-query's queryFn contract (it needs a rejected promise to enter the
  * query's error state — apiFetch alone only returns a Response, it never
@@ -38,7 +64,7 @@ export async function apiGet<T>(input: string): Promise<T> {
   const res = await apiFetch(input)
   if (!res.ok) {
     const body = await res.json().catch(() => ({}))
-    throw new Error(body.detail || `Request failed: ${res.status}`)
+    throw new Error(describeApiError(body, `Request failed: ${res.status}`))
   }
   return res.json()
 }

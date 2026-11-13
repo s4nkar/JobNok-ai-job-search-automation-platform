@@ -332,7 +332,7 @@ export default function TemplatesPage() {
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
               <div className="space-y-1.5">
                 <Label>Template name</Label>
-                <Input placeholder="e.g. Cold DM — Software Engineer" maxLength={NAME_MAX_LENGTH} {...register('name')} />
+                <Input placeholder="e.g. Cold DM - Software Engineer" maxLength={NAME_MAX_LENGTH} {...register('name')} />
                 {errors.name && <p className="text-xs text-destructive">{errors.name.message}</p>}
               </div>
               <div className="space-y-1.5">

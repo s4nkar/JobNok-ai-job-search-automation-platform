@@ -73,7 +73,7 @@ const FIELD_LABELS: Record<string, string> = {
 // validation failures, e.g. a length/type mismatch Zod didn't already
 // catch client-side) - without this, those list-shaped errors rendered as
 // a flat "Something went wrong" with no indication of which field or why.
-function describeApiError(body: unknown): string {
+function describeApiError(body: unknown, fallback = 'Please double check the form - Company and Role are required.'): string {
   const detail = body && typeof body === 'object' && 'detail' in body
     ? (body as { detail: unknown }).detail
     : undefined
@@ -86,7 +86,7 @@ function describeApiError(body: unknown): string {
       return label ? `${label}: ${first.msg}` : first.msg
     }
   }
-  return 'Please double check the form - Company and Role are required.'
+  return fallback
 }
 
 const today = new Date().toISOString().split('T')[0]
@@ -368,7 +368,7 @@ function TrackerPageInner() {
     const res = await apiFetch(`/api/startup-scout/companies/${company.id}/crawl`, { method: 'POST' })
     if (!res.ok) {
       const err = await res.json().catch(() => ({}))
-      toast({ title: 'Crawl failed to start', description: err.detail || 'Try again.', variant: 'destructive' })
+      toast({ title: 'Crawl failed to start', description: describeApiError(err, 'Try again.'), variant: 'destructive' })
       setScoutCompanies((prev) =>
         prev.map((c) => c.id === company.id ? { ...c, crawl_status: 'pending' } : c)
       )
@@ -388,7 +388,7 @@ function TrackerPageInner() {
           setStoppingIds((prev) => { const n = new Set(prev); n.delete(company.id); return n })
           toast({
             title: updated.crawl_status === 'enriched' ? 'Contacts found!' : 'Crawl done',
-            description: `${company.name} — ${updated.crawl_status}`,
+            description: `${company.name} - ${updated.crawl_status}`,
           })
         }
       } else {
@@ -404,7 +404,7 @@ function TrackerPageInner() {
     const res = await apiFetch(`/api/startup-scout/companies/${company.id}/stop`, { method: 'POST' })
     if (!res.ok) {
       const err = await res.json().catch(() => ({}))
-      toast({ title: 'Could not stop crawl', description: err.detail || 'Try again.', variant: 'destructive' })
+      toast({ title: 'Could not stop crawl', description: describeApiError(err, 'Try again.'), variant: 'destructive' })
       setStoppingIds((prev) => { const n = new Set(prev); n.delete(company.id); return n })
     }
     // Poll continues — backend will update status once it halts naturally
@@ -497,7 +497,7 @@ function TrackerPageInner() {
       toast({ title: 'Status updated' })
     } else {
       const err = await res.json().catch(() => ({}))
-      toast({ title: 'Could not update status', description: err.detail || 'Try again.', variant: 'destructive' })
+      toast({ title: 'Could not update status', description: describeApiError(err, 'Try again.'), variant: 'destructive' })
     }
     setUpdatingAppId(null)
   }
@@ -542,7 +542,7 @@ function TrackerPageInner() {
       toast({ title: 'Status updated' })
     } else {
       const err = await res.json().catch(() => ({}))
-      toast({ title: 'Could not update status', description: err.detail || 'Try again.', variant: 'destructive' })
+      toast({ title: 'Could not update status', description: describeApiError(err, 'Try again.'), variant: 'destructive' })
     }
     setUpdatingJobSearchId(null)
   }
@@ -555,7 +555,7 @@ function TrackerPageInner() {
       toast({ title: 'Removed from tracker' })
     } else {
       const err = await res.json().catch(() => ({}))
-      toast({ title: 'Could not remove', description: err.detail || 'Try again.', variant: 'destructive' })
+      toast({ title: 'Could not remove', description: describeApiError(err, 'Try again.'), variant: 'destructive' })
     }
   }
 

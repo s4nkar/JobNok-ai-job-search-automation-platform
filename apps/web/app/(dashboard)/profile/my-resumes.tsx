@@ -4,7 +4,7 @@ import { useRef, useState } from 'react'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { FileText, Loader2, Pencil, Trash2, Upload, X } from 'lucide-react'
 import { Button, Input, useToast } from '@jobnok/ui'
-import { apiFetch, apiGet } from '@/lib/api'
+import { apiFetch, apiGet, describeApiError } from '@/lib/api'
 import { queryKeys } from '@/lib/queryKeys'
 import { SavedResume } from '@/lib/types'
 
@@ -47,7 +47,7 @@ function SlotTile({ slot, resume }: { slot: 1 | 2 | 3; resume: SavedResume | und
     try {
       const res = await apiFetch(`/api/ai/resumes/${slot}`, { method: 'PUT', body: form })
       const data = await res.json()
-      if (!res.ok) throw new Error(data.detail || 'Upload failed')
+      if (!res.ok) throw new Error(describeApiError(data, 'Upload failed'))
       updateCache(data)
       toast({ title: resume ? 'Resume replaced' : 'Resume saved' })
     } catch (err) {
@@ -75,7 +75,7 @@ function SlotTile({ slot, resume }: { slot: 1 | 2 | 3; resume: SavedResume | und
         body: JSON.stringify({ label: trimmed }),
       })
       const data = await res.json()
-      if (!res.ok) throw new Error(data.detail || 'Rename failed')
+      if (!res.ok) throw new Error(describeApiError(data, 'Rename failed'))
       updateCache(data)
     } catch (err) {
       toast({ title: 'Rename failed', description: err instanceof Error ? err.message : undefined, variant: 'destructive' })

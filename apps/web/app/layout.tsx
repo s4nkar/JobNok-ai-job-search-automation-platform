@@ -10,7 +10,7 @@ const manrope = Manrope({ subsets: ['latin'] })
 
 export const metadata: Metadata = {
   title: 'JobNok | AI Job Search Toolkit',
-  description: 'Smart templates, resume tailoring, LinkedIn auto-fill, interview prep, and bulk outreach — all in one free toolkit.',
+  description: 'Smart templates, resume tailoring, LinkedIn auto-fill, interview prep, and bulk outreach, all in one free toolkit.',
 }
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {

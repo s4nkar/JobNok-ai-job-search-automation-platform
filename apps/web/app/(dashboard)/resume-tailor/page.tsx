@@ -14,7 +14,7 @@ import {
   Sparkles, AlertTriangle, BarChart3, Pencil, Check,
   ChevronDown, ChevronUp, SlidersHorizontal,
 } from 'lucide-react'
-import { apiFetch, apiGet } from '@/lib/api'
+import { apiFetch, apiGet, describeApiError } from '@/lib/api'
 import { cn } from '@jobnok/ui'
 import { queryKeys } from '@/lib/queryKeys'
 import { StartupHuntSavedOpportunity, JobSearchApplication, ResumeTailorResult, SavedResume } from '@/lib/types'
@@ -190,7 +190,7 @@ function ResumeTailorInner() {
       const parsed: ResumeTailorResult | null = await res.json().catch(() => null)
 
       if (!res.ok) {
-        setError((parsed as unknown as { detail?: string })?.detail || 'Analysis failed. Please try again.')
+        setError(describeApiError(parsed, 'Analysis failed. Please try again.'))
         setLoading(false)
         return
       }
@@ -228,8 +228,8 @@ function ResumeTailorInner() {
         }),
       })
       if (!res.ok) {
-        const json = await res.json()
-        toast({ title: json.detail || 'Generation failed', variant: 'destructive' })
+        const json = await res.json().catch(() => null)
+        toast({ title: describeApiError(json, 'Generation failed'), variant: 'destructive' })
         return
       }
       const blob = await res.blob()
@@ -269,14 +269,14 @@ function ResumeTailorInner() {
         </div>
         <div>
           <h1 className="text-2xl font-bold text-slate-900 tracking-tight">Resume Tailor</h1>
-          <p className="text-slate-500 text-sm mt-0.5">Get an ATS score, missing keywords, and bullet rewrites — then generate a tailored PDF</p>
+          <p className="text-slate-500 text-sm mt-0.5">Get an ATS score, missing keywords, and bullet rewrites, then generate a tailored PDF</p>
         </div>
       </div>
 
       {lead && (
         <div className="flex items-center gap-2.5 bg-indigo-50 border border-indigo-100 text-indigo-800 rounded-xl px-4 py-3 mb-4 text-sm">
           <Compass className="h-4 w-4 flex-shrink-0 text-indigo-500" />
-          <span>Pre-filled from <strong>{lead.company_name} — {lead.role_title}</strong>. No full JD stored — add it below the signals for best results.</span>
+          <span>Pre-filled from <strong>{lead.company_name} - {lead.role_title}</strong>. No full JD stored, add it below the signals for best results.</span>
           <button onClick={() => { setLead(null); setJd('') }} className="ml-auto text-indigo-400 hover:text-indigo-700">
             <X className="h-4 w-4" />
           </button>
@@ -494,7 +494,7 @@ function ResumeTailorInner() {
                   <div className={cn('h-full rounded-full transition-all duration-700', scoreBarColor)} style={{ width: `${matchScore}%` }} />
                 </div>
                 <p className="text-xs text-slate-400 mt-2">
-                  {matchScore >= 70 ? "Strong match — you're a great fit!" : matchScore >= 40 ? 'Moderate match — some gaps to address' : 'Weak match — needs significant tailoring'}
+                  {matchScore >= 70 ? "Strong match, you're a great fit!" : matchScore >= 40 ? 'Moderate match, some gaps to address' : 'Weak match, needs significant tailoring'}
                 </p>
               </div>
 
@@ -502,7 +502,7 @@ function ResumeTailorInner() {
               {result.analysis.degraded && (
                 <div className="flex items-start gap-2.5 bg-amber-50 border border-amber-100 text-amber-800 rounded-xl px-4 py-3 text-sm">
                   <AlertTriangle className="h-4 w-4 flex-shrink-0 text-amber-500 mt-0.5" />
-                  <span>Semantic matching unavailable — scores are based on keyword overlap only. Results are still useful but less nuanced than usual.</span>
+                  <span>Semantic matching unavailable, scores are based on keyword overlap only. Results are still useful but less nuanced than usual.</span>
                 </div>
               )}
 
@@ -510,7 +510,7 @@ function ResumeTailorInner() {
               {result.ai.status === 'degraded' && (
                 <div className="flex items-start gap-2.5 bg-amber-50 border border-amber-100 text-amber-800 rounded-xl px-4 py-3 text-sm">
                   <AlertTriangle className="h-4 w-4 flex-shrink-0 text-amber-500 mt-0.5" />
-                  <span>AI-generated content (headline, summary, bullet rewrites) is temporarily unavailable. The match score, keywords, and gaps below are unaffected — try again shortly for the full report.</span>
+                  <span>AI-generated content (headline, summary, bullet rewrites) is temporarily unavailable. The match score, keywords, and gaps below are unaffected, try again shortly for the full report.</span>
                 </div>
               )}
 
@@ -549,7 +549,7 @@ function ResumeTailorInner() {
                     <Sparkles className="h-4 w-4 text-amber-500" />
                     <p className="text-sm font-semibold text-slate-700">Transferable Strengths <span className="text-slate-400 font-normal">({result.analysis.transferable_strengths.length})</span></p>
                   </div>
-                  <p className="text-xs text-slate-400 mb-3">Requirements where you have related — but not explicit — experience. Reframe these honestly to strengthen alignment.</p>
+                  <p className="text-xs text-slate-400 mb-3">Requirements where you have related, but not explicit, experience. Reframe these honestly to strengthen alignment.</p>
                   <div className="space-y-2">
                     {result.analysis.transferable_strengths.map((s, i) => (
                       <div key={i} className="flex items-start gap-2 text-sm">
@@ -568,7 +568,7 @@ function ResumeTailorInner() {
                     <AlertTriangle className="h-4 w-4 text-red-500" />
                     <p className="text-sm font-semibold text-slate-700">Critical Gaps <span className="text-slate-400 font-normal">({result.analysis.critical_missing.length})</span></p>
                   </div>
-                  <p className="text-xs text-slate-400 mb-3">Requirements with no matching evidence in your resume. Don&apos;t fabricate experience — instead, address these in your cover letter or accept them as honest gaps.</p>
+                  <p className="text-xs text-slate-400 mb-3">Requirements with no matching evidence in your resume. Don&apos;t fabricate experience, instead address these in your cover letter or accept them as honest gaps.</p>
                   <div className="space-y-2">
                     {result.analysis.critical_missing.map((g, i) => (
                       <div key={i} className="flex items-start gap-2 text-sm">
@@ -649,7 +649,7 @@ function ResumeTailorInner() {
                   <p className="text-sm font-semibold text-slate-700">Build Tailored Resume</p>
                 </div>
                 <p className="text-xs text-slate-500 mb-4">
-                  Open the editor to review pre-filled content, pick from 16 layouts, and download your PDF — or quick-download with the Standard layout.
+                  Open the editor to review pre-filled content, pick from 16 layouts, and download your PDF, or quick-download with the Standard layout.
                 </p>
                 <div className="flex gap-3">
                   <Button

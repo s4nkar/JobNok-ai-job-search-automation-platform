@@ -249,7 +249,7 @@ export default function DashboardPage() {
                 <div className="w-9 h-9 rounded-xl bg-indigo-50 flex items-center justify-center mb-2">
                   <Sparkles className="h-4 w-4 text-indigo-400" />
                 </div>
-                <p className="text-xs text-slate-500">No tool usage yet — pick a tool from the sidebar to get started</p>
+                <p className="text-xs text-slate-500">No tool usage yet, pick a tool from the sidebar to get started</p>
               </div>
             ) : (
               <div className="space-y-1">

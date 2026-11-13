@@ -92,7 +92,16 @@ function groupKeyFor(row: DocRow): string | null {
   return null
 }
 
-const PREVIEW_PEEK_HEIGHT = 160
+const PREVIEW_PEEK_HEIGHT = 128
+
+// One brand accent (indigo, same as every page-header-icon across the app)
+// for all three doc kinds - they're told apart by icon + label, not by
+// cycling through unrelated hues that don't match the rest of the UI.
+const KIND_META: Record<DocRow['kind'], { Icon: typeof FileText; label: string; iconBg: string; iconColor: string }> = {
+  resume: { Icon: FileText, label: 'Resume', iconBg: 'bg-transparent', iconColor: 'text-slate-500' },
+  cover_letter: { Icon: PenLine, label: 'Cover letter', iconBg: 'bg-transparent', iconColor: 'text-slate-500' },
+  interview_prep: { Icon: MessageSquare, label: 'Interview kit', iconBg: 'bg-transparent', iconColor: 'text-slate-500' },
+}
 
 function scoreColor(score: number): string {
   if (score >= 70) return 'text-emerald-600 bg-emerald-50 border-emerald-100'
@@ -100,8 +109,7 @@ function scoreColor(score: number): string {
   return 'text-red-600 bg-red-50 border-red-100'
 }
 
-function DocCard({ row, onRename }: { row: DocRow; onRename: (row: DocRow, newLabel: string) => void }) {
-  const router = useRouter()
+function DocCardTitle({ row, onRename }: { row: DocRow; onRename: (row: DocRow, newLabel: string) => void }) {
   const [editing, setEditing] = useState(false)
   const [draft, setDraft] = useState(row.label)
 
@@ -111,12 +119,77 @@ function DocCard({ row, onRename }: { row: DocRow; onRename: (row: DocRow, newLa
     if (trimmed && trimmed !== row.label) onRename(row, trimmed)
   }
 
+  if (editing) {
+    return (
+      <input
+        autoFocus
+        value={draft}
+        onChange={e => setDraft(e.target.value)}
+        onFocus={e => e.currentTarget.select()}
+        onBlur={e => save(e.currentTarget.value)}
+        onKeyDown={e => {
+          if (e.key === 'Enter') e.currentTarget.blur()
+          if (e.key === 'Escape') setEditing(false)
+        }}
+        onClick={e => e.stopPropagation()}
+        maxLength={200}
+        className="text-sm font-semibold text-slate-900 bg-white border border-indigo-300 rounded px-1.5 py-0.5 outline-none ring-2 ring-indigo-100 w-full"
+      />
+    )
+  }
   return (
-    <div className="bg-white rounded-xl border border-slate-200/70 overflow-hidden transition-colors duration-150 hover:border-slate-300">
+    <button
+      onClick={e => { e.stopPropagation(); setDraft(row.label); setEditing(true) }}
+      className="group/rename flex items-center gap-1.5 min-w-0 text-left w-full"
+    >
+      <span className="text-sm font-semibold text-slate-900 truncate">{row.label}</span>
+      {row.isAiMatched && (
+        <span title="AI-detected from the job description, may not be exact" className="shrink-0">
+          <Sparkles className="h-3 w-3 text-indigo-400" />
+        </span>
+      )}
+      <Pencil className="h-3 w-3 text-slate-300 group-hover/rename:text-slate-500 shrink-0 ml-auto" />
+    </button>
+  )
+}
+
+function DocCardBadges({ row }: { row: DocRow }) {
+  return (
+    <div className="flex flex-wrap items-center gap-1.5">
+      {row.matchScore !== null && (
+        <span className={cn('inline-flex items-center px-1.5 py-0.5 rounded-full text-[10px] font-semibold border', scoreColor(row.matchScore))}>
+          {row.matchScore}%
+        </span>
+      )}
+      <span className={cn(
+        'inline-flex items-center px-1.5 py-0.5 rounded-full text-[10px] font-medium',
+        row.isDraft ? 'bg-amber-50 text-amber-700 border border-amber-100' : 'bg-slate-50 text-slate-500 border border-slate-200'
+      )}>
+        {row.isDraft ? 'Draft' : 'Generated'}
+      </span>
+      <span className="text-[10px] text-slate-400 shrink-0">{formatDate(row.createdAt)}</span>
+    </div>
+  )
+}
+
+// A resume with a saved preview gets an actual thumbnail of its generated
+// HTML (the visual IS the information - it's already built for PDF export,
+// so showing it here is free). Cover letters and interview kits have no
+// such template - they're plain text with no page layout - so a "preview"
+// of them would just be a few words of body copy, not worth the backend
+// work of threading a content snippet through their list endpoints. They
+// get the same fixed-height panel instead, filled with a plain icon, so
+// every card in the grid shares one footprint regardless of kind.
+function DocCard({ row, onRename }: { row: DocRow; onRename: (row: DocRow, newLabel: string) => void }) {
+  const router = useRouter()
+  const { Icon, label, iconBg, iconColor } = KIND_META[row.kind]
+
+  return (
+    <div className="bg-white rounded-xl border border-slate-200/70 overflow-hidden transition-colors duration-150 hover:border-slate-300 hover:shadow-sm">
       <button
         onClick={() => router.push(row.openHref)}
         className="w-full text-left block"
-        title={row.kind === 'resume' ? 'Open in editor' : 'Open in Cover Letter Generator'}
+        title="Open in editor"
       >
         {row.previewHtml ? (
           <ScaledResumeThumb
@@ -125,107 +198,78 @@ function DocCard({ row, onRename }: { row: DocRow; onRename: (row: DocRow, newLa
             cropHeight={PREVIEW_PEEK_HEIGHT}
             className="border-b border-slate-100 bg-slate-50"
           />
-        ) : row.kind === 'resume' ? (
-          <div
-            className="w-full border-b border-slate-100 bg-slate-50 flex flex-col items-center justify-center gap-1"
-            style={{ height: PREVIEW_PEEK_HEIGHT }}
-          >
-            <FileText className="h-5 w-5 text-slate-300" />
-            <span className="text-[11px] text-slate-400">Open to generate a preview</span>
-          </div>
-        ) : row.kind === 'cover_letter' ? (
-          <div
-            className="w-full border-b border-slate-100 bg-slate-50 flex flex-col items-center justify-center gap-1"
-            style={{ height: PREVIEW_PEEK_HEIGHT }}
-          >
-            <PenLine className="h-5 w-5 text-slate-300" />
-            <span className="text-[11px] text-slate-400">Cover letter</span>
-          </div>
         ) : (
           <div
-            className="w-full border-b border-slate-100 bg-slate-50 flex flex-col items-center justify-center gap-1"
+            className={cn('w-full flex flex-col items-center justify-center gap-1.5 border-b border-slate-100', iconBg)}
             style={{ height: PREVIEW_PEEK_HEIGHT }}
           >
-            <MessageSquare className="h-5 w-5 text-slate-300" />
-            <span className="text-[11px] text-slate-400">Interview kit</span>
+            <Icon className={cn('h-8 w-8', iconColor)} strokeWidth={1.25} />
+            <span className={cn('text-xs font-medium', iconColor)}>{label}</span>
           </div>
         )}
       </button>
-
-      <div className="p-3 space-y-1.5">
-        {editing ? (
-          <input
-            autoFocus
-            value={draft}
-            onChange={e => setDraft(e.target.value)}
-            onFocus={e => e.currentTarget.select()}
-            onBlur={e => save(e.currentTarget.value)}
-            onKeyDown={e => {
-              if (e.key === 'Enter') e.currentTarget.blur()
-              if (e.key === 'Escape') setEditing(false)
-            }}
-            maxLength={200}
-            className="text-sm font-semibold text-slate-900 bg-white border border-indigo-300 rounded px-1.5 py-0.5 outline-none ring-2 ring-indigo-100 w-full"
-          />
-        ) : (
-          <button
-            onClick={() => { setDraft(row.label); setEditing(true) }}
-            className="group/rename flex items-center gap-1.5 min-w-0 text-left w-full"
-          >
-            <span className="text-sm font-semibold text-slate-900 truncate">{row.label}</span>
-            {row.isAiMatched && (
-              <span title="AI-detected from the job description — may not be exact" className="shrink-0">
-                <Sparkles className="h-3 w-3 text-indigo-400" />
-              </span>
-            )}
-            <Pencil className="h-3 w-3 text-slate-300 group-hover/rename:text-slate-500 shrink-0 ml-auto" />
-          </button>
-        )}
-
-        <p className="text-xs text-slate-400 capitalize truncate">{row.meta}</p>
-
-        <div className="flex flex-wrap items-center gap-1.5 pt-0.5">
-          {row.matchScore !== null && (
-            <span className={cn('inline-flex items-center px-1.5 py-0.5 rounded-full text-[10px] font-semibold border', scoreColor(row.matchScore))}>
-              {row.matchScore}%
-            </span>
-          )}
-          <span className={cn(
-            'inline-flex items-center px-1.5 py-0.5 rounded-full text-[10px] font-medium',
-            row.isDraft ? 'bg-amber-50 text-amber-700 border border-amber-100' : 'bg-slate-50 text-slate-500 border border-slate-200'
-          )}>
-            {row.isDraft ? 'Draft' : 'Generated'}
-          </span>
-          <span className="text-[10px] text-slate-400 ml-auto shrink-0">{formatDate(row.createdAt)}</span>
-        </div>
+      <div className="p-2.5 space-y-1.5">
+        <DocCardTitle row={row} onRename={onRename} />
+        <DocCardBadges row={row} />
       </div>
     </div>
   )
 }
+
+// Fixed semantic order (not creation-time order) so every group's collage
+// reads the same way regardless of which document happened to be generated
+// first - indigo resume pane always left, violet cover-letter pane always
+// middle, emerald interview-kit pane always right.
+const KIND_ORDER: Record<DocRow['kind'], number> = { resume: 0, cover_letter: 1, interview_prep: 2 }
 
 // Two or more docs (a resume and/or cover letter) saved for the same tracked
 // job - wrapped together so they read as "one application's documents"
 // instead of two unrelated cards scattered across the grid. Every other row
 // (no shared linkage, or an unmatched single row) renders as a plain
 // standalone DocCard, unchanged from before this feature existed.
+//
+// Same single-grid-cell footprint as DocCard (previously this spanned 2-3
+// columns, which made the grid's rhythm inconsistent - a group looked like
+// a different kind of object instead of "a card that happens to hold more
+// than one document"). "Multiple documents" is instead communicated via a
+// small collage of colored panes in the preview area, one per document kind
+// present, each independently clickable straight to that document - no
+// separate expand step needed for the common 2-3 document case.
 function JobGroupCard({ rows, onRename }: { rows: DocRow[]; onRename: (row: DocRow, newLabel: string) => void }) {
-  const headerLabel = rows.find(r => r.kind === 'resume')?.label ?? rows[0].label
+  const router = useRouter()
+  const headerRow = rows.find(r => r.kind === 'resume') ?? rows[0]
+  const sortedRows = [...rows].sort((a, b) => KIND_ORDER[a.kind] - KIND_ORDER[b.kind])
+  const mostRecent = Math.max(...rows.map(r => new Date(r.createdAt).getTime()))
+
   return (
-    <div className="col-span-2 rounded-xl border border-indigo-100 bg-indigo-50/40 p-3 space-y-2.5">
-      <div className="flex items-center gap-1.5 px-0.5">
-        <Briefcase className="h-3.5 w-3.5 text-indigo-400 shrink-0" />
-        <span className="text-xs font-semibold text-indigo-700 truncate">{headerLabel}</span>
-        <span className="text-[10px] text-indigo-400 ml-auto shrink-0">{rows.length} documents</span>
+    <div className="bg-white rounded-xl border border-slate-200/70 overflow-hidden transition-colors duration-150 hover:border-slate-300 hover:shadow-sm">
+      <div className="flex divide-x divide-slate-200 border-b border-slate-100" style={{ height: PREVIEW_PEEK_HEIGHT }}>
+        {sortedRows.map(row => {
+          const { Icon, iconBg, iconColor, label } = KIND_META[row.kind]
+          return (
+            <button
+              key={row.id}
+              onClick={() => router.push(row.openHref)}
+              title={`Open ${label}`}
+              className={cn('flex-1 flex flex-col items-center justify-center gap-1 transition-colors hover:bg-slate-50', iconBg)}
+            >
+              <Icon className={cn('h-5 w-5', iconColor)} strokeWidth={1.25} />
+              <span className={cn('text-[9px] font-medium', iconColor)}>{label}</span>
+            </button>
+          )
+        })}
       </div>
-      {/* flex-wrap + flex-1, not a fixed grid-cols-2 - a 3rd (or 5th, etc.)
-          card then stretches to fill its own row instead of sitting alone
-          in a half-width cell with dead space beside it. */}
-      <div className="flex flex-wrap gap-2.5">
-        {rows.map(row => (
-          <div key={row.id} className="flex-1 min-w-[140px]">
-            <DocCard row={row} onRename={onRename} />
-          </div>
-        ))}
+      <div className="p-2.5 space-y-1.5">
+        <div className="flex items-center gap-1.5">
+          <Briefcase className="h-3 w-3 text-indigo-400 shrink-0" />
+          <DocCardTitle row={headerRow} onRename={onRename} />
+        </div>
+        <div className="flex flex-wrap items-center gap-1.5">
+          <span className="inline-flex items-center px-1.5 py-0.5 rounded-full text-[10px] font-semibold bg-indigo-50 text-indigo-600 border border-indigo-100">
+            {rows.length} documents
+          </span>
+          <span className="text-[10px] text-slate-400 shrink-0">{formatDate(new Date(mostRecent).toISOString())}</span>
+        </div>
       </div>
     </div>
   )
@@ -420,7 +464,11 @@ function MyDocsPageInner() {
           <p className="text-sm text-slate-400 mt-1">Try a different company or role</p>
         </div>
       ) : (
-        <div className="grid grid-cols-2 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 gap-4">
+        // items-start: without it, CSS Grid stretches every cell in a row to
+        // match its tallest sibling - a compact no-preview card next to a
+        // tall resume thumbnail would get stretched into dead whitespace,
+        // undoing the point of making it compact in the first place.
+        <div className="grid grid-cols-2 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 gap-3 items-start">
           {filteredGridItems.map((item) => item.type === 'single'
             ? <DocCard key={item.row.id} row={item.row} onRename={handleRename} />
             : <JobGroupCard key={item.rows.map(r => r.id).join(',')} rows={item.rows} onRename={handleRename} />

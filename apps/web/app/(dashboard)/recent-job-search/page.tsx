@@ -12,7 +12,7 @@ import { Label } from '@jobnok/ui'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@jobnok/ui'
 import { Textarea } from '@jobnok/ui'
 import { useToast } from '@jobnok/ui'
-import { apiFetch, apiGet } from '@/lib/api'
+import { apiFetch, apiGet, describeApiError } from '@/lib/api'
 import { config } from '@/lib/config'
 import { formatDate } from '@jobnok/ui'
 import { BonusJob, JobSearchApplication, JobSearchResponse, JobSearchResult } from '@/lib/types'
@@ -220,7 +220,7 @@ export default function RecentJobSearchPage() {
 
       const json = await res.json()
       if (!res.ok) {
-        setError(json.detail || 'Search failed. Please try again.')
+        setError(describeApiError(json, 'Search failed. Please try again.'))
         setResults([])
         setBonusJobs([])
         setParsedPreferences(null)
@@ -275,7 +275,7 @@ export default function RecentJobSearchPage() {
 
       const json = await res.json()
       if (!res.ok) {
-        toast({ title: 'Could not update tracking', description: json.detail || 'Please try again.', variant: 'destructive' })
+        toast({ title: 'Could not update tracking', description: describeApiError(json, 'Please try again.'), variant: 'destructive' })
         return
       }
 
