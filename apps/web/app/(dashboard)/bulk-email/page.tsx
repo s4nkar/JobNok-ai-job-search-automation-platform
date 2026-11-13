@@ -19,7 +19,7 @@ import {
   Mail, Plus, Upload, Play, Pause, Loader2, CheckCircle, XCircle,
   Clock, Send, RefreshCw, Info, SlidersHorizontal,
 } from 'lucide-react'
-import { apiFetch, apiGet } from '@/lib/api'
+import { apiFetch, apiGet, describeApiError } from '@/lib/api'
 
 const STATUS_BADGE: Record<string, JSX.Element> = {
   queued:    <Badge variant="secondary"><Clock className="h-3 w-3 mr-1" />Queued</Badge>,
@@ -125,8 +125,8 @@ export default function BulkEmailPage() {
       setName(''); setSubject(''); setBody(''); setCsvRows([])
       openCampaign(campaign)
     } else {
-      const json = await res.json()
-      toast({ title: 'Error', description: json.detail, variant: 'destructive' })
+      const json = await res.json().catch(() => null)
+      toast({ title: 'Error', description: describeApiError(json, 'Could not launch campaign.'), variant: 'destructive' })
     }
     setCreating(false)
   }

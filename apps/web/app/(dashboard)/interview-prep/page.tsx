@@ -12,7 +12,7 @@ import {
   MessageSquare, Loader2, RefreshCw, ChevronDown, ChevronUp, Compass, X,
   SlidersHorizontal, Target, Code2, Network, Check,
 } from 'lucide-react'
-import { apiFetch, apiGet } from '@/lib/api'
+import { apiFetch, apiGet, describeApiError } from '@/lib/api'
 import { queryKeys } from '@/lib/queryKeys'
 import { cn } from '@jobnok/ui'
 import {
@@ -168,7 +168,7 @@ function InterviewPrepInner() {
       const json = await res.json()
 
       if (!res.ok) {
-        setError(json.detail || 'Generation failed.')
+        setError(describeApiError(json, 'Generation failed.'))
       } else {
         const result = json as InterviewPrepResult & { session_id: string }
         const qs = result.questions || []

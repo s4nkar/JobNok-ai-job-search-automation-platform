@@ -14,7 +14,7 @@ import {
   Sparkles, AlertTriangle, BarChart3, Pencil, Check,
   ChevronDown, ChevronUp, SlidersHorizontal,
 } from 'lucide-react'
-import { apiFetch, apiGet } from '@/lib/api'
+import { apiFetch, apiGet, describeApiError } from '@/lib/api'
 import { cn } from '@jobnok/ui'
 import { queryKeys } from '@/lib/queryKeys'
 import { StartupHuntSavedOpportunity, JobSearchApplication, ResumeTailorResult, SavedResume } from '@/lib/types'
@@ -190,7 +190,7 @@ function ResumeTailorInner() {
       const parsed: ResumeTailorResult | null = await res.json().catch(() => null)
 
       if (!res.ok) {
-        setError((parsed as unknown as { detail?: string })?.detail || 'Analysis failed. Please try again.')
+        setError(describeApiError(parsed, 'Analysis failed. Please try again.'))
         setLoading(false)
         return
       }
@@ -228,8 +228,8 @@ function ResumeTailorInner() {
         }),
       })
       if (!res.ok) {
-        const json = await res.json()
-        toast({ title: json.detail || 'Generation failed', variant: 'destructive' })
+        const json = await res.json().catch(() => null)
+        toast({ title: describeApiError(json, 'Generation failed'), variant: 'destructive' })
         return
       }
       const blob = await res.blob()

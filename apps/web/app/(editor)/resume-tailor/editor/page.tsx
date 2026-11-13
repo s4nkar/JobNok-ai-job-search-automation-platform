@@ -2,7 +2,7 @@
 
 import { useState, useEffect, useCallback, useRef, Suspense } from 'react'
 import { useRouter, useSearchParams } from 'next/navigation'
-import { apiFetch } from '@/lib/api'
+import { apiFetch, describeApiError } from '@/lib/api'
 import {
   CvData, CvExperience, CvEducation, CvSkill, CvProject, CvFeaturedProject, CvOtherSection,
   SectionKey, TemplateId, TemplateMeta,
@@ -438,7 +438,7 @@ function EditorInner() {
       apiFetch(`/api/ai/tailor/${sessionId}/editor`).then(async (r) => {
         if (r.ok) return r.json()
         const body = await r.json().catch(() => null)
-        throw new Error(body?.detail || `Couldn't load resume data (HTTP ${r.status}).`)
+        throw new Error(describeApiError(body, `Couldn't load resume data (HTTP ${r.status}).`))
       }),
       apiFetch('/api/profile').then(r => r.json()).catch(() => ({})),
     ]).then(([editorRes, profile]) => {
@@ -973,7 +973,7 @@ function EditorInner() {
         setSessionTitle(trimmed)
       } else {
         const json = await res.json().catch(() => null)
-        toast({ title: json?.detail || 'Could not rename resume', variant: 'destructive' })
+        toast({ title: describeApiError(json, 'Could not rename resume'), variant: 'destructive' })
       }
     } catch {
       toast({ title: 'Network error renaming resume', variant: 'destructive' })
@@ -992,8 +992,8 @@ function EditorInner() {
         body: JSON.stringify({ template_id: selectedTemplate, cv_data: cvData }),
       })
       if (!res.ok) {
-        const json = await res.json()
-        toast({ title: json.detail || 'Generation failed', variant: 'destructive' })
+        const json = await res.json().catch(() => null)
+        toast({ title: describeApiError(json, 'Generation failed'), variant: 'destructive' })
         return
       }
       const blob = await res.blob()

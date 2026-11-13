@@ -13,7 +13,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@
 import { Textarea } from '@jobnok/ui'
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from '@jobnok/ui'
 import { useToast } from '@jobnok/ui'
-import { apiFetch, apiGet } from '@/lib/api'
+import { apiFetch, apiGet, describeApiError } from '@/lib/api'
 import { queryKeys } from '@/lib/queryKeys'
 import { config } from '@/lib/config'
 import { formatDate } from '@jobnok/ui'
@@ -264,7 +264,7 @@ export default function StartupHuntPage() {
     })
     const json = await res.json()
     if (!res.ok) {
-      toast({ title: 'Could not add company', description: json.detail || 'Please try again.', variant: 'destructive' })
+      toast({ title: 'Could not add company', description: describeApiError(json, 'Please try again.'), variant: 'destructive' })
       setResolvingSource(false)
       return
     }
@@ -294,7 +294,7 @@ export default function StartupHuntPage() {
     })
     const json = await res.json()
     if (!res.ok) {
-      toast({ title: 'Could not add source', description: json.detail || 'Please check the fields and try again.', variant: 'destructive' })
+      toast({ title: 'Could not add source', description: describeApiError(json, 'Please check the fields and try again.'), variant: 'destructive' })
       setAddingSource(false)
       return
     }
@@ -336,7 +336,7 @@ export default function StartupHuntPage() {
       })
       const json = await res.json()
       if (!res.ok) {
-        setError(json.detail || 'Search failed. Please try again.')
+        setError(describeApiError(json, 'Search failed. Please try again.'))
         setResults([])
         setOverflowResults([])
         setFilteredOut([])
@@ -405,7 +405,7 @@ export default function StartupHuntPage() {
       })
       const json = await res.json()
       if (!res.ok) {
-        toast({ title: 'Could not save opportunity', description: json.detail || 'Please try again.', variant: 'destructive' })
+        toast({ title: 'Could not save opportunity', description: describeApiError(json, 'Please try again.'), variant: 'destructive' })
         return
       }
       setResults((prev) => prev.map((item) => {

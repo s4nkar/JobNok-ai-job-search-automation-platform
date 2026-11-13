@@ -18,7 +18,7 @@ import {
   PenLine, Loader2, Copy, Check, Compass, X,
   SlidersHorizontal, ChevronDown, ChevronUp, Download,
 } from 'lucide-react'
-import { apiFetch, apiGet } from '@/lib/api'
+import { apiFetch, apiGet, describeApiError } from '@/lib/api'
 import { queryKeys } from '@/lib/queryKeys'
 import { CoverLetterSessionDetail, StartupHuntSavedOpportunity, UserProfile } from '@/lib/types'
 
@@ -156,7 +156,7 @@ function CoverLetterInner() {
 
       if (!res.ok) {
         const json = await res.json()
-        setError(json.detail || 'Generation failed. Try again.')
+        setError(describeApiError(json, 'Generation failed. Try again.'))
         setLoading(false)
         return
       }
@@ -210,7 +210,7 @@ function CoverLetterInner() {
       })
       if (!res.ok) {
         const json = await res.json().catch(() => null)
-        toast({ title: 'Download failed', description: json?.detail, variant: 'destructive' })
+        toast({ title: 'Download failed', description: describeApiError(json, 'Please try again.'), variant: 'destructive' })
         return
       }
       const blob = await res.blob()

@@ -237,7 +237,13 @@ async def list_sessions_for_docs_page(db: AsyncSession, user_id: str) -> list[Se
             display_label=display_label,
             is_ai_matched=is_ai_matched,
             template_id=s.template_id,
-            match_score=(s.analysis or {}).get("match_score", 0),
+            # MatchResult.as_dict() (matcher.py) stores this under
+            # "overall_score" - routes.py's _analysis_payload() renames it to
+            # "match_score" for the live /tailor response only, never for
+            # what's persisted. Reading "match_score" here always missed and
+            # silently fell back to 0 for every session - every resume in My
+            # Docs showed 0% regardless of its real score.
+            match_score=(s.analysis or {}).get("overall_score", 0),
             created_at=s.created_at.isoformat(),
             is_draft=s.draft_cv_data is not None,
             preview_html=preview_html,

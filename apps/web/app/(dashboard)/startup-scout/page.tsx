@@ -11,7 +11,7 @@ import {
   Select, SelectContent, SelectItem,
   SelectTrigger, SelectValue,
 } from '@jobnok/ui'
-import { apiFetch } from '@/lib/api'
+import { apiFetch, describeApiError } from '@/lib/api'
 import { cn } from '@jobnok/ui'
 import {
   Radar, Search, Loader2, ExternalLink, BookmarkPlus,
@@ -202,7 +202,7 @@ export default function StartupScoutPage() {
 
     if (!res.ok) {
       const err = await res.json().catch(() => ({}))
-      toast({ title: 'Search failed', description: err.detail || 'Something went wrong.', variant: 'destructive' })
+      toast({ title: 'Search failed', description: describeApiError(err, 'Something went wrong.'), variant: 'destructive' })
       setSearching(false)
       return
     }
@@ -277,7 +277,7 @@ export default function StartupScoutPage() {
       toast({ title: 'Saved to tracker', description: `${company.name} added. Go to Tracker → Startup Scout to crawl contacts.` })
     } else {
       const err = await res.json().catch(() => ({}))
-      toast({ title: 'Could not save', description: err.detail || 'Something went wrong.', variant: 'destructive' })
+      toast({ title: 'Could not save', description: describeApiError(err, 'Something went wrong.'), variant: 'destructive' })
     }
     setSavingName(null)
   }

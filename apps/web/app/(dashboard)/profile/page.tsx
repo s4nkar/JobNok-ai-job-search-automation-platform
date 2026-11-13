@@ -9,7 +9,7 @@ import { Input } from '@jobnok/ui'
 import { Textarea } from '@jobnok/ui'
 import { Label } from '@jobnok/ui'
 import { useToast } from '@jobnok/ui'
-import { apiFetch, apiGet } from '@/lib/api'
+import { apiFetch, apiGet, describeApiError } from '@/lib/api'
 import { queryKeys } from '@/lib/queryKeys'
 import { UserProfile } from '@/lib/types'
 import { MyResumes } from './my-resumes'
@@ -64,7 +64,7 @@ export default function ProfilePage() {
     try {
       const res = await apiFetch('/api/profile/photo', { method: 'POST', body: form })
       const data = await res.json()
-      if (!res.ok) throw new Error(data.detail || 'Upload failed')
+      if (!res.ok) throw new Error(describeApiError(data, 'Upload failed'))
       setProfile(prev => prev ? { ...prev, cv_photo_url: data.cv_photo_url } : prev)
       queryClient.setQueryData<UserProfile>(queryKeys.profile, (prev) => prev ? { ...prev, cv_photo_url: data.cv_photo_url } : prev)
       toast({ title: 'Photo uploaded!' })

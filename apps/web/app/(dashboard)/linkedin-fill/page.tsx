@@ -11,7 +11,7 @@ import { Input } from '@jobnok/ui'
 import { Label } from '@jobnok/ui'
 import { useToast } from '@jobnok/ui'
 import { Linkedin, Loader2, RefreshCw, Clock, SlidersHorizontal, ChevronDown, ChevronUp, AlertTriangle } from 'lucide-react'
-import { apiFetch } from '@/lib/api'
+import { apiFetch, describeApiError } from '@/lib/api'
 import { cn } from '@jobnok/ui'
 
 // Scraping a third party's profile pages carries real ToS/legal risk that
@@ -61,7 +61,7 @@ export default function LinkedInFillPage() {
       const json = await res.json()
 
       if (!res.ok) {
-        setError(json.detail || json.error || 'Scrape failed. Try again.')
+        setError(describeApiError(json, json.error || 'Scrape failed. Try again.'))
       } else {
         setProfile(json.data)
         setCached(json.cached || false)
