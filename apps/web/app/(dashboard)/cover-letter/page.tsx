@@ -16,7 +16,7 @@ import { useToast } from '@jobnok/ui'
 import { cn } from '@jobnok/ui'
 import {
   PenLine, Loader2, Copy, Check, Compass, X,
-  SlidersHorizontal, ChevronDown, ChevronUp, Download,
+  SlidersHorizontal, ChevronDown, ChevronUp, Download, Pencil,
 } from 'lucide-react'
 import { apiFetch, apiGet, describeApiError } from '@/lib/api'
 import { queryKeys } from '@/lib/queryKeys'
@@ -58,6 +58,13 @@ function CoverLetterInner() {
   // X-Session-Id response header after a generate call, or from a reopened
   // session's own id, never chosen client-side.
   const [sessionId, setSessionId] = useState<string | null>(null)
+  // Reopening a saved letter starts the form locked (fields + Generate
+  // disabled) - a reopened session's sessionId already carries a saved
+  // row, and resolve_session upserts generations IN PLACE keyed off that
+  // id, so an accidental re-click of Generate would silently overwrite
+  // the saved letter with a fresh (non-deterministic) rewrite and burn an
+  // AI call for it, with no undo. Explicit "Edit & Regenerate" unlocks.
+  const [isLocked, setIsLocked] = useState(false)
   const { toast } = useToast()
 
   // Reusable default from the profile page (Profile → "Default Selling
@@ -76,7 +83,7 @@ function CoverLetterInner() {
   const resumeTextValue = watch('resume_text') ?? ''
   const companyValue = watch('company') ?? ''
   const roleValue = watch('role') ?? ''
-  const inputsSummary = companyValue && roleValue ? `${companyValue} — ${roleValue}` : 'No details yet'
+  const inputsSummary = companyValue && roleValue ? `${companyValue} - ${roleValue}` : 'No details yet'
 
   // Mobile/tablet-only: the input card starts collapsed so the generated
   // letter is reachable without scrolling past the whole form first — same
@@ -118,6 +125,7 @@ function CoverLetterInner() {
         if (session.resume_text) setValue('resume_text', session.resume_text)
         setOutput(session.content)
         setSessionId(session.id)
+        setIsLocked(true)
       })
       .catch(() => {
         toast({ title: 'Could not load saved letter', variant: 'destructive' })
@@ -238,14 +246,14 @@ function CoverLetterInner() {
         </div>
         <div>
           <h1 className="text-2xl font-bold text-slate-900 tracking-tight">Cover Letter Generator</h1>
-          <p className="text-slate-500 text-sm mt-0.5">AI writes a tailored cover letter — edit inline before sending</p>
+          <p className="text-slate-500 text-sm mt-0.5">AI writes a tailored cover letter, edit inline before sending</p>
         </div>
       </div>
 
       {lead && (
         <div className="flex items-center gap-2.5 bg-indigo-50 border border-indigo-100 text-indigo-800 rounded-xl px-4 py-3 mb-4 text-sm">
           <Compass className="h-4 w-4 flex-shrink-0 text-indigo-500" />
-          <span>Pre-filled from <strong>{lead.company_name} — {lead.role_title}</strong>. Add your selling points below.</span>
+          <span>Pre-filled from <strong>{lead.company_name} - {lead.role_title}</strong>. Add your selling points below.</span>
           <button onClick={() => setLead(null)} className="ml-auto text-indigo-400 hover:text-indigo-700">
             <X className="h-4 w-4" />
           </button>
@@ -255,7 +263,7 @@ function CoverLetterInner() {
       {trackerApp && (
         <div className="flex items-center gap-2.5 bg-indigo-50 border border-indigo-100 text-indigo-800 rounded-xl px-4 py-3 mb-4 text-sm">
           <PenLine className="h-4 w-4 flex-shrink-0 text-indigo-500" />
-          <span>Pre-filled from your tracker: <strong>{trackerApp.company} — {trackerApp.role}</strong>. Add your selling points below.</span>
+          <span>Pre-filled from your tracker: <strong>{trackerApp.company} - {trackerApp.role}</strong>. Add your selling points below.</span>
           <button onClick={() => setTrackerApp(null)} className="ml-auto text-indigo-400 hover:text-indigo-700">
             <X className="h-4 w-4" />
           </button>
@@ -291,7 +299,13 @@ function CoverLetterInner() {
             'lg:block lg:flex-1 lg:min-h-0 lg:overflow-y-auto scrollbar-thin p-5 lg:pt-5 space-y-4',
             inputsOpen && 'border-t border-slate-100 lg:border-t-0',
           )}>
-            <div className="space-y-4">
+            {isLocked && (
+              <div className="flex items-center gap-2.5 bg-slate-50 border border-slate-200 text-slate-600 rounded-xl px-3.5 py-2.5 text-xs">
+                <Check className="h-4 w-4 flex-shrink-0 text-emerald-500" />
+                <span>Viewing your saved letter - click <strong>Edit &amp; Regenerate</strong> to change it.</span>
+              </div>
+            )}
+            <fieldset disabled={isLocked} className={cn('space-y-4', isLocked && 'opacity-60')}>
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                 <div className="space-y-1.5">
                   <Label className="text-sm font-medium">Company name</Label>
@@ -314,7 +328,7 @@ function CoverLetterInner() {
                 </div>
                 <p className="text-xs text-slate-500">
                   {profile?.key_selling_points
-                    ? <>Pre-filled from your profile default — edit freely for this letter.</>
+                    ? <>Pre-filled from your profile default, edit freely for this letter.</>
                     : <>What makes you the right fit? Be specific. <Link href="/profile" className="text-indigo-500 hover:text-indigo-700 underline">Save a default</Link> to skip retyping next time.</>
                   }
                 </p>
@@ -345,18 +359,29 @@ function CoverLetterInner() {
                   className="text-sm rounded-xl border-slate-200 resize-none"
                 />
               </div>
-            </div>
+            </fieldset>
 
-            <Button
-              type="submit"
-              className="w-full h-11 gradient-brand text-white border-0 shadow-brand-sm hover:opacity-90 transition-opacity rounded-xl font-semibold"
-              disabled={loading}
-            >
-              {loading
-                ? <><Loader2 className="h-4 w-4 mr-2 animate-spin" /> Generating…</>
-                : <><PenLine className="h-4 w-4 mr-2" /> Generate Cover Letter</>
-              }
-            </Button>
+            {isLocked ? (
+              <Button
+                type="button"
+                onClick={() => setIsLocked(false)}
+                variant="outline"
+                className="w-full h-11 rounded-xl font-semibold border-slate-200"
+              >
+                <Pencil className="h-4 w-4 mr-2" /> Edit &amp; Regenerate
+              </Button>
+            ) : (
+              <Button
+                type="submit"
+                className="w-full h-11 gradient-brand text-white border-0 shadow-brand-sm hover:opacity-90 transition-opacity rounded-xl font-semibold"
+                disabled={loading}
+              >
+                {loading
+                  ? <><Loader2 className="h-4 w-4 mr-2 animate-spin" /> Generating…</>
+                  : <><PenLine className="h-4 w-4 mr-2" /> Generate Cover Letter</>
+                }
+              </Button>
+            )}
             <p className="text-center text-[11px] text-slate-400">
               Up to {config.rateLimits.coverLetterPerDay} letters/day on the free tier
             </p>

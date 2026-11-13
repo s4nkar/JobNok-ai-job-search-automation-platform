@@ -152,7 +152,7 @@ export default function BulkEmailPage() {
         <div>
           <h1 className="text-2xl font-bold text-slate-900 tracking-tight">Bulk Email Sender</h1>
           <p className="text-slate-500 text-sm mt-0.5">
-            Send personalized campaigns with rate control — {config.rateLimits.bulkEmailPerMonth.toLocaleString()} emails/month free
+            Send personalized campaigns with rate control, {config.rateLimits.bulkEmailPerMonth.toLocaleString()} emails/month free
           </p>
         </div>
       </div>
@@ -383,7 +383,7 @@ export default function BulkEmailPage() {
                               <TableCell className="text-slate-500 text-sm">{r.email}</TableCell>
                               <TableCell>{STATUS_BADGE[r.status] || r.status}</TableCell>
                               <TableCell className="text-sm text-slate-400">
-                                {r.sent_at ? new Date(r.sent_at).toLocaleTimeString() : '—'}
+                                {r.sent_at ? new Date(r.sent_at).toLocaleTimeString() : ''}
                               </TableCell>
                             </TableRow>
                           ))}

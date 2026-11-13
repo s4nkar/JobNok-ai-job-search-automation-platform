@@ -388,7 +388,7 @@ function TrackerPageInner() {
           setStoppingIds((prev) => { const n = new Set(prev); n.delete(company.id); return n })
           toast({
             title: updated.crawl_status === 'enriched' ? 'Contacts found!' : 'Crawl done',
-            description: `${company.name} — ${updated.crawl_status}`,
+            description: `${company.name} - ${updated.crawl_status}`,
           })
         }
       } else {

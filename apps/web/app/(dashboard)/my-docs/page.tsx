@@ -144,7 +144,7 @@ function DocCardTitle({ row, onRename }: { row: DocRow; onRename: (row: DocRow, 
     >
       <span className="text-sm font-semibold text-slate-900 truncate">{row.label}</span>
       {row.isAiMatched && (
-        <span title="AI-detected from the job description — may not be exact" className="shrink-0">
+        <span title="AI-detected from the job description, may not be exact" className="shrink-0">
           <Sparkles className="h-3 w-3 text-indigo-400" />
         </span>
       )}

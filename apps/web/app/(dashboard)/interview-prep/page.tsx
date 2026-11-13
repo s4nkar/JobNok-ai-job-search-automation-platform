@@ -10,7 +10,7 @@ import { Label } from '@jobnok/ui'
 import { useToast } from '@jobnok/ui'
 import {
   MessageSquare, Loader2, RefreshCw, ChevronDown, ChevronUp, Compass, X,
-  SlidersHorizontal, Target, Code2, Network, Check,
+  SlidersHorizontal, Target, Code2, Network, Check, Pencil,
 } from 'lucide-react'
 import { apiFetch, apiGet, describeApiError } from '@/lib/api'
 import { queryKeys } from '@/lib/queryKeys'
@@ -69,6 +69,14 @@ function InterviewPrepInner() {
   // regenerates are landing in. Server-assigned: set from the generate
   // response's session_id field, or from a reopened session's own id.
   const [sessionId, setSessionId] = useState<string | null>(null)
+  // Reopening a saved kit starts the form locked (JD + Generate disabled) -
+  // a reopened session's sessionId already carries a saved row, and
+  // resolve_session upserts generations IN PLACE keyed off that id, so an
+  // accidental re-click of Generate would silently overwrite the saved kit
+  // with a fresh (non-deterministic) rewrite and burn an AI call for it,
+  // with no undo. Explicit "Edit & Regenerate" unlocks. Per-question
+  // "Regenerate" stays enabled - that's already an explicit, scoped action.
+  const [isLocked, setIsLocked] = useState(false)
   const { toast } = useToast()
 
   // Real company/role from an already-known Startup Hunt lead or tracked
@@ -138,6 +146,7 @@ function InterviewPrepInner() {
         setSystemDesignQuestions(session.result.system_design_questions || [])
         setExpandedIdx(0)
         setSessionId(session.id)
+        setIsLocked(true)
       })
       .catch(() => {
         toast({ title: 'Could not load saved interview kit', variant: 'destructive' })
@@ -222,24 +231,29 @@ function InterviewPrepInner() {
         </div>
         <div>
           <h1 className="text-2xl font-bold text-slate-900 tracking-tight">Interview Prep</h1>
-          <p className="text-slate-500 text-sm mt-0.5">Paste the job description — get 10 likely questions with STAR-method answer frameworks</p>
+          <p className="text-slate-500 text-sm mt-0.5">Paste the job description, get 10 likely questions with STAR-method answer frameworks</p>
         </div>
       </div>
 
       {lead && (
         <div className="flex items-center gap-2.5 bg-indigo-50 border border-indigo-100 text-indigo-800 rounded-xl px-4 py-3 mb-4 text-sm">
           <Compass className="h-4 w-4 flex-shrink-0 text-indigo-500" />
-          <span>Pre-filled from <strong>{lead.company_name} — {lead.role_title}</strong>. Add the full JD below the signals for best results.</span>
+          <span>Pre-filled from <strong>{lead.company_name} - {lead.role_title}</strong>. Add the full JD below the signals for best results.</span>
           <button onClick={() => { setLead(null); setJd('') }} className="ml-auto text-indigo-400 hover:text-indigo-700">
             <X className="h-4 w-4" />
           </button>
         </div>
       )}
 
-      {trackerApp && (
+      {/* Reopening a saved session also sets trackerApp (so knownCompany/
+          knownRole stay accurate if the user later unlocks and
+          regenerates) - but it didn't actually come from a tracker link,
+          so this banner stays suppressed for the whole visit; the locked-
+          view banner below already explains where the content came from. */}
+      {trackerApp && !reopenSessionId && (
         <div className="flex items-center gap-2.5 bg-indigo-50 border border-indigo-100 text-indigo-800 rounded-xl px-4 py-3 mb-4 text-sm">
           <Compass className="h-4 w-4 flex-shrink-0 text-indigo-500" />
-          <span>Pre-filled from your tracker: <strong>{trackerApp.company} — {trackerApp.role}</strong>. Add the full JD below for best results.</span>
+          <span>Pre-filled from your tracker: <strong>{trackerApp.company} - {trackerApp.role}</strong>. Add the full JD below for best results.</span>
           <button onClick={() => setTrackerApp(null)} className="ml-auto text-indigo-400 hover:text-indigo-700">
             <X className="h-4 w-4" />
           </button>
@@ -275,7 +289,13 @@ function InterviewPrepInner() {
             'lg:block lg:flex-1 lg:min-h-0 lg:overflow-y-auto scrollbar-thin p-5 lg:pt-5 space-y-4',
             inputsOpen && 'border-t border-slate-100 lg:border-t-0',
           )}>
-            <div>
+            {isLocked && (
+              <div className="flex items-center gap-2.5 bg-slate-50 border border-slate-200 text-slate-600 rounded-xl px-3.5 py-2.5 text-xs">
+                <Check className="h-4 w-4 flex-shrink-0 text-emerald-500" />
+                <span>Viewing your saved kit - click <strong>Edit &amp; Regenerate</strong> to change it.</span>
+              </div>
+            )}
+            <fieldset disabled={isLocked} className={cn(isLocked && 'opacity-60')}>
               <div className="flex items-center justify-between gap-2 mb-3 hidden lg:flex">
                 <Label className="text-sm font-semibold text-slate-700">Job Description</Label>
                 <span className={`text-xs ${jd.length > JD_MAX_CHARS ? 'text-destructive' : 'text-slate-400'}`}>
@@ -290,18 +310,29 @@ function InterviewPrepInner() {
                 placeholder="Paste the full job description here…"
                 className="text-sm rounded-xl border-slate-200 resize-none"
               />
-            </div>
+            </fieldset>
 
-            <Button
-              className="w-full h-11 gradient-brand text-white border-0 shadow-brand-sm hover:opacity-90 transition-opacity rounded-xl font-semibold"
-              onClick={generateQuestions}
-              disabled={!jd.trim() || loading}
-            >
-              {loading
-                ? <><Loader2 className="h-4 w-4 mr-2 animate-spin" /> Generating…</>
-                : <><MessageSquare className="h-4 w-4 mr-2" /> Generate 10 Questions</>
-              }
-            </Button>
+            {isLocked ? (
+              <Button
+                type="button"
+                onClick={() => setIsLocked(false)}
+                variant="outline"
+                className="w-full h-11 rounded-xl font-semibold border-slate-200"
+              >
+                <Pencil className="h-4 w-4 mr-2" /> Edit &amp; Regenerate
+              </Button>
+            ) : (
+              <Button
+                className="w-full h-11 gradient-brand text-white border-0 shadow-brand-sm hover:opacity-90 transition-opacity rounded-xl font-semibold"
+                onClick={generateQuestions}
+                disabled={!jd.trim() || loading}
+              >
+                {loading
+                  ? <><Loader2 className="h-4 w-4 mr-2 animate-spin" /> Generating…</>
+                  : <><MessageSquare className="h-4 w-4 mr-2" /> Generate 10 Questions</>
+                }
+              </Button>
+            )}
             <p className="text-center text-[11px] text-slate-400">
               Up to {config.rateLimits.interviewPrepPerDay} preps/day on the free tier
             </p>
